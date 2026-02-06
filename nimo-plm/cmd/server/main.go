@@ -15,6 +15,7 @@ import (
 	"github.com/bitfantasy/nimo-plm/internal/repository"
 	"github.com/bitfantasy/nimo-plm/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
@@ -28,6 +29,11 @@ var (
 )
 
 func main() {
+	// 加载 .env 文件
+	if err := godotenv.Load(); err != nil {
+		log.Printf("Warning: .env file not found, using environment variables")
+	}
+
 	// 加载配置
 	cfg, err := config.Load()
 	if err != nil {
@@ -185,6 +191,21 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 		})
 	})
 
+	// 静态文件服务 - 前端
+	r.Static("/assets", "./web/assets")
+	r.StaticFile("/logo.svg", "./web/logo.svg")
+	r.StaticFile("/vite.svg", "./web/vite.svg")
+
+	// SPA 路由回退 - 所有非 API 路由返回 index.html
+	r.NoRoute(func(c *gin.Context) {
+		// 如果是 API 请求，返回 404
+		if len(c.Request.URL.Path) > 4 && c.Request.URL.Path[:5] == "/api/" {
+			c.JSON(http.StatusNotFound, gin.H{"code": 40400, "message": "Not found"})
+			return
+		}
+		c.File("./web/index.html")
+	})
+
 	// API v1
 	v1 := r.Group("/api/v1")
 	{
@@ -315,6 +336,23 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 
 			// 文档分类
 			authorized.GET("/document-categories", h.Document.ListCategories)
+
+			// 模板管理
+			templates := authorized.Group("/templates")
+			{
+				templates.GET("", h.Template.List)
+				templates.POST("", h.Template.Create)
+				templates.GET("/:id", h.Template.Get)
+				templates.PUT("/:id", h.Template.Update)
+				templates.DELETE("/:id", h.Template.Delete)
+				templates.POST("/:id/duplicate", h.Template.Duplicate)
+				templates.POST("/:id/tasks", h.Template.CreateTask)
+				templates.PUT("/:id/tasks/:taskCode", h.Template.UpdateTask)
+				templates.DELETE("/:id/tasks/:taskCode", h.Template.DeleteTask)
+			}
+
+			// 从模板创建项目
+			authorized.POST("/projects/create-from-template", h.Template.CreateProjectFromTemplate)
 		}
 	}
 }

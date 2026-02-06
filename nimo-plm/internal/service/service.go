@@ -10,15 +10,17 @@ import (
 
 // Services 服务集合
 type Services struct {
-	Auth     *AuthService
-	User     *UserService
-	Product  *ProductService
-	Material *MaterialService
-	BOM      *BOMService
-	Project  *ProjectService
-	ECN      *ECNService
-	Document *DocumentService
-	Feishu   *FeishuIntegrationService
+	Auth       *AuthService
+	User       *UserService
+	Product    *ProductService
+	Material   *MaterialService
+	BOM        *BOMService
+	Project    *ProjectService
+	ECN        *ECNService
+	Document   *DocumentService
+	Feishu     *FeishuIntegrationService
+	Template   *TemplateService
+	Automation *AutomationService
 }
 
 // NewServices 创建服务集合
@@ -43,16 +45,20 @@ func NewServices(repos *repository.Repositories, rdb *redis.Client, cfg *config.
 		}
 	}
 
+	templateSvc := NewTemplateService(repos.Template, repos.Project)
+
 	return &Services{
-		Auth:     NewAuthService(repos.User, rdb, cfg),
-		User:     NewUserService(repos.User, rdb),
-		Product:  NewProductService(repos.Product, repos.ProductCategory, rdb),
-		Material: NewMaterialService(repos.Material, repos.MaterialCategory, rdb),
-		BOM:      NewBOMService(repos.BOM, repos.Material, rdb),
-		Project:  NewProjectService(repos.Project, repos.Task, repos.Product, feishuSvc),
-		ECN:      NewECNService(repos.ECN, repos.Product, feishuSvc),
-		Document: NewDocumentService(repos.Document, repos.DocumentCategory, minioClient, cfg.MinIO.Bucket),
-		Feishu:   feishuSvc,
+		Auth:       NewAuthService(repos.User, rdb, cfg),
+		User:       NewUserService(repos.User, rdb),
+		Product:    NewProductService(repos.Product, repos.ProductCategory, rdb),
+		Material:   NewMaterialService(repos.Material, repos.MaterialCategory, rdb),
+		BOM:        NewBOMService(repos.BOM, repos.Material, rdb),
+		Project:    NewProjectService(repos.Project, repos.Task, repos.Product, feishuSvc),
+		ECN:        NewECNService(repos.ECN, repos.Product, feishuSvc),
+		Document:   NewDocumentService(repos.Document, repos.DocumentCategory, minioClient, cfg.MinIO.Bucket),
+		Feishu:     feishuSvc,
+		Template:   templateSvc,
+		Automation: nil, // Will be initialized with logger later if needed
 	}
 }
 

@@ -99,6 +99,7 @@ func (s *AuthService) GetFeishuLoginURL(state string) string {
 	params := url.Values{}
 	params.Set("app_id", s.cfg.Feishu.AppID)
 	params.Set("redirect_uri", s.cfg.Feishu.RedirectURI)
+	params.Set("response_type", "code")
 	params.Set("state", state)
 
 	return fmt.Sprintf("%s?%s", FeishuOAuthURL, params.Encode())

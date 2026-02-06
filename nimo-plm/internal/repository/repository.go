@@ -27,6 +27,7 @@ type Repositories struct {
 	TaskAttachment  *TaskAttachmentRepository
 	OperationLog    *OperationLogRepository
 	SystemConfig    *SystemConfigRepository
+	Template        *TemplateRepository
 }
 
 // NewRepositories 创建仓库集合
@@ -46,5 +47,6 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		TaskAttachment:  NewTaskAttachmentRepository(db),
 		OperationLog:    NewOperationLogRepository(db),
 		SystemConfig:    NewSystemConfigRepository(db),
+		Template:        NewTemplateRepository(db),
 	}
 }

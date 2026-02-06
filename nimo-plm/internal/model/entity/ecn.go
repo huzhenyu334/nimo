@@ -18,10 +18,10 @@ type ECN struct {
 	ImpactAnalysis       string     `json:"impact_analysis" gorm:"type:text"`
 	RequestedBy          string     `json:"requested_by" gorm:"size:32;not null"`
 	RequestedAt          *time.Time `json:"requested_at"`
-	ApprovedBy           string     `json:"approved_by" gorm:"size:32"`
+	ApprovedBy           *string    `json:"approved_by" gorm:"size:32"`
 	ApprovedAt           *time.Time `json:"approved_at"`
 	RejectionReason      string     `json:"rejection_reason" gorm:"type:text"`
-	ImplementedBy        string     `json:"implemented_by" gorm:"size:32"`
+	ImplementedBy        *string    `json:"implemented_by" gorm:"size:32"`
 	ImplementedAt        *time.Time `json:"implemented_at"`
 	FeishuApprovalCode   string     `json:"feishu_approval_code" gorm:"size:64"`
 	FeishuInstanceCode   string     `json:"feishu_instance_code" gorm:"size:64"`

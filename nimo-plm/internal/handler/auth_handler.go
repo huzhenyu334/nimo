@@ -56,19 +56,28 @@ func (h *AuthHandler) FeishuCallback(c *gin.Context) {
 		return
 	}
 
-	// 返回登录结果
-	Success(c, gin.H{
-		"access_token":  tokenPair.AccessToken,
-		"refresh_token": tokenPair.RefreshToken,
-		"expires_in":    tokenPair.ExpiresIn,
-		"user": gin.H{
-			"id":         user.ID,
-			"name":       user.Name,
-			"email":      user.Email,
-			"avatar_url": user.AvatarURL,
-			"roles":      user.RoleCodes,
-		},
-	})
+	// 检查是否请求 JSON 响应（API 调用）
+	accept := c.GetHeader("Accept")
+	if accept == "application/json" || c.Query("format") == "json" {
+		Success(c, gin.H{
+			"access_token":  tokenPair.AccessToken,
+			"refresh_token": tokenPair.RefreshToken,
+			"expires_in":    tokenPair.ExpiresIn,
+			"user": gin.H{
+				"id":         user.ID,
+				"name":       user.Name,
+				"email":      user.Email,
+				"avatar_url": user.AvatarURL,
+				"roles":      user.RoleCodes,
+			},
+		})
+		return
+	}
+
+	// Web 前端：重定向到前端登录页，携带 token
+	frontendURL := "/login?access_token=" + tokenPair.AccessToken +
+		"&refresh_token=" + tokenPair.RefreshToken
+	c.Redirect(http.StatusFound, frontendURL)
 }
 
 // RefreshTokenRequest 刷新Token请求

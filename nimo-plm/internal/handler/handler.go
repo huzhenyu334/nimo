@@ -19,6 +19,7 @@ type Handlers struct {
 	Task     *ProjectHandler  // Task methods are on ProjectHandler
 	ECN      *ECNHandler
 	Document *DocumentHandler
+	Template *TemplateHandler
 }
 
 // NewHandlers 创建处理器集合
@@ -34,6 +35,7 @@ func NewHandlers(svc *service.Services, cfg *config.Config) *Handlers {
 		Task:     projectHandler,  // Reuse ProjectHandler for task routes
 		ECN:      NewECNHandler(svc.ECN),
 		Document: NewDocumentHandler(svc.Document),
+		Template: NewTemplateHandler(svc.Template),
 	}
 }
 

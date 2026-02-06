@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "nimo-plm": {
+      "command": "/home/claw/.openclaw/workspace/nimo-plm/bin/nimo-plm-mcp",
+      "env": {
+        "PLM_BASE_URL": "http://127.0.0.1:8080",
+        "PLM_TOKEN": ""
+      }
+    }
+  }
+}

@@ -158,11 +158,15 @@ func (s *ProjectService) CreateProject(ctx context.Context, userID string, req *
 	}
 
 	now := time.Now()
+	var productID *string
+	if req.ProductID != "" {
+		productID = &req.ProductID
+	}
 	project := &entity.Project{
 		ID:           uuid.New().String()[:32],
 		Code:         code,
 		Name:         req.Name,
-		ProductID:    req.ProductID,
+		ProductID:    productID,
 		Status:       entity.ProjectStatusPlanning,
 		CurrentPhase: "evt",
 		Description:  req.Description,
@@ -369,19 +373,31 @@ func (s *ProjectService) CreateTask(ctx context.Context, projectID string, userI
 	}
 
 	now := time.Now()
+	var phaseID *string
+	if req.PhaseID != "" {
+		phaseID = &req.PhaseID
+	}
+	var assigneeID, reviewerID *string
+	if req.AssigneeID != "" {
+		assigneeID = &req.AssigneeID
+	}
+	if req.ReviewerID != "" {
+		reviewerID = &req.ReviewerID
+	}
+
 	task := &entity.Task{
 		ID:             uuid.New().String()[:32],
 		ProjectID:      projectID,
-		PhaseID:        req.PhaseID,
-		ParentTaskID:   req.ParentTaskID,
+		PhaseID:        phaseID,
+		ParentTaskID:   &req.ParentTaskID,
 		Code:           code,
 		Name:           req.Name,
 		Description:    req.Description,
 		TaskType:       taskType,
 		Status:         entity.TaskStatusPending,
 		Priority:       priority,
-		AssigneeID:     req.AssigneeID,
-		ReviewerID:     req.ReviewerID,
+		AssigneeID:     assigneeID,
+		ReviewerID:     reviewerID,
 		PlannedStart:   req.PlannedStart,
 		PlannedEnd:     req.PlannedEnd,
 		DueDate:        req.DueDate,
@@ -417,10 +433,10 @@ func (s *ProjectService) UpdateTask(ctx context.Context, id string, req *UpdateT
 		task.Priority = req.Priority
 	}
 	if req.AssigneeID != "" {
-		task.AssigneeID = req.AssigneeID
+		task.AssigneeID = &req.AssigneeID
 	}
 	if req.ReviewerID != "" {
-		task.ReviewerID = req.ReviewerID
+		task.ReviewerID = &req.ReviewerID
 	}
 	if req.PlannedStart != nil {
 		task.PlannedStart = req.PlannedStart
@@ -527,7 +543,7 @@ func (s *ProjectService) AddTaskDependency(ctx context.Context, taskID, dependsO
 	dep := &entity.TaskDependency{
 		ID:              uuid.New().String()[:32],
 		TaskID:          taskID,
-		DependsOnTaskID: dependsOnID,
+		DependsOnID: dependsOnID,
 		DependencyType:  dependencyType,
 		LagDays:         lagDays,
 		CreatedAt:       time.Now(),

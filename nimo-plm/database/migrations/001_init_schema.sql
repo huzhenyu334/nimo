@@ -330,8 +330,8 @@ WITH RECURSIVE bom_tree AS (
         bi.sequence,
         bi.quantity,
         bi.unit,
-        bi.quantity AS accumulated_qty,
-        ARRAY[bi.id] AS path,
+        CAST(bi.quantity AS NUMERIC) AS accumulated_qty,
+        CAST(ARRAY[bi.id] AS VARCHAR[]) AS path,
         1 AS depth
     FROM bom_items bi
     WHERE bi.parent_item_id IS NULL
@@ -348,8 +348,8 @@ WITH RECURSIVE bom_tree AS (
         bi.sequence,
         bi.quantity,
         bi.unit,
-        bt.accumulated_qty * bi.quantity AS accumulated_qty,
-        bt.path || bi.id AS path,
+        CAST(bt.accumulated_qty * bi.quantity AS NUMERIC) AS accumulated_qty,
+        CAST(bt.path || bi.id AS VARCHAR[]) AS path,
         bt.depth + 1 AS depth
     FROM bom_items bi
     INNER JOIN bom_tree bt ON bi.parent_item_id = bt.id

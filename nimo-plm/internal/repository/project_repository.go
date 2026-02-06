@@ -25,7 +25,8 @@ func (r *ProjectRepository) FindByID(ctx context.Context, id string) (*entity.Pr
 	var project entity.Project
 	err := r.db.WithContext(ctx).
 		Preload("Product").
-		Preload("Owner").
+		Preload("Manager").
+		Preload("Creator").
 		Preload("Phases", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sequence ASC")
 		}).
@@ -85,7 +86,8 @@ func (r *ProjectRepository) List(ctx context.Context, page, pageSize int, filter
 	offset := (page - 1) * pageSize
 	err := query.
 		Preload("Product").
-		Preload("Owner").
+		Preload("Manager").
+		Preload("Creator").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(pageSize).
