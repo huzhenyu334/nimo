@@ -353,6 +353,28 @@ func (s *ProjectService) ListTasks(ctx context.Context, projectID string, page, 
 				}
 			}
 		}
+
+		// 补偿逻辑：自动启动所有前置已完成的 pending 任务
+		for i := range tasks {
+			if tasks[i].Status != "pending" || len(tasks[i].Dependencies) == 0 {
+				continue
+			}
+
+			allCompleted := true
+			for _, dep := range tasks[i].Dependencies {
+				if dep.DependsOnStatus != "completed" {
+					allCompleted = false
+					break
+				}
+			}
+
+			if allCompleted {
+				now := time.Now()
+				tasks[i].Status = "in_progress"
+				tasks[i].ActualStart = &now
+				_ = s.taskRepo.Update(ctx, &tasks[i])
+			}
+		}
 	}
 
 	totalPages := int(total) / pageSize
