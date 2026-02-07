@@ -1,0 +1,28 @@
+# OpenClaw workspace files (private, not for Git)
+AGENTS.md
+SOUL.md
+IDENTITY.md
+USER.md
+TOOLS.md
+HEARTBEAT.md
+BOOTSTRAP.md
+MEMORY.md
+memory/
+
+# Old/deprecated directories
+nimo-erp-plm/
+nimo-plm-web/
+
+# Build artifacts
+nimo-plm/bin/
+nimo-plm/server
+nimo-plm/server.log
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node modules
+node_modules/
+nimo-prd/
