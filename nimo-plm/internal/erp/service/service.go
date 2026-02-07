@@ -1,7 +1,7 @@
 package service
 
 import (
-	"github.com/bitfantasy/nimo-plm/internal/erp/repository"
+	"github.com/bitfantasy/nimo/internal/erp/repository"
 	"gorm.io/gorm"
 )
 

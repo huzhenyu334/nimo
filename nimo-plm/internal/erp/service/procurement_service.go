@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bitfantasy/nimo-plm/internal/erp/entity"
-	"github.com/bitfantasy/nimo-plm/internal/erp/repository"
+	"github.com/bitfantasy/nimo/internal/erp/entity"
+	"github.com/bitfantasy/nimo/internal/erp/repository"
 	"github.com/google/uuid"
 )
 

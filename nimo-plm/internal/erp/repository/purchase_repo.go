@@ -1,7 +1,7 @@
 package repository
 
 import (
-	"github.com/bitfantasy/nimo-plm/internal/erp/entity"
+	"github.com/bitfantasy/nimo/internal/erp/entity"
 	"gorm.io/gorm"
 )
 

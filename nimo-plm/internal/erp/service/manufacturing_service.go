@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bitfantasy/nimo-plm/internal/erp/entity"
-	"github.com/bitfantasy/nimo-plm/internal/erp/repository"
-	plmEntity "github.com/bitfantasy/nimo-plm/internal/model/entity"
+	"github.com/bitfantasy/nimo/internal/erp/entity"
+	"github.com/bitfantasy/nimo/internal/erp/repository"
+	plmEntity "github.com/bitfantasy/nimo/internal/plm/entity"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )

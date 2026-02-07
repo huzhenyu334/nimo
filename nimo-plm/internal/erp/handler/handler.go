@@ -1,6 +1,6 @@
 package handler
 
-import "github.com/bitfantasy/nimo-plm/internal/erp/service"
+import "github.com/bitfantasy/nimo/internal/erp/service"
 
 // Handlers ERP HTTP处理器集合
 type Handlers struct {

@@ -1,4 +1,4 @@
-module github.com/bitfantasy/nimo-plm
+module github.com/bitfantasy/nimo
 
 go 1.22
 

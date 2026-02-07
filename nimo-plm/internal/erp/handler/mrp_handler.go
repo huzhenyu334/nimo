@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/bitfantasy/nimo-plm/internal/erp/service"
+	"github.com/bitfantasy/nimo/internal/erp/service"
 	"github.com/gin-gonic/gin"
 )
 
