@@ -91,7 +91,7 @@ func (h *TemplateHandler) Get(c *gin.Context) {
 
 // CreateTemplateRequest 创建模板请求
 type CreateTemplateRequest struct {
-	Code          string   `json:"code" binding:"required"`
+	Code          string   `json:"code"`
 	Name          string   `json:"name" binding:"required"`
 	Description   string   `json:"description"`
 	ProductType   string   `json:"product_type"`
@@ -109,8 +109,14 @@ func (h *TemplateHandler) Create(c *gin.Context) {
 
 	userID := GetUserID(c)
 
+	// Auto-generate code if not provided
+	code := req.Code
+	if code == "" {
+		code = fmt.Sprintf("TPL-%d", time.Now().UnixMilli()%100000)
+	}
+
 	template := &entity.ProjectTemplate{
-		Code:          req.Code,
+		Code:          code,
 		Name:          req.Name,
 		Description:   req.Description,
 		TemplateType:  "CUSTOM",

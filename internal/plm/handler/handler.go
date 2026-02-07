@@ -25,12 +25,14 @@ type Handlers struct {
 	ProjectBOM  *BOMHandler
 	Deliverable *DeliverableHandler
 	Codename    *CodenameHandler
+	// V3 工作流
+	Workflow    *WorkflowHandler
 }
 
 // NewHandlers 创建处理器集合
-func NewHandlers(svc *service.Services, repos *repository.Repositories, cfg *config.Config) *Handlers {
+func NewHandlers(svc *service.Services, repos *repository.Repositories, cfg *config.Config, workflowSvc *service.WorkflowService) *Handlers {
 	projectHandler := NewProjectHandler(svc.Project)
-	return &Handlers{
+	h := &Handlers{
 		Auth:        NewAuthHandler(svc.Auth, cfg),
 		User:        NewUserHandler(svc.User),
 		Product:     NewProductHandler(svc.Product),
@@ -46,6 +48,11 @@ func NewHandlers(svc *service.Services, repos *repository.Repositories, cfg *con
 		Deliverable: NewDeliverableHandler(repos.Deliverable),
 		Codename:    NewCodenameHandler(repos.Codename),
 	}
+	// V3 工作流
+	if workflowSvc != nil {
+		h.Workflow = NewWorkflowHandler(workflowSvc)
+	}
+	return h
 }
 
 // Response 通用响应结构

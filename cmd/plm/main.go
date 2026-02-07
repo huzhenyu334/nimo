@@ -15,6 +15,7 @@ import (
 	"github.com/bitfantasy/nimo/internal/plm/handler"
 	"github.com/bitfantasy/nimo/internal/plm/repository"
 	"github.com/bitfantasy/nimo/internal/plm/service"
+	"github.com/bitfantasy/nimo/internal/shared/engine"
 	"github.com/bitfantasy/nimo/internal/shared/feishu"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -110,6 +111,61 @@ func main() {
 			updated_at TIMESTAMP DEFAULT NOW(),
 			UNIQUE(entity_type, entity_id)
 		)`,
+
+		// Phase 3: 工作流集成表
+		`CREATE TABLE IF NOT EXISTS template_phase_roles (
+			id VARCHAR(36) PRIMARY KEY,
+			template_id VARCHAR(36) NOT NULL,
+			phase VARCHAR(20) NOT NULL,
+			role_code VARCHAR(50) NOT NULL,
+			role_name VARCHAR(100) NOT NULL,
+			is_required BOOLEAN DEFAULT true,
+			trigger_task_code VARCHAR(50),
+			UNIQUE(template_id, phase, role_code)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_template_phase_roles_template ON template_phase_roles(template_id)`,
+
+		`CREATE TABLE IF NOT EXISTS template_task_outcomes (
+			id VARCHAR(36) PRIMARY KEY,
+			template_id VARCHAR(36) NOT NULL,
+			task_code VARCHAR(50) NOT NULL,
+			outcome_code VARCHAR(50) NOT NULL,
+			outcome_name VARCHAR(100) NOT NULL,
+			outcome_type VARCHAR(20) NOT NULL DEFAULT 'pass',
+			rollback_to_task_code VARCHAR(50),
+			rollback_cascade BOOLEAN DEFAULT false,
+			sort_order INT DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_template_task_outcomes_template ON template_task_outcomes(template_id)`,
+
+		`CREATE TABLE IF NOT EXISTS project_role_assignments (
+			id VARCHAR(36) PRIMARY KEY,
+			project_id VARCHAR(32) NOT NULL,
+			phase VARCHAR(20) NOT NULL,
+			role_code VARCHAR(50) NOT NULL,
+			user_id VARCHAR(32) NOT NULL,
+			feishu_user_id VARCHAR(64),
+			assigned_by VARCHAR(32) NOT NULL,
+			assigned_at TIMESTAMP DEFAULT NOW(),
+			UNIQUE(project_id, phase, role_code)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_project_role_assignments_project ON project_role_assignments(project_id)`,
+
+		`CREATE TABLE IF NOT EXISTS task_action_logs (
+			id VARCHAR(36) PRIMARY KEY,
+			project_id VARCHAR(32) NOT NULL,
+			task_id VARCHAR(32) NOT NULL,
+			action VARCHAR(50) NOT NULL,
+			from_status VARCHAR(20),
+			to_status VARCHAR(20) NOT NULL,
+			operator_id VARCHAR(64) NOT NULL,
+			operator_type VARCHAR(20) DEFAULT 'user',
+			event_data JSONB,
+			comment TEXT,
+			created_at TIMESTAMP DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_action_logs_project ON task_action_logs(project_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_action_logs_task ON task_action_logs(task_id)`,
 	}
 	for _, sql := range migrationSQL {
 		if err := db.Exec(sql).Error; err != nil {
@@ -124,7 +180,33 @@ func main() {
 	// 初始化依赖
 	repos := repository.NewRepositories(db)
 	services := service.NewServices(repos, rdb, cfg)
-	handlers := handler.NewHandlers(services, repos, cfg)
+
+	// 初始化状态机引擎 (Phase 3)
+	stateEngine := engine.NewEngine(db, nil)
+	plmTaskMachine := engine.NewPLMTaskMachine()
+	if err := stateEngine.RegisterMachine(plmTaskMachine); err != nil {
+		zapLogger.Warn("Failed to register PLM task state machine", zap.Error(err))
+	}
+
+	// 初始化飞书客户端 (Phase 3 — 工作流用)
+	var feishuWorkflowClient *feishu.FeishuClient
+	feishuAppID := cfg.Feishu.AppID
+	feishuAppSecret := cfg.Feishu.AppSecret
+	if envID := os.Getenv("FEISHU_APP_ID"); envID != "" {
+		feishuAppID = envID
+	}
+	if envSecret := os.Getenv("FEISHU_APP_SECRET"); envSecret != "" {
+		feishuAppSecret = envSecret
+	}
+	if feishuAppID != "" && feishuAppSecret != "" {
+		feishuWorkflowClient = feishu.NewClient(feishuAppID, feishuAppSecret)
+		zapLogger.Info("Feishu workflow client initialized")
+	}
+
+	// 初始化工作流服务 (Phase 3)
+	workflowSvc := service.NewWorkflowService(db, stateEngine, feishuWorkflowClient, repos.Project, repos.Task)
+
+	handlers := handler.NewHandlers(services, repos, cfg, workflowSvc)
 
 	// 设置Gin模式
 	if cfg.Server.Mode == "release" {
@@ -380,6 +462,16 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				projects.GET("/:id/deliverables", h.Deliverable.ListByProject)
 				projects.GET("/:id/phases/:phaseId/deliverables", h.Deliverable.ListByPhase)
 				projects.PUT("/:id/deliverables/:deliverableId", h.Deliverable.Update)
+
+				// V3: 工作流操作
+				if h.Workflow != nil {
+					projects.POST("/:id/tasks/:taskId/assign", h.Workflow.AssignTask)
+					projects.POST("/:id/tasks/:taskId/start", h.Workflow.StartTask)
+					projects.POST("/:id/tasks/:taskId/complete", h.Workflow.CompleteTask)
+					projects.POST("/:id/tasks/:taskId/review", h.Workflow.SubmitReview)
+					projects.POST("/:id/phases/:phase/assign-roles", h.Workflow.AssignPhaseRoles)
+					projects.GET("/:id/tasks/:taskId/history", h.Workflow.GetTaskHistory)
+				}
 			}
 
 			// V2: 代号管理
