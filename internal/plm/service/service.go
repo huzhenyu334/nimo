@@ -1,7 +1,10 @@
 package service
 
 import (
+	"context"
+
 	"github.com/bitfantasy/nimo/internal/config"
+	"github.com/bitfantasy/nimo/internal/plm/entity"
 	"github.com/bitfantasy/nimo/internal/plm/repository"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -75,6 +78,16 @@ type UserService struct {
 // NewUserService 创建用户服务
 func NewUserService(repo *repository.UserRepository, rdb *redis.Client) *UserService {
 	return &UserService{repo: repo, rdb: rdb}
+}
+
+// ListAll 获取所有活跃用户
+func (s *UserService) ListAll(ctx context.Context) ([]entity.User, error) {
+	return s.repo.ListActive(ctx)
+}
+
+// Search 搜索用户（按名字/邮箱模糊匹配）
+func (s *UserService) Search(ctx context.Context, query string) ([]entity.User, error) {
+	return s.repo.Search(ctx, query)
 }
 
 // MaterialService 物料服务

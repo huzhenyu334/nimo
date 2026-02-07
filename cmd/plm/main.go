@@ -166,6 +166,36 @@ func main() {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_task_action_logs_project ON task_action_logs(project_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_task_action_logs_task ON task_action_logs(task_id)`,
+
+		// V4: PLM 自建审批表
+		`CREATE TABLE IF NOT EXISTS approval_requests (
+			id VARCHAR(36) PRIMARY KEY,
+			project_id VARCHAR(32) NOT NULL,
+			task_id VARCHAR(32) NOT NULL,
+			title VARCHAR(200) NOT NULL,
+			description TEXT,
+			type VARCHAR(50) NOT NULL DEFAULT 'task_review',
+			status VARCHAR(20) NOT NULL DEFAULT 'pending',
+			form_data JSONB,
+			result VARCHAR(20),
+			result_comment TEXT,
+			requested_by VARCHAR(32) NOT NULL,
+			created_at TIMESTAMP DEFAULT NOW(),
+			updated_at TIMESTAMP DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_approval_requests_task ON approval_requests(task_id)`,
+		`CREATE TABLE IF NOT EXISTS approval_reviewers (
+			id VARCHAR(36) PRIMARY KEY,
+			approval_id VARCHAR(36) NOT NULL,
+			user_id VARCHAR(32) NOT NULL,
+			status VARCHAR(20) NOT NULL DEFAULT 'pending',
+			comment TEXT,
+			decided_at TIMESTAMP,
+			sequence INT DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_approval_reviewers_approval ON approval_reviewers(approval_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_approval_reviewers_user ON approval_reviewers(user_id)`,
 	}
 	for _, sql := range migrationSQL {
 		if err := db.Exec(sql).Error; err != nil {
@@ -206,7 +236,17 @@ func main() {
 	// 初始化工作流服务 (Phase 3)
 	workflowSvc := service.NewWorkflowService(db, stateEngine, feishuWorkflowClient, repos.Project, repos.Task)
 
+	// 初始化审批服务 (V4)
+	approvalSvc := service.NewApprovalService(db, feishuWorkflowClient)
+
+	// 初始化通讯录同步服务 (V4)
+	contactSyncSvc := service.NewContactSyncService(db, feishuWorkflowClient)
+
 	handlers := handler.NewHandlers(services, repos, cfg, workflowSvc)
+
+	// V4: 设置审批和管理员处理器
+	handlers.Approval = handler.NewApprovalHandler(approvalSvc)
+	handlers.Admin = handler.NewAdminHandler(contactSyncSvc)
 
 	// 设置Gin模式
 	if cfg.Server.Mode == "release" {
@@ -378,7 +418,24 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 			users := authorized.Group("/users")
 			{
 				users.GET("", h.User.List)
+				users.GET("/search", h.User.Search)
 				users.GET("/:id", h.User.Get)
+			}
+
+			// V4: 管理员操作
+			admin := authorized.Group("/admin")
+			{
+				admin.POST("/sync-contacts", h.Admin.SyncContacts)
+			}
+
+			// V4: 审批
+			approvals := authorized.Group("/approvals")
+			{
+				approvals.POST("", h.Approval.Create)
+				approvals.GET("", h.Approval.List)
+				approvals.GET("/:id", h.Approval.Get)
+				approvals.POST("/:id/approve", h.Approval.Approve)
+				approvals.POST("/:id/reject", h.Approval.Reject)
 			}
 
 			// 产品管理

@@ -200,3 +200,42 @@ func (r *UserRepository) GetUserRoles(ctx context.Context, userID string) ([]ent
 		Find(&roles).Error
 	return roles, err
 }
+
+// ListActive 获取所有活跃用户（含部门信息）
+func (r *UserRepository) ListActive(ctx context.Context) ([]entity.User, error) {
+	var users []entity.User
+	err := r.db.WithContext(ctx).
+		Where("status = ? AND deleted_at IS NULL", "active").
+		Preload("Department").
+		Order("name ASC").
+		Find(&users).Error
+	return users, err
+}
+
+// Search 搜索用户（按名字/邮箱模糊匹配）
+func (r *UserRepository) Search(ctx context.Context, query string) ([]entity.User, error) {
+	var users []entity.User
+	err := r.db.WithContext(ctx).
+		Where("(name ILIKE ? OR email ILIKE ? OR employee_no ILIKE ?) AND status = ? AND deleted_at IS NULL",
+			"%"+query+"%", "%"+query+"%", "%"+query+"%", "active").
+		Preload("Department").
+		Order("name ASC").
+		Limit(50).
+		Find(&users).Error
+	return users, err
+}
+
+// FindByOpenID 根据飞书 OpenID 查找用户
+func (r *UserRepository) FindByOpenID(ctx context.Context, openID string) (*entity.User, error) {
+	var user entity.User
+	err := r.db.WithContext(ctx).
+		Where("feishu_open_id = ? AND deleted_at IS NULL", openID).
+		First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &user, nil
+}

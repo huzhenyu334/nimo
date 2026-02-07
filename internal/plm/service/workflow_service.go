@@ -93,6 +93,11 @@ func (s *WorkflowService) AssignTask(ctx context.Context, projectID, taskID, ass
 		}()
 	}
 
+	// 异步发飞书卡片通知给被指派人
+	if s.feishuClient != nil {
+		go s.notifyTaskAssigned(context.Background(), task, assigneeID, projectID)
+	}
+
 	return nil
 }
 
@@ -460,6 +465,86 @@ func (s *WorkflowService) checkAndStartDependentTasks(ctx context.Context, proje
 			}, "依赖任务完成，自动启动")
 			log.Printf("[WorkflowService] 自动启动任务 task=%s (依赖任务 %s 完成)", task.ID, completedTaskID)
 		}
+	}
+}
+
+// =============================================================================
+// 飞书通知辅助方法
+// =============================================================================
+
+// notifyTaskAssigned 通知任务被指派
+func (s *WorkflowService) notifyTaskAssigned(ctx context.Context, task *entity.Task, assigneeID, projectID string) {
+	// 查找被指派人
+	var assignee entity.User
+	if err := s.db.WithContext(ctx).Where("id = ?", assigneeID).First(&assignee).Error; err != nil {
+		log.Printf("[WorkflowNotify] 查找被指派人失败 (user_id=%s): %v", assigneeID, err)
+		return
+	}
+	if assignee.FeishuOpenID == "" {
+		log.Printf("[WorkflowNotify] 被指派人[%s]没有飞书 open_id，跳过通知", assignee.Name)
+		return
+	}
+
+	// 查找项目名
+	projectName := "未知项目"
+	var project entity.Project
+	if err := s.db.WithContext(ctx).Where("id = ?", projectID).First(&project).Error; err == nil {
+		projectName = project.Name
+	}
+
+	dueDate := "无"
+	if task.DueDate != nil {
+		dueDate = task.DueDate.Format("2006-01-02")
+	}
+
+	card := feishu.NewTaskAssignmentCard(task.Title, projectName, assignee.Name, dueDate)
+	if err := s.feishuClient.SendUserCard(ctx, assignee.FeishuOpenID, card); err != nil {
+		log.Printf("[WorkflowNotify] 发送任务指派通知给[%s]失败: %v", assignee.Name, err)
+	} else {
+		log.Printf("[WorkflowNotify] 已通知[%s]任务指派: %s", assignee.Name, task.Title)
+	}
+}
+
+// notifyTaskStatusChange 通知任务状态变更
+func (s *WorkflowService) notifyTaskStatusChange(ctx context.Context, task *entity.Task, fromStatus, toStatus, projectID string) {
+	if task.AssigneeID == nil || *task.AssigneeID == "" {
+		return
+	}
+
+	var assignee entity.User
+	if err := s.db.WithContext(ctx).Where("id = ?", *task.AssigneeID).First(&assignee).Error; err != nil {
+		return
+	}
+	if assignee.FeishuOpenID == "" {
+		return
+	}
+
+	projectName := "未知项目"
+	var project entity.Project
+	if err := s.db.WithContext(ctx).Where("id = ?", projectID).First(&project).Error; err == nil {
+		projectName = project.Name
+	}
+
+	card := feishu.InteractiveCard{
+		Config: &feishu.CardConfig{WideScreenMode: true},
+		Header: &feishu.CardHeader{
+			Title:    feishu.CardText{Tag: "plain_text", Content: "📝 任务状态变更"},
+			Template: "blue",
+		},
+		Elements: []feishu.CardElement{
+			{
+				Tag: "div",
+				Fields: []feishu.CardField{
+					{IsShort: true, Text: feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("**任务**\n%s", task.Title)}},
+					{IsShort: true, Text: feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("**项目**\n%s", projectName)}},
+					{IsShort: true, Text: feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("**状态变更**\n%s → %s", fromStatus, toStatus)}},
+				},
+			},
+		},
+	}
+
+	if err := s.feishuClient.SendUserCard(ctx, assignee.FeishuOpenID, card); err != nil {
+		log.Printf("[WorkflowNotify] 发送状态变更通知失败: %v", err)
 	}
 }
 

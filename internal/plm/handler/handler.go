@@ -27,6 +27,9 @@ type Handlers struct {
 	Codename    *CodenameHandler
 	// V3 工作流
 	Workflow    *WorkflowHandler
+	// V4 审批 + 管理
+	Admin      *AdminHandler
+	Approval   *ApprovalHandler
 }
 
 // NewHandlers 创建处理器集合
@@ -173,11 +176,33 @@ func NewUserHandler(svc *service.UserService) *UserHandler {
 }
 
 func (h *UserHandler) List(c *gin.Context) {
-	Success(c, gin.H{"users": []interface{}{}})
+	users, err := h.svc.ListAll(c.Request.Context())
+	if err != nil {
+		InternalError(c, "获取用户列表失败: "+err.Error())
+		return
+	}
+	Success(c, gin.H{"items": users})
 }
-func (h *UserHandler) Get(c *gin.Context)  {
+
+func (h *UserHandler) Get(c *gin.Context) {
 	id := c.Param("id")
 	Success(c, gin.H{"user_id": id})
+}
+
+// Search 搜索用户（按名字模糊匹配）
+// GET /api/v1/users/search?q=xxx
+func (h *UserHandler) Search(c *gin.Context) {
+	q := c.Query("q")
+	if q == "" {
+		BadRequest(c, "搜索关键字不能为空")
+		return
+	}
+	users, err := h.svc.Search(c.Request.Context(), q)
+	if err != nil {
+		InternalError(c, "搜索用户失败: "+err.Error())
+		return
+	}
+	Success(c, gin.H{"items": users})
 }
 
 // ============================================================
