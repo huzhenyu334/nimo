@@ -316,6 +316,45 @@ func (s *ProjectService) ListTasks(ctx context.Context, projectID string, page, 
 		return nil, fmt.Errorf("list tasks: %w", err)
 	}
 
+	// 加载任务依赖信息
+	if len(tasks) > 0 {
+		taskIDs := make([]string, len(tasks))
+		for i, t := range tasks {
+			taskIDs[i] = t.ID
+		}
+
+		// 批量查询依赖
+		deps, err := s.taskRepo.ListDependenciesByTaskIDs(ctx, taskIDs)
+		if err == nil && len(deps) > 0 {
+			// 收集所有被依赖的任务ID
+			depTaskIDs := make([]string, 0, len(deps))
+			for _, d := range deps {
+				depTaskIDs = append(depTaskIDs, d.DependsOnID)
+			}
+
+			// 批量查询被依赖任务的状态
+			statusMap, _ := s.taskRepo.FindStatusByIDs(ctx, depTaskIDs)
+
+			// 填充 DependsOnStatus
+			for i := range deps {
+				if status, ok := statusMap[deps[i].DependsOnID]; ok {
+					deps[i].DependsOnStatus = status
+				}
+			}
+
+			// 按 task_id 分组并附加到任务
+			depMap := make(map[string][]entity.TaskDependency)
+			for _, d := range deps {
+				depMap[d.TaskID] = append(depMap[d.TaskID], d)
+			}
+			for i := range tasks {
+				if taskDeps, ok := depMap[tasks[i].ID]; ok {
+					tasks[i].Dependencies = taskDeps
+				}
+			}
+		}
+	}
+
 	totalPages := int(total) / pageSize
 	if int(total)%pageSize > 0 {
 		totalPages++

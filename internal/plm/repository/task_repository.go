@@ -267,6 +267,42 @@ func (r *TaskRepository) ListDependencies(ctx context.Context, taskID string) ([
 	return deps, err
 }
 
+// ListDependenciesByTaskIDs 批量获取多个任务的依赖
+func (r *TaskRepository) ListDependenciesByTaskIDs(ctx context.Context, taskIDs []string) ([]entity.TaskDependency, error) {
+	var deps []entity.TaskDependency
+	if len(taskIDs) == 0 {
+		return deps, nil
+	}
+	err := r.db.WithContext(ctx).
+		Where("task_id IN (?)", taskIDs).
+		Find(&deps).Error
+	return deps, err
+}
+
+// FindStatusByIDs 批量查询任务状态
+func (r *TaskRepository) FindStatusByIDs(ctx context.Context, ids []string) (map[string]string, error) {
+	if len(ids) == 0 {
+		return make(map[string]string), nil
+	}
+	var results []struct {
+		ID     string `gorm:"column:id"`
+		Status string `gorm:"column:status"`
+	}
+	err := r.db.WithContext(ctx).
+		Model(&entity.Task{}).
+		Select("id, status").
+		Where("id IN (?)", ids).
+		Find(&results).Error
+	if err != nil {
+		return nil, err
+	}
+	statusMap := make(map[string]string, len(results))
+	for _, r := range results {
+		statusMap[r.ID] = r.Status
+	}
+	return statusMap, nil
+}
+
 // ListByAssigneeWithPaging 带分页获取指派任务
 func (r *TaskRepository) ListByAssigneeWithPaging(ctx context.Context, userID string, page, pageSize int, filters map[string]interface{}) ([]entity.Task, int64, error) {
 	var tasks []entity.Task

@@ -113,10 +113,11 @@ type Task struct {
 	Project    *Project      `json:"project,omitempty" gorm:"foreignKey:ProjectID"`
 	Phase      *ProjectPhase `json:"phase,omitempty" gorm:"foreignKey:PhaseID"`
 	ParentTask *Task         `json:"parent_task,omitempty" gorm:"foreignKey:ParentTaskID"`
-	Assignee   *User         `json:"assignee,omitempty" gorm:"foreignKey:AssigneeID"`
-	Reviewer   *User         `json:"reviewer,omitempty" gorm:"foreignKey:ReviewerID"`
-	Creator    *User         `json:"creator,omitempty" gorm:"foreignKey:CreatedBy"`
-	SubTasks   []Task        `json:"sub_tasks,omitempty" gorm:"foreignKey:ParentTaskID"`
+	Assignee     *User            `json:"assignee,omitempty" gorm:"foreignKey:AssigneeID"`
+	Reviewer     *User            `json:"reviewer,omitempty" gorm:"foreignKey:ReviewerID"`
+	Creator      *User            `json:"creator,omitempty" gorm:"foreignKey:CreatedBy"`
+	SubTasks     []Task           `json:"sub_tasks,omitempty" gorm:"foreignKey:ParentTaskID"`
+	Dependencies []TaskDependency `json:"dependencies,omitempty" gorm:"-"` // 非数据库字段，手动加载
 }
 
 func (Task) TableName() string {
@@ -125,12 +126,13 @@ func (Task) TableName() string {
 
 // TaskDependency 任务依赖
 type TaskDependency struct {
-	ID             string    `json:"id" gorm:"primaryKey;size:32"`
-	TaskID         string    `json:"task_id" gorm:"size:32;not null"`
-	DependsOnID    string    `json:"depends_on_id" gorm:"column:depends_on_task_id;size:32;not null"`
-	DependencyType string    `json:"dependency_type" gorm:"size:16;not null;default:FS"`
-	LagDays        int       `json:"lag_days" gorm:"default:0"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID              string    `json:"id" gorm:"primaryKey;size:32"`
+	TaskID          string    `json:"task_id" gorm:"size:32;not null"`
+	DependsOnID     string    `json:"depends_on_id" gorm:"column:depends_on_task_id;size:32;not null"`
+	DependencyType  string    `json:"dependency_type" gorm:"size:16;not null;default:FS"`
+	LagDays         int       `json:"lag_days" gorm:"default:0"`
+	CreatedAt       time.Time `json:"created_at"`
+	DependsOnStatus string    `json:"depends_on_status,omitempty" gorm:"-"` // 前置任务当前状态，非数据库字段
 }
 
 func (TaskDependency) TableName() string {
