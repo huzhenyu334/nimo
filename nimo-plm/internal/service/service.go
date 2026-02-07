@@ -21,6 +21,8 @@ type Services struct {
 	Feishu     *FeishuIntegrationService
 	Template   *TemplateService
 	Automation *AutomationService
+	// V2 新增
+	ProjectBOM *ProjectBOMService
 }
 
 // NewServices 创建服务集合
@@ -59,6 +61,8 @@ func NewServices(repos *repository.Repositories, rdb *redis.Client, cfg *config.
 		Feishu:     feishuSvc,
 		Template:   templateSvc,
 		Automation: nil, // Will be initialized with logger later if needed
+		// V2 新增
+		ProjectBOM: NewProjectBOMService(repos.ProjectBOM, repos.Project, repos.Deliverable),
 	}
 }
 

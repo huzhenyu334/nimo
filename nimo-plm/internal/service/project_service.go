@@ -163,20 +163,20 @@ func (s *ProjectService) CreateProject(ctx context.Context, userID string, req *
 		productID = &req.ProductID
 	}
 	project := &entity.Project{
-		ID:           uuid.New().String()[:32],
-		Code:         code,
-		Name:         req.Name,
-		ProductID:    productID,
-		Status:       entity.ProjectStatusPlanning,
-		CurrentPhase: "evt",
-		Description:  req.Description,
-		OwnerID:      ownerID,
-		PlannedStart: req.PlannedStart,
-		PlannedEnd:   req.PlannedEnd,
-		Progress:     0,
-		CreatedBy:    userID,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:          uuid.New().String()[:32],
+		Code:        code,
+		Name:        req.Name,
+		ProductID:   productID,
+		Status:      entity.ProjectStatusPlanning,
+		Phase:       "evt",
+		Description: req.Description,
+		ManagerID:   ownerID,
+		StartDate:   req.PlannedStart,
+		PlannedEnd:  req.PlannedEnd,
+		Progress:    0,
+		CreatedBy:   userID,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	if err := s.projectRepo.Create(ctx, project); err != nil {
@@ -228,16 +228,16 @@ func (s *ProjectService) UpdateProject(ctx context.Context, id string, req *Upda
 		project.Description = req.Description
 	}
 	if req.OwnerID != "" {
-		project.OwnerID = req.OwnerID
+		project.ManagerID = req.OwnerID
 	}
 	if req.PlannedStart != nil {
-		project.PlannedStart = req.PlannedStart
+		project.StartDate = req.PlannedStart
 	}
 	if req.PlannedEnd != nil {
 		project.PlannedEnd = req.PlannedEnd
 	}
 	if req.CurrentPhase != "" {
-		project.CurrentPhase = req.CurrentPhase
+		project.Phase = req.CurrentPhase
 	}
 
 	project.UpdatedAt = time.Now()
@@ -385,11 +385,22 @@ func (s *ProjectService) CreateTask(ctx context.Context, projectID string, userI
 		reviewerID = &req.ReviewerID
 	}
 
+	var parentTaskID *string
+	if req.ParentTaskID != "" {
+		parentTaskID = &req.ParentTaskID
+	}
+
+	// Use DueDate if provided, otherwise fall back to PlannedEnd
+	dueDate := req.DueDate
+	if dueDate == nil {
+		dueDate = req.PlannedEnd
+	}
+
 	task := &entity.Task{
 		ID:             uuid.New().String()[:32],
 		ProjectID:      projectID,
 		PhaseID:        phaseID,
-		ParentTaskID:   &req.ParentTaskID,
+		ParentTaskID:   parentTaskID,
 		Code:           code,
 		Name:           req.Name,
 		Description:    req.Description,
@@ -398,9 +409,8 @@ func (s *ProjectService) CreateTask(ctx context.Context, projectID string, userI
 		Priority:       priority,
 		AssigneeID:     assigneeID,
 		ReviewerID:     reviewerID,
-		PlannedStart:   req.PlannedStart,
-		PlannedEnd:     req.PlannedEnd,
-		DueDate:        req.DueDate,
+		StartDate:      req.PlannedStart,
+		DueDate:        dueDate,
 		Progress:       0,
 		EstimatedHours: req.EstimatedHours,
 		Level:          level,
@@ -439,10 +449,10 @@ func (s *ProjectService) UpdateTask(ctx context.Context, id string, req *UpdateT
 		task.ReviewerID = &req.ReviewerID
 	}
 	if req.PlannedStart != nil {
-		task.PlannedStart = req.PlannedStart
+		task.StartDate = req.PlannedStart
 	}
 	if req.PlannedEnd != nil {
-		task.PlannedEnd = req.PlannedEnd
+		task.DueDate = req.PlannedEnd
 	}
 	if req.DueDate != nil {
 		task.DueDate = req.DueDate
@@ -484,7 +494,7 @@ func (s *ProjectService) UpdateTaskStatus(ctx context.Context, id string, status
 	if status == entity.TaskStatusInProgress && task.ActualStart == nil {
 		task.ActualStart = &now
 	} else if status == entity.TaskStatusCompleted {
-		task.ActualEnd = &now
+		task.CompletedAt = &now
 		task.Progress = 100
 	}
 

@@ -58,13 +58,27 @@ func main() {
 		zapLogger.Fatal("Failed to connect to database", zap.Error(err))
 	}
 
+	// 手动添加新列（AutoMigrate 会触发 FK 级联问题，所以用原始 SQL）
+	migrationSQL := []string{
+		"ALTER TABLE template_tasks ADD COLUMN IF NOT EXISTS auto_create_feishu_task boolean DEFAULT false",
+		"ALTER TABLE template_tasks ADD COLUMN IF NOT EXISTS feishu_approval_code varchar(100) DEFAULT ''",
+		"ALTER TABLE tasks ADD COLUMN IF NOT EXISTS auto_create_feishu_task boolean DEFAULT false",
+		"ALTER TABLE tasks ADD COLUMN IF NOT EXISTS feishu_approval_code varchar(100) DEFAULT ''",
+	}
+	for _, sql := range migrationSQL {
+		if err := db.Exec(sql).Error; err != nil {
+			zapLogger.Warn("Migration SQL warning (may already exist)", zap.String("sql", sql), zap.Error(err))
+		}
+	}
+	zapLogger.Info("Database migration completed")
+
 	// 初始化Redis
 	rdb := initRedis(cfg.Redis)
 
 	// 初始化依赖
 	repos := repository.NewRepositories(db)
 	services := service.NewServices(repos, rdb, cfg)
-	handlers := handler.NewHandlers(services, cfg)
+	handlers := handler.NewHandlers(services, repos, cfg)
 
 	// 设置Gin模式
 	if cfg.Server.Mode == "release" {
@@ -295,7 +309,28 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				projects.POST("/:id/tasks/:taskId/dependencies", h.Project.AddTaskDependency)
 				projects.DELETE("/:id/tasks/:taskId/dependencies/:depId", h.Project.RemoveTaskDependency)
 				projects.GET("/:id/overdue-tasks", h.Project.GetOverdueTasks)
+
+				// V2: 项目BOM管理
+				projects.GET("/:id/boms", h.ProjectBOM.ListBOMs)
+				projects.POST("/:id/boms", h.ProjectBOM.CreateBOM)
+				projects.GET("/:id/boms/:bomId", h.ProjectBOM.GetBOM)
+				projects.PUT("/:id/boms/:bomId", h.ProjectBOM.UpdateBOM)
+				projects.POST("/:id/boms/:bomId/submit", h.ProjectBOM.SubmitBOM)
+				projects.POST("/:id/boms/:bomId/approve", h.ProjectBOM.ApproveBOM)
+				projects.POST("/:id/boms/:bomId/reject", h.ProjectBOM.RejectBOM)
+				projects.POST("/:id/boms/:bomId/freeze", h.ProjectBOM.FreezeBOM)
+				projects.POST("/:id/boms/:bomId/items", h.ProjectBOM.AddItem)
+				projects.POST("/:id/boms/:bomId/items/batch", h.ProjectBOM.BatchAddItems)
+				projects.DELETE("/:id/boms/:bomId/items/:itemId", h.ProjectBOM.DeleteItem)
+
+				// V2: 交付物管理
+				projects.GET("/:id/deliverables", h.Deliverable.ListByProject)
+				projects.GET("/:id/phases/:phaseId/deliverables", h.Deliverable.ListByPhase)
+				projects.PUT("/:id/deliverables/:deliverableId", h.Deliverable.Update)
 			}
+
+			// V2: 代号管理
+			authorized.GET("/codenames", h.Codename.List)
 
 			// 我的任务
 			authorized.GET("/my/tasks", h.Project.GetMyTasks)
@@ -349,6 +384,10 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				templates.POST("/:id/tasks", h.Template.CreateTask)
 				templates.PUT("/:id/tasks/:taskCode", h.Template.UpdateTask)
 				templates.DELETE("/:id/tasks/:taskCode", h.Template.DeleteTask)
+				templates.PUT("/:id/tasks/batch", h.Template.BatchSaveTasks)
+				templates.POST("/:id/publish", h.Template.Publish)
+				templates.POST("/:id/upgrade", h.Template.UpgradeVersion)
+				templates.GET("/:id/versions", h.Template.ListVersions)
 			}
 
 			// 从模板创建项目

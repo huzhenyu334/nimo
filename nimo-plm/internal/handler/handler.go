@@ -4,38 +4,47 @@ import (
 	"strconv"
 
 	"github.com/bitfantasy/nimo-plm/internal/config"
+	"github.com/bitfantasy/nimo-plm/internal/repository"
 	"github.com/bitfantasy/nimo-plm/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
 // Handlers 处理器集合
 type Handlers struct {
-	Auth     *AuthHandler
-	User     *UserHandler
-	Product  *ProductHandler
-	Material *MaterialHandler
-	BOM      *BOMHandler
-	Project  *ProjectHandler
-	Task     *ProjectHandler  // Task methods are on ProjectHandler
-	ECN      *ECNHandler
-	Document *DocumentHandler
-	Template *TemplateHandler
+	Auth        *AuthHandler
+	User        *UserHandler
+	Product     *ProductHandler
+	Material    *MaterialHandler
+	BOM         *OldBOMHandler
+	Project     *ProjectHandler
+	Task        *ProjectHandler  // Task methods are on ProjectHandler
+	ECN         *ECNHandler
+	Document    *DocumentHandler
+	Template    *TemplateHandler
+	// V2 新增
+	ProjectBOM  *BOMHandler
+	Deliverable *DeliverableHandler
+	Codename    *CodenameHandler
 }
 
 // NewHandlers 创建处理器集合
-func NewHandlers(svc *service.Services, cfg *config.Config) *Handlers {
+func NewHandlers(svc *service.Services, repos *repository.Repositories, cfg *config.Config) *Handlers {
 	projectHandler := NewProjectHandler(svc.Project)
 	return &Handlers{
-		Auth:     NewAuthHandler(svc.Auth, cfg),
-		User:     NewUserHandler(svc.User),
-		Product:  NewProductHandler(svc.Product),
-		Material: NewMaterialHandler(svc.Material),
-		BOM:      NewBOMHandler(svc.BOM),
-		Project:  projectHandler,
-		Task:     projectHandler,  // Reuse ProjectHandler for task routes
-		ECN:      NewECNHandler(svc.ECN),
-		Document: NewDocumentHandler(svc.Document),
-		Template: NewTemplateHandler(svc.Template),
+		Auth:        NewAuthHandler(svc.Auth, cfg),
+		User:        NewUserHandler(svc.User),
+		Product:     NewProductHandler(svc.Product),
+		Material:    NewMaterialHandler(svc.Material),
+		BOM:         &OldBOMHandler{},
+		Project:     projectHandler,
+		Task:        projectHandler,  // Reuse ProjectHandler for task routes
+		ECN:         NewECNHandler(svc.ECN),
+		Document:    NewDocumentHandler(svc.Document),
+		Template:    NewTemplateHandler(svc.Template),
+		// V2 新增
+		ProjectBOM:  NewBOMHandler(svc.ProjectBOM),
+		Deliverable: NewDeliverableHandler(repos.Deliverable),
+		Codename:    NewCodenameHandler(repos.Codename),
 	}
 }
 

@@ -17,6 +17,11 @@ func NewTemplateRepository(db *gorm.DB) *TemplateRepository {
 	return &TemplateRepository{db: db}
 }
 
+// DB 暴露数据库连接（用于事务）
+func (r *TemplateRepository) DB() *gorm.DB {
+	return r.db
+}
+
 // List 获取模板列表
 func (r *TemplateRepository) List(ctx context.Context, templateType string, productType string, activeOnly bool) ([]entity.ProjectTemplate, error) {
 	var templates []entity.ProjectTemplate
@@ -98,7 +103,8 @@ func (r *TemplateRepository) Create(ctx context.Context, template *entity.Projec
 
 // Update 更新模板
 func (r *TemplateRepository) Update(ctx context.Context, template *entity.ProjectTemplate) error {
-	return r.db.WithContext(ctx).Save(template).Error
+	// 只更新模板本身，不级联关联（Tasks/Dependencies）
+	return r.db.WithContext(ctx).Omit("Tasks", "Dependencies").Save(template).Error
 }
 
 // Delete 删除模板

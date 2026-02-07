@@ -7,8 +7,12 @@ import (
 )
 
 // CreateTask 创建任务
+// Omit association fields to prevent GORM from nullifying foreign keys
+// when the associated struct pointer (e.g. ParentTask) is nil.
 func (r *ProjectRepository) CreateTask(ctx context.Context, task *entity.Task) error {
-	return r.db.WithContext(ctx).Create(task).Error
+	return r.db.WithContext(ctx).
+		Omit("ParentTask", "SubTasks", "Project", "Phase", "Assignee", "Reviewer", "Creator").
+		Create(task).Error
 }
 
 // GetTask 获取任务

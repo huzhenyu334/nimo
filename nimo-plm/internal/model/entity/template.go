@@ -17,7 +17,10 @@ type ProjectTemplate struct {
 	EstimatedDays    int             `json:"estimated_days"`
 	IsActive         bool            `json:"is_active" gorm:"default:true"`
 	ParentTemplateID *string         `json:"parent_template_id" gorm:"size:36"`
-	Version          int             `json:"version" gorm:"default:1"`
+	Version          string          `json:"version" gorm:"size:20;default:'1.0'"`
+	Status           string          `json:"status" gorm:"size:20;default:'draft'"` // draft/published
+	PublishedAt      *time.Time      `json:"published_at"`
+	BaseCode         string          `json:"base_code" gorm:"size:50"` // 同一流程的不同版本共享base_code
 	CreatedBy        string          `json:"created_by" gorm:"size:64;not null"`
 	CreatedAt        time.Time       `json:"created_at"`
 	UpdatedAt        time.Time       `json:"updated_at"`
@@ -33,24 +36,26 @@ func (ProjectTemplate) TableName() string {
 
 // TemplateTask 模板任务
 type TemplateTask struct {
-	ID                  string          `json:"id" gorm:"primaryKey;size:36"`
-	TemplateID          string          `json:"template_id" gorm:"size:36;not null;index"`
-	TaskCode            string          `json:"task_code" gorm:"size:50;not null"`
-	Name                string          `json:"name" gorm:"size:200;not null"`
-	Description         string          `json:"description" gorm:"type:text"`
-	Phase               string          `json:"phase" gorm:"size:20;not null"`
-	ParentTaskCode      string          `json:"parent_task_code" gorm:"size:50"`
-	TaskType            string          `json:"task_type" gorm:"size:20;default:'TASK'"` // MILESTONE/TASK/SUBTASK
-	DefaultAssigneeRole string          `json:"default_assignee_role" gorm:"size:50"`
-	EstimatedDays       int             `json:"estimated_days" gorm:"default:1"`
-	IsCritical          bool            `json:"is_critical" gorm:"default:false"`
-	Deliverables        json.RawMessage `json:"deliverables" gorm:"type:jsonb"`
-	Checklist           json.RawMessage `json:"checklist" gorm:"type:jsonb"`
-	RequiresApproval    bool            `json:"requires_approval" gorm:"default:false"`
-	ApprovalType        string          `json:"approval_type" gorm:"size:50"`
-	SortOrder           int             `json:"sort_order" gorm:"default:0"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
+	ID                    string          `json:"id" gorm:"primaryKey;size:36"`
+	TemplateID            string          `json:"template_id" gorm:"size:36;not null;index"`
+	TaskCode              string          `json:"task_code" gorm:"size:50;not null"`
+	Name                  string          `json:"name" gorm:"size:200;not null"`
+	Description           string          `json:"description" gorm:"type:text"`
+	Phase                 string          `json:"phase" gorm:"size:20;not null"`
+	ParentTaskCode        string          `json:"parent_task_code" gorm:"size:50"`
+	TaskType              string          `json:"task_type" gorm:"size:20;default:'TASK'"` // MILESTONE/TASK/SUBTASK
+	DefaultAssigneeRole   string          `json:"default_assignee_role" gorm:"size:50"`
+	EstimatedDays         int             `json:"estimated_days" gorm:"default:1"`
+	IsCritical            bool            `json:"is_critical" gorm:"default:false"`
+	Deliverables          json.RawMessage `json:"deliverables" gorm:"type:jsonb"`
+	Checklist             json.RawMessage `json:"checklist" gorm:"type:jsonb"`
+	RequiresApproval      bool            `json:"requires_approval" gorm:"default:false"`
+	ApprovalType          string          `json:"approval_type" gorm:"size:50"`
+	AutoCreateFeishuTask  bool            `json:"auto_create_feishu_task" gorm:"default:false"`
+	FeishuApprovalCode    string          `json:"feishu_approval_code" gorm:"size:100"`
+	SortOrder             int             `json:"sort_order" gorm:"default:0"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
 
 	// 关联
 	SubTasks     []TemplateTask            `json:"sub_tasks,omitempty" gorm:"-"`

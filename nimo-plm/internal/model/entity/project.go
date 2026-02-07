@@ -85,12 +85,12 @@ type Task struct {
 	AssigneeID     *string    `json:"assignee_id" gorm:"size:32"`
 	ReviewerID     *string    `json:"reviewer_id" gorm:"size:32"`
 	StartDate      *time.Time `json:"start_date" gorm:"column:planned_start;type:date"`
-	PlannedStart   *time.Time `json:"-" gorm:"-"` // 别名
-	PlannedEnd     *time.Time `json:"planned_end" gorm:"type:date"`
+	PlannedStart   *time.Time `json:"-" gorm:"-"` // 别名，不映射DB
+	PlannedEnd     *time.Time `json:"-" gorm:"-"` // 别名，不映射DB（实际列由DueDate管理）
 	ActualStart    *time.Time `json:"actual_start" gorm:"type:date"`
-	ActualEnd      *time.Time `json:"actual_end" gorm:"type:date"`
+	ActualEnd      *time.Time `json:"-" gorm:"-"` // 别名，不映射DB（实际列由CompletedAt管理）
 	DueDate        *time.Time `json:"due_date" gorm:"column:planned_end;type:date"`
-	CompletedAt    *time.Time `json:"completed_at" gorm:"column:actual_end"`
+	CompletedAt    *time.Time `json:"completed_at" gorm:"column:actual_end;type:date"`
 	Progress       int        `json:"progress" gorm:"not null;default:0"`
 	EstimatedHours float64    `json:"estimated_hours" gorm:"type:decimal(8,2)"`
 	ActualHours    float64    `json:"actual_hours" gorm:"type:decimal(8,2)"`
@@ -99,13 +99,15 @@ type Task struct {
 	Level          int        `json:"level" gorm:"not null;default:0"`
 	Path           string     `json:"path" gorm:"size:512"`
 	// 新增字段
-	AutoStart        bool   `json:"auto_start" gorm:"default:false"`
-	RequiresApproval bool   `json:"requires_approval" gorm:"default:false"`
-	ApprovalType     string `json:"approval_type" gorm:"size:50"`
-	ApprovalStatus   string `json:"approval_status" gorm:"size:20"`
-	CreatedBy        string `json:"created_by" gorm:"size:32;not null"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	AutoStart              bool   `json:"auto_start" gorm:"default:false"`
+	RequiresApproval       bool   `json:"requires_approval" gorm:"default:false"`
+	ApprovalType           string `json:"approval_type" gorm:"size:50"`
+	ApprovalStatus         string `json:"approval_status" gorm:"size:20"`
+	AutoCreateFeishuTask   bool   `json:"auto_create_feishu_task" gorm:"default:false"`
+	FeishuApprovalCode     string `json:"feishu_approval_code" gorm:"size:100"`
+	CreatedBy              string `json:"created_by" gorm:"size:32;not null"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
 
 	// 关联
 	Project    *Project      `json:"project,omitempty" gorm:"foreignKey:ProjectID"`

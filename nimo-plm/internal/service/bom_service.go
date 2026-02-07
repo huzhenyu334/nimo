@@ -3,337 +3,340 @@ package service
 import (
 	"context"
 	"fmt"
-	"time"
-
 	"github.com/bitfantasy/nimo-plm/internal/model/entity"
 	"github.com/bitfantasy/nimo-plm/internal/repository"
+	"time"
+
 	"github.com/google/uuid"
 )
 
-// AddBOMItemRequest 添加BOM行项请求
-type AddBOMItemRequest struct {
-	ParentItemID string  `json:"parent_item_id"`
-	MaterialID   string  `json:"material_id" binding:"required"`
-	Quantity     float64 `json:"quantity" binding:"required,min=0.001"`
-	Unit         string  `json:"unit"`
-	Position     string  `json:"position"`
-	Notes        string  `json:"notes"`
+type ProjectBOMService struct {
+	bomRepo         *repository.ProjectBOMRepository
+	projectRepo     *repository.ProjectRepository
+	deliverableRepo *repository.DeliverableRepository
 }
 
-// UpdateBOMItemRequest 更新BOM行项请求
-type UpdateBOMItemRequest struct {
-	Quantity float64 `json:"quantity"`
-	Position string  `json:"position"`
-	Notes    string  `json:"notes"`
+func NewProjectBOMService(bomRepo *repository.ProjectBOMRepository, projectRepo *repository.ProjectRepository, deliverableRepo *repository.DeliverableRepository) *ProjectBOMService {
+	return &ProjectBOMService{
+		bomRepo:         bomRepo,
+		projectRepo:     projectRepo,
+		deliverableRepo: deliverableRepo,
+	}
 }
 
-// ReleaseBOMRequest 发布BOM请求
-type ReleaseBOMRequest struct {
-	Version      string `json:"version" binding:"required"`
-	ReleaseNotes string `json:"release_notes"`
-}
-
-// BOMCompareResult BOM对比结果
-type BOMCompareResult struct {
-	VersionA string            `json:"version_a"`
-	VersionB string            `json:"version_b"`
-	Added    []entity.BOMItem  `json:"added"`
-	Removed  []entity.BOMItem  `json:"removed"`
-	Modified []entity.BOMItem  `json:"modified"`
-}
-
-// GetBOM 获取产品BOM
-func (s *BOMService) GetBOM(ctx context.Context, productID, version string, expandLevel int, includeCost bool) (*entity.BOMHeader, error) {
-	bom, err := s.bomRepo.GetByProductID(ctx, productID, version)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			// 如果没有BOM，创建一个草稿
-			return nil, fmt.Errorf("BOM not found")
-		}
-		return nil, fmt.Errorf("get BOM: %w", err)
+// CreateBOM 创建BOM（草稿状态）
+func (s *ProjectBOMService) CreateBOM(ctx context.Context, projectID string, input *CreateBOMInput, createdBy string) (*entity.ProjectBOM, error) {
+	bom := &entity.ProjectBOM{
+		ID:          uuid.New().String()[:32],
+		ProjectID:   projectID,
+		PhaseID:     input.PhaseID,
+		BOMType:     input.BOMType,
+		Version:     input.Version,
+		Name:        input.Name,
+		Status:      "draft",
+		Description: input.Description,
+		CreatedBy:   createdBy,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 
-	// 构建层级结构
-	bom.Items = s.buildBOMTree(bom.Items, expandLevel)
+	if bom.Version == "" {
+		bom.Version = "v1.0"
+	}
 
-	// 如果需要成本，计算成本
-	if includeCost {
-		s.calculateBOMCost(bom)
+	if err := s.bomRepo.Create(ctx, bom); err != nil {
+		return nil, fmt.Errorf("create bom: %w", err)
 	}
 
 	return bom, nil
 }
 
-// buildBOMTree 构建BOM树结构
-func (s *BOMService) buildBOMTree(items []entity.BOMItem, maxLevel int) []entity.BOMItem {
-	// 建立父子关系映射
-	itemMap := make(map[string]*entity.BOMItem)
-	for i := range items {
-		itemMap[items[i].ID] = &items[i]
-	}
-
-	// 构建树
-	var roots []entity.BOMItem
-	for i := range items {
-		item := &items[i]
-		if item.ParentItemID == "" {
-			// 顶级项
-			if maxLevel < 0 || item.Level <= maxLevel {
-				s.attachChildren(item, itemMap, maxLevel)
-				roots = append(roots, *item)
-			}
-		}
-	}
-
-	return roots
+// GetBOM 获取BOM详情（含行项）
+func (s *ProjectBOMService) GetBOM(ctx context.Context, id string) (*entity.ProjectBOM, error) {
+	return s.bomRepo.FindByID(ctx, id)
 }
 
-// attachChildren 递归附加子项
-func (s *BOMService) attachChildren(item *entity.BOMItem, itemMap map[string]*entity.BOMItem, maxLevel int) {
-	if maxLevel >= 0 && item.Level >= maxLevel {
-		return
-	}
-
-	for _, child := range itemMap {
-		if child.ParentItemID == item.ID {
-			s.attachChildren(child, itemMap, maxLevel)
-			item.Children = append(item.Children, *child)
-		}
-	}
+// ListBOMs 获取项目BOM列表
+func (s *ProjectBOMService) ListBOMs(ctx context.Context, projectID, bomType, status string) ([]entity.ProjectBOM, error) {
+	return s.bomRepo.ListByProject(ctx, projectID, bomType, status)
 }
 
-// calculateBOMCost 计算BOM成本
-func (s *BOMService) calculateBOMCost(bom *entity.BOMHeader) {
-	var totalCost float64
-	for i := range bom.Items {
-		item := &bom.Items[i]
-		if item.Material != nil {
-			item.UnitCost = item.Material.StandardCost
-			item.ExtendedCost = item.UnitCost * item.Quantity
-			if item.Level == 0 {
-				totalCost += item.ExtendedCost
-			}
-		}
-		// 递归计算子项
-		s.calculateItemCost(item)
-	}
-	bom.TotalCost = totalCost
-}
-
-// calculateItemCost 递归计算行项成本
-func (s *BOMService) calculateItemCost(item *entity.BOMItem) {
-	for i := range item.Children {
-		child := &item.Children[i]
-		if child.Material != nil {
-			child.UnitCost = child.Material.StandardCost
-			child.ExtendedCost = child.UnitCost * child.Quantity
-		}
-		s.calculateItemCost(child)
-	}
-}
-
-// ListBOMVersions 获取BOM版本列表
-func (s *BOMService) ListVersions(ctx context.Context, productID string) ([]entity.BOMHeader, error) {
-	return s.bomRepo.ListVersions(ctx, productID)
-}
-
-// AddBOMItem 添加BOM行项
-func (s *BOMService) AddItem(ctx context.Context, productID, userID string, req *AddBOMItemRequest) (*entity.BOMItem, error) {
-	// 获取或创建草稿BOM
-	bom, err := s.bomRepo.GetDraftBOM(ctx, productID)
+// UpdateBOM 更新BOM基本信息（仅草稿状态可改）
+func (s *ProjectBOMService) UpdateBOM(ctx context.Context, id string, input *UpdateBOMInput) (*entity.ProjectBOM, error) {
+	bom, err := s.bomRepo.FindByID(ctx, id)
 	if err != nil {
-		if err == repository.ErrNotFound {
-			bom, err = s.bomRepo.CreateDraftBOM(ctx, productID, userID)
-			if err != nil {
-				return nil, fmt.Errorf("create draft BOM: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("get draft BOM: %w", err)
-		}
+		return nil, fmt.Errorf("bom not found: %w", err)
 	}
 
-	// 检查BOM状态
-	if bom.Status != entity.BOMStatusDraft {
-		return nil, fmt.Errorf("can only modify draft BOM")
+	if bom.Status != "draft" && bom.Status != "rejected" {
+		return nil, fmt.Errorf("只有草稿或被驳回的BOM才能编辑")
 	}
 
-	// 获取物料信息
-	material, err := s.materialRepo.FindByID(ctx, req.MaterialID)
+	if input.Name != "" {
+		bom.Name = input.Name
+	}
+	if input.Description != "" {
+		bom.Description = input.Description
+	}
+	if input.Version != "" {
+		bom.Version = input.Version
+	}
+
+	if err := s.bomRepo.Update(ctx, bom); err != nil {
+		return nil, fmt.Errorf("update bom: %w", err)
+	}
+	return bom, nil
+}
+
+// SubmitBOM 提交BOM审批
+func (s *ProjectBOMService) SubmitBOM(ctx context.Context, id, submitterID string) (*entity.ProjectBOM, error) {
+	bom, err := s.bomRepo.FindByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("material not found: %w", err)
+		return nil, fmt.Errorf("bom not found: %w", err)
 	}
 
-	// 确定层级
-	level := 0
-	if req.ParentItemID != "" {
-		parentItem, err := s.bomRepo.GetItem(ctx, req.ParentItemID)
-		if err != nil {
-			return nil, fmt.Errorf("parent item not found: %w", err)
-		}
-		level = parentItem.Level + 1
+	if bom.Status != "draft" && bom.Status != "rejected" {
+		return nil, fmt.Errorf("只有草稿或被驳回的BOM才能提交审批")
 	}
 
-	// 获取序号
-	sequence, err := s.bomRepo.GetMaxSequence(ctx, bom.ID, req.ParentItemID)
-	if err != nil {
-		return nil, fmt.Errorf("get max sequence: %w", err)
-	}
-
-	// 创建BOM行项
-	unit := req.Unit
-	if unit == "" {
-		unit = material.Unit
+	// 检查是否有行项
+	count, _ := s.bomRepo.CountItems(ctx, id)
+	if count == 0 {
+		return nil, fmt.Errorf("BOM没有物料行项，无法提交")
 	}
 
 	now := time.Now()
-	item := &entity.BOMItem{
-		ID:           uuid.New().String()[:32],
-		BOMHeaderID:  bom.ID,
-		ParentItemID: req.ParentItemID,
-		MaterialID:   req.MaterialID,
-		Level:        level,
-		Sequence:     sequence + 1,
-		Quantity:     req.Quantity,
-		Unit:         unit,
-		Position:     req.Position,
-		Notes:        req.Notes,
-		UnitCost:     material.StandardCost,
-		ExtendedCost: material.StandardCost * req.Quantity,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+	bom.Status = "pending_review"
+	bom.SubmittedBy = &submitterID
+	bom.SubmittedAt = &now
+
+	if err := s.bomRepo.Update(ctx, bom); err != nil {
+		return nil, fmt.Errorf("submit bom: %w", err)
+	}
+	return bom, nil
+}
+
+// ApproveBOM 审批通过BOM
+func (s *ProjectBOMService) ApproveBOM(ctx context.Context, id, reviewerID, comment string) (*entity.ProjectBOM, error) {
+	bom, err := s.bomRepo.FindByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("bom not found: %w", err)
+	}
+
+	if bom.Status != "pending_review" {
+		return nil, fmt.Errorf("只有待审批的BOM才能审批")
+	}
+
+	now := time.Now()
+	bom.Status = "published"
+	bom.ReviewedBy = &reviewerID
+	bom.ReviewedAt = &now
+	bom.ReviewComment = comment
+	bom.ApprovedBy = &reviewerID
+	bom.ApprovedAt = &now
+
+	if err := s.bomRepo.Update(ctx, bom); err != nil {
+		return nil, fmt.Errorf("approve bom: %w", err)
+	}
+	return bom, nil
+}
+
+// RejectBOM 驳回BOM
+func (s *ProjectBOMService) RejectBOM(ctx context.Context, id, reviewerID, comment string) (*entity.ProjectBOM, error) {
+	bom, err := s.bomRepo.FindByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("bom not found: %w", err)
+	}
+
+	if bom.Status != "pending_review" {
+		return nil, fmt.Errorf("只有待审批的BOM才能驳回")
+	}
+
+	now := time.Now()
+	bom.Status = "rejected"
+	bom.ReviewedBy = &reviewerID
+	bom.ReviewedAt = &now
+	bom.ReviewComment = comment
+
+	if err := s.bomRepo.Update(ctx, bom); err != nil {
+		return nil, fmt.Errorf("reject bom: %w", err)
+	}
+	return bom, nil
+}
+
+// FreezeBOM 冻结BOM（阶段门评审通过后）
+func (s *ProjectBOMService) FreezeBOM(ctx context.Context, id, frozenByID string) (*entity.ProjectBOM, error) {
+	bom, err := s.bomRepo.FindByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("bom not found: %w", err)
+	}
+
+	if bom.Status != "published" {
+		return nil, fmt.Errorf("只有已发布的BOM才能冻结")
+	}
+
+	now := time.Now()
+	bom.Status = "frozen"
+	bom.FrozenAt = &now
+	bom.FrozenBy = &frozenByID
+
+	if err := s.bomRepo.Update(ctx, bom); err != nil {
+		return nil, fmt.Errorf("freeze bom: %w", err)
+	}
+	return bom, nil
+}
+
+// AddItem 添加BOM行项
+func (s *ProjectBOMService) AddItem(ctx context.Context, bomID string, input *BOMItemInput) (*entity.ProjectBOMItem, error) {
+	bom, err := s.bomRepo.FindByID(ctx, bomID)
+	if err != nil {
+		return nil, fmt.Errorf("bom not found: %w", err)
+	}
+	if bom.Status != "draft" && bom.Status != "rejected" {
+		return nil, fmt.Errorf("只有草稿状态的BOM才能添加物料")
+	}
+
+	item := &entity.ProjectBOMItem{
+		ID:             uuid.New().String()[:32],
+		BOMID:          bomID,
+		ItemNumber:     input.ItemNumber,
+		MaterialID:     input.MaterialID,
+		Category:       input.Category,
+		Name:           input.Name,
+		Specification:  input.Specification,
+		Quantity:        input.Quantity,
+		Unit:           input.Unit,
+		Reference:      input.Reference,
+		Manufacturer:   input.Manufacturer,
+		ManufacturerPN: input.ManufacturerPN,
+		Supplier:       input.Supplier,
+		UnitPrice:      input.UnitPrice,
+		LeadTimeDays:   input.LeadTimeDays,
+		IsCritical:     input.IsCritical,
+		IsAlternative:  input.IsAlternative,
+		Notes:          input.Notes,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	if item.Unit == "" {
+		item.Unit = "pcs"
 	}
 
 	if err := s.bomRepo.CreateItem(ctx, item); err != nil {
-		return nil, fmt.Errorf("create BOM item: %w", err)
+		return nil, fmt.Errorf("create bom item: %w", err)
 	}
 
 	// 更新BOM统计
-	if err := s.bomRepo.UpdateStats(ctx, bom.ID); err != nil {
-		// 不阻断流程
-	}
-
-	// 加载物料信息
-	item.Material = material
+	count, _ := s.bomRepo.CountItems(ctx, bomID)
+	s.bomRepo.DB().Model(&entity.ProjectBOM{}).Where("id = ?", bomID).Update("total_items", count)
 
 	return item, nil
 }
 
-// UpdateBOMItem 更新BOM行项
-func (s *BOMService) UpdateItem(ctx context.Context, productID, itemID, userID string, req *UpdateBOMItemRequest) (*entity.BOMItem, error) {
-	// 获取行项
-	item, err := s.bomRepo.GetItem(ctx, itemID)
+// BatchAddItems 批量添加BOM行项
+func (s *ProjectBOMService) BatchAddItems(ctx context.Context, bomID string, items []BOMItemInput) (int, error) {
+	bom, err := s.bomRepo.FindByID(ctx, bomID)
 	if err != nil {
-		return nil, fmt.Errorf("item not found: %w", err)
+		return 0, fmt.Errorf("bom not found: %w", err)
+	}
+	if bom.Status != "draft" && bom.Status != "rejected" {
+		return 0, fmt.Errorf("只有草稿状态的BOM才能添加物料")
 	}
 
-	// 获取BOM头
-	bom, err := s.bomRepo.GetByID(ctx, item.BOMHeaderID)
-	if err != nil {
-		return nil, fmt.Errorf("BOM not found: %w", err)
+	var entities []entity.ProjectBOMItem
+	for i, input := range items {
+		item := entity.ProjectBOMItem{
+			ID:             uuid.New().String()[:32],
+			BOMID:          bomID,
+			ItemNumber:     i + 1,
+			Category:       input.Category,
+			Name:           input.Name,
+			Specification:  input.Specification,
+			Quantity:        input.Quantity,
+			Unit:           input.Unit,
+			Reference:      input.Reference,
+			Manufacturer:   input.Manufacturer,
+			ManufacturerPN: input.ManufacturerPN,
+			Supplier:       input.Supplier,
+			UnitPrice:      input.UnitPrice,
+			LeadTimeDays:   input.LeadTimeDays,
+			IsCritical:     input.IsCritical,
+			IsAlternative:  input.IsAlternative,
+			Notes:          input.Notes,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+		if item.Unit == "" {
+			item.Unit = "pcs"
+		}
+		if input.MaterialID != nil {
+			item.MaterialID = input.MaterialID
+		}
+		entities = append(entities, item)
 	}
 
-	// 检查状态
-	if bom.Status != entity.BOMStatusDraft {
-		return nil, fmt.Errorf("can only modify draft BOM")
+	if err := s.bomRepo.BatchCreateItems(ctx, entities); err != nil {
+		return 0, fmt.Errorf("batch create items: %w", err)
 	}
 
-	// 更新字段
-	if req.Quantity > 0 {
-		item.Quantity = req.Quantity
-		item.ExtendedCost = item.UnitCost * req.Quantity
-	}
-	if req.Position != "" {
-		item.Position = req.Position
-	}
-	if req.Notes != "" {
-		item.Notes = req.Notes
-	}
-	item.UpdatedAt = time.Now()
+	count, _ := s.bomRepo.CountItems(ctx, bomID)
+	s.bomRepo.DB().Model(&entity.ProjectBOM{}).Where("id = ?", bomID).Update("total_items", count)
 
-	if err := s.bomRepo.UpdateItem(ctx, item); err != nil {
-		return nil, fmt.Errorf("update item: %w", err)
-	}
-
-	// 更新BOM统计
-	s.bomRepo.UpdateStats(ctx, bom.ID)
-
-	return item, nil
+	return len(entities), nil
 }
 
-// DeleteBOMItem 删除BOM行项
-func (s *BOMService) DeleteItem(ctx context.Context, productID, itemID, userID string) error {
-	// 获取行项
-	item, err := s.bomRepo.GetItem(ctx, itemID)
+// DeleteItem 删除BOM行项
+func (s *ProjectBOMService) DeleteItem(ctx context.Context, bomID, itemID string) error {
+	bom, err := s.bomRepo.FindByID(ctx, bomID)
 	if err != nil {
-		return fmt.Errorf("item not found: %w", err)
+		return fmt.Errorf("bom not found: %w", err)
+	}
+	if bom.Status != "draft" && bom.Status != "rejected" {
+		return fmt.Errorf("只有草稿状态的BOM才能删除物料")
 	}
 
-	// 获取BOM头
-	bom, err := s.bomRepo.GetByID(ctx, item.BOMHeaderID)
-	if err != nil {
-		return fmt.Errorf("BOM not found: %w", err)
-	}
-
-	// 检查状态
-	if bom.Status != entity.BOMStatusDraft {
-		return fmt.Errorf("can only modify draft BOM")
-	}
-
-	// 删除行项（包括子项）
 	if err := s.bomRepo.DeleteItem(ctx, itemID); err != nil {
 		return fmt.Errorf("delete item: %w", err)
 	}
 
-	// 更新BOM统计
-	s.bomRepo.UpdateStats(ctx, bom.ID)
+	count, _ := s.bomRepo.CountItems(ctx, bomID)
+	s.bomRepo.DB().Model(&entity.ProjectBOM{}).Where("id = ?", bomID).Update("total_items", count)
 
 	return nil
 }
 
-// ReleaseBOM 发布BOM
-func (s *BOMService) Release(ctx context.Context, productID, userID string, req *ReleaseBOMRequest) (*entity.BOMHeader, error) {
-	// 获取草稿BOM
-	bom, err := s.bomRepo.GetDraftBOM(ctx, productID)
-	if err != nil {
-		return nil, fmt.Errorf("no draft BOM found: %w", err)
-	}
+// ---- Input DTOs ----
 
-	// 检查是否有物料
-	if bom.TotalItems == 0 {
-		return nil, fmt.Errorf("BOM has no items")
-	}
-
-	// 更新状态
-	now := time.Now()
-	bom.Status = entity.BOMStatusReleased
-	bom.Version = req.Version
-	bom.ReleasedBy = userID
-	bom.ReleasedAt = &now
-	bom.ReleaseNotes = req.ReleaseNotes
-	bom.UpdatedAt = now
-
-	if err := s.bomRepo.Update(ctx, bom); err != nil {
-		return nil, fmt.Errorf("update BOM: %w", err)
-	}
-
-	// 更新产品的当前BOM版本
-	// TODO: 调用ProductRepository更新
-
-	return bom, nil
+type CreateBOMInput struct {
+	PhaseID     *string `json:"phase_id"`
+	BOMType     string  `json:"bom_type" binding:"required"`
+	Version     string  `json:"version"`
+	Name        string  `json:"name" binding:"required"`
+	Description string  `json:"description"`
 }
 
-// CompareBOM 对比BOM版本
-func (s *BOMService) Compare(ctx context.Context, productID, versionA, versionB string) (*BOMCompareResult, error) {
-	added, removed, modified, err := s.bomRepo.Compare(ctx, productID, versionA, versionB)
-	if err != nil {
-		return nil, fmt.Errorf("compare BOM: %w", err)
-	}
+type UpdateBOMInput struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Version     string `json:"version"`
+}
 
-	return &BOMCompareResult{
-		VersionA: versionA,
-		VersionB: versionB,
-		Added:    added,
-		Removed:  removed,
-		Modified: modified,
-	}, nil
+type BOMItemInput struct {
+	MaterialID     *string  `json:"material_id"`
+	Category       string   `json:"category"`
+	Name           string   `json:"name" binding:"required"`
+	Specification  string   `json:"specification"`
+	Quantity       float64  `json:"quantity"`
+	Unit           string   `json:"unit"`
+	Reference      string   `json:"reference"`
+	Manufacturer   string   `json:"manufacturer"`
+	ManufacturerPN string   `json:"manufacturer_pn"`
+	Supplier       string   `json:"supplier"`
+	UnitPrice      *float64 `json:"unit_price"`
+	LeadTimeDays   *int     `json:"lead_time_days"`
+	IsCritical     bool     `json:"is_critical"`
+	IsAlternative  bool     `json:"is_alternative"`
+	Notes          string   `json:"notes"`
+	ItemNumber     int      `json:"item_number"`
 }

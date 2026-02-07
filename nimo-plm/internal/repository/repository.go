@@ -28,6 +28,10 @@ type Repositories struct {
 	OperationLog    *OperationLogRepository
 	SystemConfig    *SystemConfigRepository
 	Template        *TemplateRepository
+	// V2 新增
+	ProjectBOM      *ProjectBOMRepository
+	Deliverable     *DeliverableRepository
+	Codename        *CodenameRepository
 }
 
 // NewRepositories 创建仓库集合
@@ -48,5 +52,9 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		OperationLog:    NewOperationLogRepository(db),
 		SystemConfig:    NewSystemConfigRepository(db),
 		Template:        NewTemplateRepository(db),
+		// V2 新增
+		ProjectBOM:      NewProjectBOMRepository(db),
+		Deliverable:     NewDeliverableRepository(db),
+		Codename:        NewCodenameRepository(db),
 	}
 }

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bitfantasy/nimo-plm/internal/model/entity"
 	"github.com/bitfantasy/nimo-plm/internal/repository"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // TemplateService 模板服务
@@ -54,14 +56,6 @@ func (s *TemplateService) UpdateTemplate(ctx context.Context, template *entity.P
 
 // DeleteTemplate 删除模板
 func (s *TemplateService) DeleteTemplate(ctx context.Context, id string) error {
-	// 检查是否系统模板
-	template, err := s.templateRepo.GetByID(ctx, id)
-	if err != nil {
-		return err
-	}
-	if template.TemplateType == "SYSTEM" {
-		return fmt.Errorf("cannot delete system template")
-	}
 	return s.templateRepo.Delete(ctx, id)
 }
 
@@ -85,7 +79,7 @@ func (s *TemplateService) DuplicateTemplate(ctx context.Context, id string, newC
 		EstimatedDays:    original.EstimatedDays,
 		IsActive:         true,
 		ParentTemplateID: &original.ID,
-		Version:          1,
+		Version:          "1.0",
 		CreatedBy:        createdBy,
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
@@ -98,24 +92,26 @@ func (s *TemplateService) DuplicateTemplate(ctx context.Context, id string, newC
 	// 复制任务
 	for _, task := range original.Tasks {
 		newTask := &entity.TemplateTask{
-			ID:                  uuid.New().String(),
-			TemplateID:          newTemplate.ID,
-			TaskCode:            task.TaskCode,
-			Name:                task.Name,
-			Description:         task.Description,
-			Phase:               task.Phase,
-			ParentTaskCode:      task.ParentTaskCode,
-			TaskType:            task.TaskType,
-			DefaultAssigneeRole: task.DefaultAssigneeRole,
-			EstimatedDays:       task.EstimatedDays,
-			IsCritical:          task.IsCritical,
-			Deliverables:        task.Deliverables,
-			Checklist:           task.Checklist,
-			RequiresApproval:    task.RequiresApproval,
-			ApprovalType:        task.ApprovalType,
-			SortOrder:           task.SortOrder,
-			CreatedAt:           time.Now(),
-			UpdatedAt:           time.Now(),
+			ID:                   uuid.New().String(),
+			TemplateID:           newTemplate.ID,
+			TaskCode:             task.TaskCode,
+			Name:                 task.Name,
+			Description:          task.Description,
+			Phase:                task.Phase,
+			ParentTaskCode:       task.ParentTaskCode,
+			TaskType:             task.TaskType,
+			DefaultAssigneeRole:  task.DefaultAssigneeRole,
+			EstimatedDays:        task.EstimatedDays,
+			IsCritical:           task.IsCritical,
+			Deliverables:         task.Deliverables,
+			Checklist:            task.Checklist,
+			RequiresApproval:     task.RequiresApproval,
+			ApprovalType:         task.ApprovalType,
+			AutoCreateFeishuTask: task.AutoCreateFeishuTask,
+			FeishuApprovalCode:   task.FeishuApprovalCode,
+			SortOrder:            task.SortOrder,
+			CreatedAt:            time.Now(),
+			UpdatedAt:            time.Now(),
 		}
 		if err := s.templateRepo.CreateTask(ctx, newTask); err != nil {
 			return nil, err
@@ -157,6 +153,107 @@ func (s *TemplateService) UpdateTemplateTask(ctx context.Context, task *entity.T
 // DeleteTemplateTask 删除模板任务
 func (s *TemplateService) DeleteTemplateTask(ctx context.Context, templateID, taskCode string) error {
 	return s.templateRepo.DeleteTask(ctx, templateID, taskCode)
+}
+
+// BatchSaveTasks 批量保存任务（清空旧任务并插入新任务）
+func (s *TemplateService) BatchSaveTasks(ctx context.Context, templateID string, tasks []entity.TemplateTask) error {
+	db := s.templateRepo.DB()
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		// 用原始SQL硬删除旧任务（避免GORM软删除干扰）
+		if err := tx.Exec("DELETE FROM template_tasks WHERE template_id = ?", templateID).Error; err != nil {
+			return fmt.Errorf("delete old tasks: %w", err)
+		}
+
+		// 批量插入新任务
+		if len(tasks) > 0 {
+			now := time.Now()
+			for i := range tasks {
+				tasks[i].CreatedAt = now
+				tasks[i].UpdatedAt = now
+			}
+			if err := tx.Create(&tasks).Error; err != nil {
+				return fmt.Errorf("create tasks: %w", err)
+			}
+		}
+
+		return nil
+	})
+}
+
+// CreateNewVersion 从已发布流程创建新草稿版本
+func (s *TemplateService) CreateNewVersion(ctx context.Context, source *entity.ProjectTemplate, newVersion string, createdBy string) (*entity.ProjectTemplate, error) {
+	db := s.templateRepo.DB()
+
+	var newTemplate *entity.ProjectTemplate
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		// 创建新模板记录
+		newID := uuid.New().String()
+		baseCode := source.BaseCode
+		if baseCode == "" {
+			baseCode = source.Code
+		}
+
+		newTemplate = &entity.ProjectTemplate{
+			ID:               newID,
+			Code:             fmt.Sprintf("%s-v%s", baseCode, newVersion),
+			Name:             source.Name,
+			Description:      source.Description,
+			TemplateType:     source.TemplateType,
+			ProductType:      source.ProductType,
+			Phases:           source.Phases,
+			EstimatedDays:    source.EstimatedDays,
+			IsActive:         true,
+			ParentTemplateID: &source.ID,
+			Version:          newVersion,
+			Status:           "draft",
+			BaseCode:         baseCode,
+			CreatedBy:        createdBy,
+			CreatedAt:        time.Now(),
+			UpdatedAt:        time.Now(),
+		}
+
+		if err := tx.Create(newTemplate).Error; err != nil {
+			return fmt.Errorf("create new version: %w", err)
+		}
+
+		// 复制所有任务
+		if len(source.Tasks) > 0 {
+			now := time.Now()
+			var newTasks []entity.TemplateTask
+			for _, t := range source.Tasks {
+				newTask := t
+				newTask.ID = uuid.New().String()
+				newTask.TemplateID = newID
+				newTask.CreatedAt = now
+				newTask.UpdatedAt = now
+				newTasks = append(newTasks, newTask)
+			}
+			if err := tx.Create(&newTasks).Error; err != nil {
+				return fmt.Errorf("copy tasks: %w", err)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// 重新加载完整数据
+	return s.templateRepo.GetWithTasks(ctx, newTemplate.ID)
+}
+
+// ListVersions 获取同一流程的所有版本
+func (s *TemplateService) ListVersions(ctx context.Context, baseCode string) ([]entity.ProjectTemplate, error) {
+	db := s.templateRepo.DB()
+	var templates []entity.ProjectTemplate
+	err := db.Where("base_code = ? OR code = ?", baseCode, baseCode).
+		Order("version DESC").
+		Find(&templates).Error
+	return templates, err
 }
 
 // CreateProjectFromTemplateInput 从模板创建项目的输入
@@ -204,98 +301,111 @@ func (s *TemplateService) CreateProjectFromTemplate(ctx context.Context, input *
 		return nil, fmt.Errorf("create project: %w", err)
 	}
 
+	// 创建项目阶段(ProjectPhase)记录
+	phaseOrder := []string{"concept", "evt", "dvt", "pvt", "mp"}
+	phaseNames := map[string]string{
+		"concept": "Concept/立项",
+		"evt":     "EVT 工程验证",
+		"dvt":     "DVT 设计验证",
+		"pvt":     "PVT 产品验证",
+		"mp":      "MP 量产",
+	}
+	phaseIDMap := make(map[string]string) // phase name -> phase_id
+	for seq, p := range phaseOrder {
+		phaseID := uuid.New().String()[:32]
+		phase := &entity.ProjectPhase{
+			ID:        phaseID,
+			ProjectID: project.ID,
+			Phase:     p,
+			Name:      phaseNames[p],
+			Status:    "pending",
+			Sequence:  seq + 1,
+		}
+		if err := s.projectRepo.DB().Create(phase).Error; err != nil {
+			return nil, fmt.Errorf("create phase %s: %w", p, err)
+		}
+		phaseIDMap[p] = phaseID
+	}
+
 	// 构建任务依赖图
 	depGraph := buildDependencyGraph(template.Dependencies)
 	taskDates := calculateTaskDates(template.Tasks, depGraph, input.StartDate, input.SkipWeekends)
 
-	// 创建任务
-	taskMap := make(map[string]string) // task_code -> task_id
+	// 构建模板任务的 task_code -> TemplateTask 映射
+	ttMap := make(map[string]entity.TemplateTask)
 	for _, tt := range template.Tasks {
-		// 跳过子任务（会在父任务下创建）
-		if tt.TaskType == "SUBTASK" {
-			continue
-		}
-
-		var assigneeID *string
-		if tt.DefaultAssigneeRole != "" {
-			if userID, ok := input.RoleAssignments[tt.DefaultAssigneeRole]; ok && userID != "" {
-				assigneeID = &userID
-			}
-		}
-
-		dates := taskDates[tt.TaskCode]
-		task := &entity.Task{
-			ID:           uuid.New().String()[:32],
-			ProjectID:    project.ID,
-			Code:         tt.TaskCode,
-			Title:        tt.Name,
-			Description:  tt.Description,
-			TaskType:     tt.TaskType,
-			Status:       "pending",
-			Priority:     "medium",
-			AssigneeID:   assigneeID,
-			StartDate:    dates.Start,
-			DueDate:      dates.End,
-			Progress:     0,
-			AutoStart:         true,
-			RequiresApproval:  tt.RequiresApproval,
-			ApprovalType:      tt.ApprovalType,
-			CreatedBy:    createdBy,
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
-		}
-
-		if err := s.projectRepo.CreateTask(ctx, task); err != nil {
-			return nil, fmt.Errorf("create task %s: %w", tt.TaskCode, err)
-		}
-		taskMap[tt.TaskCode] = task.ID
+		ttMap[tt.TaskCode] = tt
 	}
 
-	// 创建子任务
-	for _, tt := range template.Tasks {
-		if tt.TaskType != "SUBTASK" || tt.ParentTaskCode == "" {
-			continue
-		}
+	// 按层级排序创建：先 MILESTONE，再 TASK，最后 SUBTASK
+	// 这样 parent_task_id 引用时父任务一定已经创建
+	typeOrder := []string{"MILESTONE", "TASK", "SUBTASK"}
+	taskMap := make(map[string]string) // task_code -> task_id
 
-		parentID, ok := taskMap[tt.ParentTaskCode]
-		if !ok {
-			continue
-		}
-
-		var assigneeID *string
-		if tt.DefaultAssigneeRole != "" {
-			if userID, ok := input.RoleAssignments[tt.DefaultAssigneeRole]; ok && userID != "" {
-				assigneeID = &userID
+	seq := 0
+	for _, taskType := range typeOrder {
+		for _, tt := range template.Tasks {
+			if tt.TaskType != taskType {
+				continue
 			}
-		}
 
-		dates := taskDates[tt.TaskCode]
-		task := &entity.Task{
-			ID:           uuid.New().String()[:32],
-			ProjectID:    project.ID,
-			ParentTaskID: &parentID,
-			Code:         tt.TaskCode,
-			Title:        tt.Name,
-			Description:  tt.Description,
-			TaskType:     "SUBTASK",
-			Status:       "pending",
-			Priority:     "medium",
-			AssigneeID:   assigneeID,
-			StartDate:    dates.Start,
-			DueDate:      dates.End,
-			Progress:     0,
-			AutoStart:         true,
-			RequiresApproval:  tt.RequiresApproval,
-			ApprovalType:      tt.ApprovalType,
-			CreatedBy:    createdBy,
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
-		}
+			var assigneeID *string
+			if tt.DefaultAssigneeRole != "" {
+				if userID, ok := input.RoleAssignments[tt.DefaultAssigneeRole]; ok && userID != "" {
+					assigneeID = &userID
+				}
+			}
 
-		if err := s.projectRepo.CreateTask(ctx, task); err != nil {
-			return nil, fmt.Errorf("create subtask %s: %w", tt.TaskCode, err)
+			// 设置 parent_task_id（TASK和SUBTASK都可能有parent）
+			var parentTaskID *string
+			if tt.ParentTaskCode != "" {
+				if pid, ok := taskMap[tt.ParentTaskCode]; ok {
+					parentTaskID = &pid
+				}
+			}
+
+			// 设置 phase_id（模板里phase可能是大写如CONCEPT，统一转小写匹配）
+			var phaseID *string
+			if tt.Phase != "" {
+				phaseLower := strings.ToLower(tt.Phase)
+				if pid, ok := phaseIDMap[phaseLower]; ok {
+					phaseID = &pid
+				}
+			}
+
+			seq++
+			dates := taskDates[tt.TaskCode]
+			task := &entity.Task{
+				ID:                     uuid.New().String()[:32],
+				ProjectID:              project.ID,
+				ParentTaskID:           parentTaskID,
+				PhaseID:                phaseID,
+				Code:                   tt.TaskCode,
+				Title:                  tt.Name,
+				Description:            tt.Description,
+				TaskType:               tt.TaskType,
+				Status:                 "pending",
+				Priority:               "medium",
+				AssigneeID:             assigneeID,
+				StartDate:              dates.Start,
+				DueDate:                dates.End,
+				Progress:               0,
+				Sequence:               seq,
+				AutoStart:              true,
+				RequiresApproval:       tt.RequiresApproval,
+				ApprovalType:           tt.ApprovalType,
+				AutoCreateFeishuTask:   tt.AutoCreateFeishuTask,
+				FeishuApprovalCode:     tt.FeishuApprovalCode,
+				CreatedBy:              createdBy,
+				CreatedAt:              time.Now(),
+				UpdatedAt:              time.Now(),
+			}
+
+			if err := s.projectRepo.CreateTask(ctx, task); err != nil {
+				return nil, fmt.Errorf("create task %s: %w", tt.TaskCode, err)
+			}
+			taskMap[tt.TaskCode] = task.ID
 		}
-		taskMap[tt.TaskCode] = task.ID
 	}
 
 	// 创建任务依赖
@@ -315,7 +425,6 @@ func (s *TemplateService) CreateProjectFromTemplate(ctx context.Context, input *
 		}
 
 		if err := s.projectRepo.CreateTaskDependency(ctx, taskDep); err != nil {
-			// 忽略依赖创建错误，继续
 			continue
 		}
 	}

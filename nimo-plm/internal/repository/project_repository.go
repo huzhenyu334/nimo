@@ -20,6 +20,11 @@ func NewProjectRepository(db *gorm.DB) *ProjectRepository {
 	return &ProjectRepository{db: db}
 }
 
+// DB 返回底层数据库连接
+func (r *ProjectRepository) DB() *gorm.DB {
+	return r.db
+}
+
 // FindByID 根据ID查找项目
 func (r *ProjectRepository) FindByID(ctx context.Context, id string) (*entity.Project, error) {
 	var project entity.Project
