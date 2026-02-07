@@ -209,7 +209,7 @@ func (s *ApprovalService) Approve(ctx context.Context, approvalID, reviewerUserI
 		// 更新关联任务状态: reviewing → completed（如果有关联任务）
 		if approval.TaskID != "" {
 			completedAt := time.Now()
-			tx.Model(&entity.Task{}).
+			result := tx.Model(&entity.Task{}).
 				Where("id = ? AND status = ?", approval.TaskID, entity.TaskStatusReviewing).
 				Updates(map[string]interface{}{
 					"status":     entity.TaskStatusCompleted,
@@ -217,6 +217,13 @@ func (s *ApprovalService) Approve(ctx context.Context, approvalID, reviewerUserI
 					"progress":   100,
 					"updated_at": completedAt,
 				})
+			// 审批通过且任务变为completed时，自动启动依赖此任务的后续任务
+			if result.RowsAffected > 0 {
+				var task entity.Task
+				if err := tx.Where("id = ?", approval.TaskID).First(&task).Error; err == nil {
+					s.autoStartDependentTasks(ctx, tx, task.ProjectID, task.ID)
+				}
+			}
 		}
 
 		// 发通知给发起人
@@ -459,5 +466,53 @@ func NewApprovalRequestCard(title, requesterName, description string) feishu.Int
 			Template: "orange",
 		},
 		Elements: elements,
+	}
+}
+
+// autoStartDependentTasks 审批通过后自动启动依赖任务
+func (s *ApprovalService) autoStartDependentTasks(ctx context.Context, db *gorm.DB, projectID, completedTaskID string) {
+	var deps []entity.TaskDependency
+	if err := db.Where("depends_on_task_id = ?", completedTaskID).Find(&deps).Error; err != nil {
+		log.Printf("[ApprovalService] 查找依赖任务失败: %v", err)
+		return
+	}
+
+	for _, dep := range deps {
+		var task entity.Task
+		if err := db.Where("id = ?", dep.TaskID).First(&task).Error; err != nil {
+			continue
+		}
+		if task.Status != entity.TaskStatusPending {
+			continue
+		}
+
+		// 检查该任务的所有前置依赖是否都已完成
+		allCompleted := true
+		var allDeps []entity.TaskDependency
+		if err := db.Where("task_id = ?", task.ID).Find(&allDeps).Error; err != nil {
+			continue
+		}
+		for _, d := range allDeps {
+			var depTask entity.Task
+			if err := db.Where("id = ?", d.DependsOnID).First(&depTask).Error; err != nil {
+				allCompleted = false
+				break
+			}
+			if depTask.Status != entity.TaskStatusCompleted {
+				allCompleted = false
+				break
+			}
+		}
+
+		if allCompleted {
+			now := time.Now()
+			task.Status = entity.TaskStatusInProgress
+			task.ActualStart = &now
+			if err := db.Save(&task).Error; err != nil {
+				log.Printf("[ApprovalService] 自动启动任务失败 (task=%s): %v", task.ID, err)
+				continue
+			}
+			log.Printf("[ApprovalService] 审批通过后自动启动任务 task=%s (依赖任务 %s 完成)", task.ID, completedTaskID)
+		}
 	}
 }

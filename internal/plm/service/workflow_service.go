@@ -450,7 +450,7 @@ func (s *WorkflowService) checkAndStartDependentTasks(ctx context.Context, proje
 			}
 		}
 
-		if allCompleted && task.AutoStart {
+		if allCompleted {
 			// 自动启动任务
 			now := time.Now()
 			task.Status = entity.TaskStatusInProgress
