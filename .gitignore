@@ -14,10 +14,12 @@ nimo-erp-plm/
 nimo-plm-web/
 
 # Build artifacts
-nimo-plm/bin/
-nimo-plm/server
-nimo-plm/server.log
+bin/
+server
 *.log
+
+# Old directory (now at root level)
+nimo-plm/
 
 # OS files
 .DS_Store
