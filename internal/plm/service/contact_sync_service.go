@@ -99,11 +99,12 @@ func (s *ContactSyncService) syncDepartment(ctx context.Context, dept feishu.Fei
 	err = s.db.WithContext(ctx).Where("feishu_dept_id = ?", deptID).First(&existing).Error
 
 	if err == gorm.ErrRecordNotFound {
-		// 创建新部门
+		// 创建新部门（不设 parent_id，避免外键约束）
 		newDept := entity.Department{
 			ID:           uuid.New().String()[:32],
 			FeishuDeptID: deptID,
 			Name:         dept.Name,
+			ParentID:     "", // 不设外键，避免父部门尚未创建
 			Status:       "active",
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
@@ -160,28 +161,32 @@ func (s *ContactSyncService) syncUser(ctx context.Context, user feishu.FeishuUse
 			username = username + "_" + uuid.New().String()[:4]
 		}
 
+		// 处理 email：空 email 设为唯一占位符，避免唯一约束冲突
+		email := user.Email
+		if email == "" {
+			email = "feishu_" + user.OpenID[:16] + "@placeholder.local"
+		}
+
 		// 检查 email 唯一性
-		if user.Email != "" {
-			s.db.WithContext(ctx).Model(&entity.User{}).Where("email = ? AND feishu_open_id != ?", user.Email, user.OpenID).Count(&count)
-			if count > 0 {
-				// email 冲突，尝试更新已有用户的 feishu_open_id
-				var conflictUser entity.User
-				if err := s.db.WithContext(ctx).Where("email = ?", user.Email).First(&conflictUser).Error; err == nil {
-					conflictUser.FeishuOpenID = user.OpenID
-					conflictUser.FeishuUserID = user.UserID
-					conflictUser.FeishuUnionID = user.UnionID
-					conflictUser.Name = user.Name
-					conflictUser.Mobile = user.Mobile
-					conflictUser.AvatarURL = user.Avatar.URL
-					if departmentID != "" {
-						conflictUser.DepartmentID = departmentID
-					}
-					conflictUser.UpdatedAt = time.Now()
-					if err := s.db.WithContext(ctx).Save(&conflictUser).Error; err != nil {
-						return false, fmt.Errorf("更新已有用户飞书信息失败: %w", err)
-					}
-					return false, nil
+		s.db.WithContext(ctx).Model(&entity.User{}).Where("email = ? AND feishu_open_id != ?", email, user.OpenID).Count(&count)
+		if count > 0 {
+			// email 冲突，尝试更新已有用户的 feishu_open_id
+			var conflictUser entity.User
+			if err := s.db.WithContext(ctx).Where("email = ?", email).First(&conflictUser).Error; err == nil {
+				conflictUser.FeishuOpenID = user.OpenID
+				conflictUser.FeishuUserID = user.UserID
+				conflictUser.FeishuUnionID = user.UnionID
+				conflictUser.Name = user.Name
+				conflictUser.Mobile = user.Mobile
+				conflictUser.AvatarURL = user.Avatar.URL
+				if departmentID != "" {
+					conflictUser.DepartmentID = departmentID
 				}
+				conflictUser.UpdatedAt = time.Now()
+				if err := s.db.WithContext(ctx).Save(&conflictUser).Error; err != nil {
+					return false, fmt.Errorf("更新已有用户飞书信息失败: %w", err)
+				}
+				return false, nil
 			}
 		}
 
@@ -204,7 +209,7 @@ func (s *ContactSyncService) syncUser(ctx context.Context, user feishu.FeishuUse
 			EmployeeNo:    employeeNo,
 			Username:      username,
 			Name:          user.Name,
-			Email:         user.Email,
+			Email:         email,
 			Mobile:        user.Mobile,
 			AvatarURL:     user.Avatar.URL,
 			DepartmentID:  departmentID,
