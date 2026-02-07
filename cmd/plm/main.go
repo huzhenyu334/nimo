@@ -64,6 +64,50 @@ func main() {
 		"ALTER TABLE template_tasks ADD COLUMN IF NOT EXISTS feishu_approval_code varchar(100) DEFAULT ''",
 		"ALTER TABLE tasks ADD COLUMN IF NOT EXISTS auto_create_feishu_task boolean DEFAULT false",
 		"ALTER TABLE tasks ADD COLUMN IF NOT EXISTS feishu_approval_code varchar(100) DEFAULT ''",
+
+		// 状态机引擎表 (Phase 1)
+		`CREATE TABLE IF NOT EXISTS state_machine_definitions (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			name VARCHAR(100) NOT NULL UNIQUE,
+			description TEXT,
+			initial_state VARCHAR(50) NOT NULL,
+			states JSONB,
+			created_at TIMESTAMP DEFAULT NOW(),
+			updated_at TIMESTAMP DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS state_transitions (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			machine_id UUID NOT NULL REFERENCES state_machine_definitions(id) ON DELETE CASCADE,
+			from_state VARCHAR(50) NOT NULL,
+			to_state VARCHAR(50) NOT NULL,
+			event VARCHAR(100) NOT NULL,
+			condition JSONB,
+			actions JSONB,
+			priority INT DEFAULT 0,
+			description TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS state_transition_logs (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			entity_type VARCHAR(50) NOT NULL,
+			entity_id UUID NOT NULL,
+			from_state VARCHAR(50),
+			to_state VARCHAR(50) NOT NULL,
+			event VARCHAR(100) NOT NULL,
+			event_data JSONB,
+			triggered_by VARCHAR(64),
+			triggered_by_type VARCHAR(20),
+			actions_executed JSONB,
+			created_at TIMESTAMP DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS entity_states (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			entity_type VARCHAR(50) NOT NULL,
+			entity_id UUID NOT NULL,
+			current_state VARCHAR(50) NOT NULL,
+			machine_id UUID REFERENCES state_machine_definitions(id),
+			updated_at TIMESTAMP DEFAULT NOW(),
+			UNIQUE(entity_type, entity_id)
+		)`,
 	}
 	for _, sql := range migrationSQL {
 		if err := db.Exec(sql).Error; err != nil {
