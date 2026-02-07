@@ -1,14 +1,14 @@
 {
   "mcpServers": {
     "nimo-plm": {
-      "command": "/home/claw/.openclaw/workspace/nimo-plm/bin/nimo-plm-mcp",
+      "command": "/home/claw/.openclaw/workspace/nimo-plm/bin/mcp-plm",
       "env": {
         "PLM_BASE_URL": "http://127.0.0.1:8080",
         "PLM_TOKEN": ""
       }
     },
     "nimo-erp": {
-      "command": "/home/claw/.openclaw/workspace/nimo-plm/bin/nimo-erp-mcp",
+      "command": "/home/claw/.openclaw/workspace/nimo-plm/bin/mcp-erp",
       "env": {
         "ERP_BASE_URL": "http://127.0.0.1:8081",
         "ERP_TOKEN": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOiJkNDA2NzA3Yi1mOWJiLTRlOWYtOGNjNS0wY2FiMzhlNCIsIm5hbWUiOiLpmYjms73mlowiLCJlbWFpbCI6InplYmluQGJpdGZhbnRhc3kuaW8iLCJmZWlzaHVfdWlkIjoib3VfNWIxNTlmYzE1N2Q0MDQyZjFlODA4OGIxZmZlYmIyZGEiLCJyb2xlcyI6WyJhZG1pbiJdLCJwZXJtcyI6WyIqIl0sImlzcyI6Im5pbW8tcGxtIiwiZXhwIjoxODAxODc1OTgwLCJpYXQiOjE3NzAzMzk5ODB9.ZhEpSPJ1VlJGrdxOmjmv-PZWNrCnf7e_etdbxohQElk"
