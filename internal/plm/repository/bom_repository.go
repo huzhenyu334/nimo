@@ -77,6 +77,16 @@ func (r *ProjectBOMRepository) CreateItem(ctx context.Context, item *entity.Proj
 	return r.db.WithContext(ctx).Create(item).Error
 }
 
+// FindItemByID 根据ID查找BOM行项
+func (r *ProjectBOMRepository) FindItemByID(ctx context.Context, id string) (*entity.ProjectBOMItem, error) {
+	var item entity.ProjectBOMItem
+	err := r.db.WithContext(ctx).First(&item, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
 // UpdateItem 更新BOM行项
 func (r *ProjectBOMRepository) UpdateItem(ctx context.Context, item *entity.ProjectBOMItem) error {
 	return r.db.WithContext(ctx).Save(item).Error

@@ -46,6 +46,8 @@ type ProjectBOMItem struct {
 	ID              string   `json:"id" gorm:"primaryKey;size:32"`
 	BOMID           string   `json:"bom_id" gorm:"size:32;not null"`
 	ItemNumber      int      `json:"item_number" gorm:"default:0"`
+	ParentItemID    *string  `json:"parent_item_id,omitempty" gorm:"size:32"`
+	Level           int      `json:"level" gorm:"not null;default:0"`
 	MaterialID      *string  `json:"material_id,omitempty" gorm:"size:32"`
 	Category        string   `json:"category,omitempty" gorm:"size:32"`
 	Name            string   `json:"name" gorm:"size:128;not null"`
@@ -56,8 +58,14 @@ type ProjectBOMItem struct {
 	Manufacturer    string   `json:"manufacturer,omitempty" gorm:"size:128"`
 	ManufacturerPN  string   `json:"manufacturer_pn,omitempty" gorm:"size:64"`
 	Supplier        string   `json:"supplier,omitempty" gorm:"size:128"`
+	SupplierPN      string   `json:"supplier_pn,omitempty" gorm:"size:64"`
 	UnitPrice       *float64 `json:"unit_price,omitempty" gorm:"type:numeric(15,4)"`
+	ExtendedCost    *float64 `json:"extended_cost,omitempty" gorm:"type:numeric(15,4)"`
 	LeadTimeDays    *int     `json:"lead_time_days,omitempty"`
+	ProcurementType string   `json:"procurement_type" gorm:"size:16;not null;default:buy"`
+	MOQ             *int     `json:"moq,omitempty"`
+	ApprovedVendors *string  `json:"approved_vendors,omitempty" gorm:"type:jsonb"`
+	LifecycleStatus string   `json:"lifecycle_status,omitempty" gorm:"size:16;default:active"`
 	IsCritical      bool     `json:"is_critical" gorm:"default:false"`
 	IsAlternative   bool     `json:"is_alternative" gorm:"default:false"`
 	AlternativeFor  *string  `json:"alternative_for,omitempty" gorm:"size:32"`
@@ -66,7 +74,9 @@ type ProjectBOMItem struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 
 	// Relations
-	Material *Material `json:"material,omitempty" gorm:"foreignKey:MaterialID"`
+	Material   *Material        `json:"material,omitempty" gorm:"foreignKey:MaterialID"`
+	ParentItem *ProjectBOMItem  `json:"parent_item,omitempty" gorm:"foreignKey:ParentItemID"`
+	Children   []ProjectBOMItem `json:"children,omitempty" gorm:"foreignKey:ParentItemID"`
 }
 
 func (ProjectBOMItem) TableName() string {

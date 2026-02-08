@@ -197,30 +197,48 @@ func (s *ProjectBOMService) AddItem(ctx context.Context, bomID string, input *BO
 	}
 
 	item := &entity.ProjectBOMItem{
-		ID:             uuid.New().String()[:32],
-		BOMID:          bomID,
-		ItemNumber:     input.ItemNumber,
-		MaterialID:     input.MaterialID,
-		Category:       input.Category,
-		Name:           input.Name,
-		Specification:  input.Specification,
+		ID:              uuid.New().String()[:32],
+		BOMID:           bomID,
+		ItemNumber:      input.ItemNumber,
+		ParentItemID:    input.ParentItemID,
+		Level:           input.Level,
+		MaterialID:      input.MaterialID,
+		Category:        input.Category,
+		Name:            input.Name,
+		Specification:   input.Specification,
 		Quantity:        input.Quantity,
-		Unit:           input.Unit,
-		Reference:      input.Reference,
-		Manufacturer:   input.Manufacturer,
-		ManufacturerPN: input.ManufacturerPN,
-		Supplier:       input.Supplier,
-		UnitPrice:      input.UnitPrice,
-		LeadTimeDays:   input.LeadTimeDays,
-		IsCritical:     input.IsCritical,
-		IsAlternative:  input.IsAlternative,
-		Notes:          input.Notes,
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+		Unit:            input.Unit,
+		Reference:       input.Reference,
+		Manufacturer:    input.Manufacturer,
+		ManufacturerPN:  input.ManufacturerPN,
+		Supplier:        input.Supplier,
+		SupplierPN:      input.SupplierPN,
+		UnitPrice:       input.UnitPrice,
+		LeadTimeDays:    input.LeadTimeDays,
+		ProcurementType: input.ProcurementType,
+		MOQ:             input.MOQ,
+		LifecycleStatus: input.LifecycleStatus,
+		IsCritical:      input.IsCritical,
+		IsAlternative:   input.IsAlternative,
+		Notes:           input.Notes,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
 	}
 
 	if item.Unit == "" {
 		item.Unit = "pcs"
+	}
+	if item.ProcurementType == "" {
+		item.ProcurementType = "buy"
+	}
+	if item.LifecycleStatus == "" {
+		item.LifecycleStatus = "active"
+	}
+
+	// 计算小计
+	if input.UnitPrice != nil {
+		extCost := input.Quantity * *input.UnitPrice
+		item.ExtendedCost = &extCost
 	}
 
 	if err := s.bomRepo.CreateItem(ctx, item); err != nil {
@@ -228,8 +246,7 @@ func (s *ProjectBOMService) AddItem(ctx context.Context, bomID string, input *BO
 	}
 
 	// 更新BOM统计
-	count, _ := s.bomRepo.CountItems(ctx, bomID)
-	s.bomRepo.DB().Model(&entity.ProjectBOM{}).Where("id = ?", bomID).Update("total_items", count)
+	s.updateBOMCost(ctx, bomID)
 
 	return item, nil
 }
@@ -300,10 +317,105 @@ func (s *ProjectBOMService) DeleteItem(ctx context.Context, bomID, itemID string
 		return fmt.Errorf("delete item: %w", err)
 	}
 
-	count, _ := s.bomRepo.CountItems(ctx, bomID)
-	s.bomRepo.DB().Model(&entity.ProjectBOM{}).Where("id = ?", bomID).Update("total_items", count)
+	s.updateBOMCost(ctx, bomID)
 
 	return nil
+}
+
+// UpdateItem 更新单个BOM行项
+func (s *ProjectBOMService) UpdateItem(ctx context.Context, bomID, itemID string, input *BOMItemInput) (*entity.ProjectBOMItem, error) {
+	bom, err := s.bomRepo.FindByID(ctx, bomID)
+	if err != nil {
+		return nil, fmt.Errorf("bom not found: %w", err)
+	}
+	if bom.Status != "draft" && bom.Status != "rejected" {
+		return nil, fmt.Errorf("只有草稿状态的BOM才能编辑物料")
+	}
+
+	item, err := s.bomRepo.FindItemByID(ctx, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("item not found: %w", err)
+	}
+	if item.BOMID != bomID {
+		return nil, fmt.Errorf("item does not belong to this BOM")
+	}
+
+	if input.Name != "" {
+		item.Name = input.Name
+	}
+	if input.Category != "" {
+		item.Category = input.Category
+	}
+	if input.Specification != "" {
+		item.Specification = input.Specification
+	}
+	if input.MaterialID != nil {
+		item.MaterialID = input.MaterialID
+	}
+	item.Quantity = input.Quantity
+	if input.Unit != "" {
+		item.Unit = input.Unit
+	}
+	item.Reference = input.Reference
+	item.Manufacturer = input.Manufacturer
+	item.ManufacturerPN = input.ManufacturerPN
+	item.Supplier = input.Supplier
+	item.SupplierPN = input.SupplierPN
+	item.UnitPrice = input.UnitPrice
+	item.LeadTimeDays = input.LeadTimeDays
+	item.IsCritical = input.IsCritical
+	item.IsAlternative = input.IsAlternative
+	item.Notes = input.Notes
+	item.ProcurementType = input.ProcurementType
+	item.MOQ = input.MOQ
+	item.LifecycleStatus = input.LifecycleStatus
+	item.ParentItemID = input.ParentItemID
+	item.Level = input.Level
+
+	// 计算小计
+	if input.UnitPrice != nil {
+		extCost := input.Quantity * *input.UnitPrice
+		item.ExtendedCost = &extCost
+	}
+
+	item.UpdatedAt = time.Now()
+
+	if err := s.bomRepo.UpdateItem(ctx, item); err != nil {
+		return nil, fmt.Errorf("update item: %w", err)
+	}
+
+	// 更新BOM总成本
+	s.updateBOMCost(ctx, bomID)
+
+	return item, nil
+}
+
+// ReorderItems 拖拽排序
+func (s *ProjectBOMService) ReorderItems(ctx context.Context, bomID string, itemIDs []string) error {
+	bom, err := s.bomRepo.FindByID(ctx, bomID)
+	if err != nil {
+		return fmt.Errorf("bom not found: %w", err)
+	}
+	if bom.Status != "draft" && bom.Status != "rejected" {
+		return fmt.Errorf("只有草稿状态的BOM才能排序")
+	}
+
+	for i, id := range itemIDs {
+		s.bomRepo.DB().Model(&entity.ProjectBOMItem{}).Where("id = ? AND bom_id = ?", id, bomID).Update("item_number", i+1)
+	}
+	return nil
+}
+
+// updateBOMCost 更新BOM总成本统计
+func (s *ProjectBOMService) updateBOMCost(ctx context.Context, bomID string) {
+	var totalCost float64
+	s.bomRepo.DB().Model(&entity.ProjectBOMItem{}).
+		Where("bom_id = ?", bomID).
+		Select("COALESCE(SUM(extended_cost), 0)").
+		Scan(&totalCost)
+	count, _ := s.bomRepo.CountItems(ctx, bomID)
+	s.bomRepo.DB().Model(&entity.ProjectBOM{}).Where("id = ?", bomID).
+		Updates(map[string]interface{}{"estimated_cost": totalCost, "total_items": count})
 }
 
 // ---- Input DTOs ----
@@ -323,20 +435,30 @@ type UpdateBOMInput struct {
 }
 
 type BOMItemInput struct {
-	MaterialID     *string  `json:"material_id"`
-	Category       string   `json:"category"`
-	Name           string   `json:"name" binding:"required"`
-	Specification  string   `json:"specification"`
-	Quantity       float64  `json:"quantity"`
-	Unit           string   `json:"unit"`
-	Reference      string   `json:"reference"`
-	Manufacturer   string   `json:"manufacturer"`
-	ManufacturerPN string   `json:"manufacturer_pn"`
-	Supplier       string   `json:"supplier"`
-	UnitPrice      *float64 `json:"unit_price"`
-	LeadTimeDays   *int     `json:"lead_time_days"`
-	IsCritical     bool     `json:"is_critical"`
-	IsAlternative  bool     `json:"is_alternative"`
-	Notes          string   `json:"notes"`
-	ItemNumber     int      `json:"item_number"`
+	MaterialID      *string  `json:"material_id"`
+	ParentItemID    *string  `json:"parent_item_id"`
+	Level           int      `json:"level"`
+	Category        string   `json:"category"`
+	Name            string   `json:"name" binding:"required"`
+	Specification   string   `json:"specification"`
+	Quantity        float64  `json:"quantity"`
+	Unit            string   `json:"unit"`
+	Reference       string   `json:"reference"`
+	Manufacturer    string   `json:"manufacturer"`
+	ManufacturerPN  string   `json:"manufacturer_pn"`
+	Supplier        string   `json:"supplier"`
+	SupplierPN      string   `json:"supplier_pn"`
+	UnitPrice       *float64 `json:"unit_price"`
+	LeadTimeDays    *int     `json:"lead_time_days"`
+	ProcurementType string   `json:"procurement_type"`
+	MOQ             *int     `json:"moq"`
+	LifecycleStatus string   `json:"lifecycle_status"`
+	IsCritical      bool     `json:"is_critical"`
+	IsAlternative   bool     `json:"is_alternative"`
+	Notes           string   `json:"notes"`
+	ItemNumber      int      `json:"item_number"`
+}
+
+type ReorderItemsInput struct {
+	ItemIDs []string `json:"item_ids" binding:"required"`
 }

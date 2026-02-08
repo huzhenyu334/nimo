@@ -280,6 +280,16 @@ func main() {
 		// V8: 任务角色分配字段
 		`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS default_assignee_role VARCHAR(50) DEFAULT ''`,
 
+		// V10: project_bom_items 增加大厂BOM标准字段
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS parent_item_id VARCHAR(32) REFERENCES project_bom_items(id)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS level INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS procurement_type VARCHAR(16) NOT NULL DEFAULT 'buy'`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS extended_cost NUMERIC(15,4)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS supplier_pn VARCHAR(64)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS moq INTEGER`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS approved_vendors JSONB`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS lifecycle_status VARCHAR(16) DEFAULT 'active'`,
+
 		// V9: 任务角色表（区别于权限角色 roles 表）
 		`CREATE TABLE IF NOT EXISTS task_roles (
 			id VARCHAR(36) PRIMARY KEY,
@@ -711,7 +721,9 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				projects.POST("/:id/boms/:bomId/freeze", h.ProjectBOM.FreezeBOM)
 				projects.POST("/:id/boms/:bomId/items", h.ProjectBOM.AddItem)
 				projects.POST("/:id/boms/:bomId/items/batch", h.ProjectBOM.BatchAddItems)
+				projects.PUT("/:id/boms/:bomId/items/:itemId", h.ProjectBOM.UpdateItem)
 				projects.DELETE("/:id/boms/:bomId/items/:itemId", h.ProjectBOM.DeleteItem)
+				projects.POST("/:id/boms/:bomId/reorder", h.ProjectBOM.ReorderItems)
 
 				// V2: 交付物管理
 				projects.GET("/:id/deliverables", h.Deliverable.ListByProject)

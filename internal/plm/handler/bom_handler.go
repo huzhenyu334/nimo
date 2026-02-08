@@ -186,6 +186,42 @@ func (h *BOMHandler) BatchAddItems(c *gin.Context) {
 	Success(c, gin.H{"created": count})
 }
 
+// UpdateItem PUT /projects/:id/boms/:bomId/items/:itemId
+func (h *BOMHandler) UpdateItem(c *gin.Context) {
+	bomID := c.Param("bomId")
+	itemID := c.Param("itemId")
+	var input service.BOMItemInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	item, err := h.svc.UpdateItem(c.Request.Context(), bomID, itemID, &input)
+	if err != nil {
+		BadRequest(c, err.Error())
+		return
+	}
+
+	Success(c, item)
+}
+
+// ReorderItems POST /projects/:id/boms/:bomId/reorder
+func (h *BOMHandler) ReorderItems(c *gin.Context) {
+	bomID := c.Param("bomId")
+	var input service.ReorderItemsInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	if err := h.svc.ReorderItems(c.Request.Context(), bomID, input.ItemIDs); err != nil {
+		BadRequest(c, err.Error())
+		return
+	}
+
+	Success(c, gin.H{"reordered": true})
+}
+
 // DeleteItem DELETE /projects/:id/boms/:bomId/items/:itemId
 func (h *BOMHandler) DeleteItem(c *gin.Context) {
 	bomID := c.Param("bomId")
