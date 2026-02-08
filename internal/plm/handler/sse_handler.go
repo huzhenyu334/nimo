@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/bitfantasy/nimo/internal/plm/sse"
@@ -31,6 +32,10 @@ func (h *SSEHandler) Stream(c *gin.Context) {
 	}
 
 	h.hub.Register(client)
+
+	// 清除全局 WriteTimeout 对SSE长连接的影响
+	rc := http.NewResponseController(c.Writer)
+	rc.SetWriteDeadline(time.Time{}) // 零值=无超时
 
 	// Set SSE headers
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
