@@ -23,13 +23,15 @@ type ProjectBOMService struct {
 	bomRepo         *repository.ProjectBOMRepository
 	projectRepo     *repository.ProjectRepository
 	deliverableRepo *repository.DeliverableRepository
+	materialRepo    *repository.MaterialRepository
 }
 
-func NewProjectBOMService(bomRepo *repository.ProjectBOMRepository, projectRepo *repository.ProjectRepository, deliverableRepo *repository.DeliverableRepository) *ProjectBOMService {
+func NewProjectBOMService(bomRepo *repository.ProjectBOMRepository, projectRepo *repository.ProjectRepository, deliverableRepo *repository.DeliverableRepository, materialRepo *repository.MaterialRepository) *ProjectBOMService {
 	return &ProjectBOMService{
 		bomRepo:         bomRepo,
 		projectRepo:     projectRepo,
 		deliverableRepo: deliverableRepo,
+		materialRepo:    materialRepo,
 	}
 }
 
@@ -620,6 +622,13 @@ func (s *ProjectBOMService) ImportBOM(ctx context.Context, bomID string, f *exce
 		if matchErr == nil && mat != nil {
 			item.MaterialID = &mat.ID
 			result.Matched++
+		} else {
+			// 自动创建物料
+			newMat, createErr := s.autoCreateMaterial(ctx, item.Name, item.Specification, item.Category, item.Manufacturer, item.ManufacturerPN)
+			if createErr == nil && newMat != nil {
+				item.MaterialID = &newMat.ID
+				result.AutoCreated++
+			}
 		}
 
 		entities = append(entities, item)
@@ -759,6 +768,13 @@ func (s *ProjectBOMService) ImportPADSBOM(ctx context.Context, bomID string, rea
 		if matchErr == nil && mat != nil {
 			item.MaterialID = &mat.ID
 			result.Matched++
+		} else {
+			// 自动创建物料
+			newMat, createErr := s.autoCreateMaterial(ctx, item.Name, componentName, category, manufacturer, manufacturerPN)
+			if createErr == nil && newMat != nil {
+				item.MaterialID = &newMat.ID
+				result.AutoCreated++
+			}
 		}
 
 		entities = append(entities, item)
@@ -1120,12 +1136,57 @@ func (s *ProjectBOMService) AckRelease(ctx context.Context, releaseID string) (*
 	return release, nil
 }
 
+// ==================== 自动建料 ====================
+
+// autoCreateMaterial 根据BOM行信息自动创建物料
+func (s *ProjectBOMService) autoCreateMaterial(ctx context.Context, name, specification, category, manufacturer, manufacturerPN string) (*entity.Material, error) {
+	categoryID, prefix := mapCategoryToIDAndPrefix(category)
+
+	code, err := s.materialRepo.GenerateCode(ctx, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("generate material code: %w", err)
+	}
+
+	mat := &entity.Material{
+		ID:          uuid.New().String()[:32],
+		Code:        code,
+		Name:        name,
+		CategoryID:  categoryID,
+		Status:      "active",
+		Unit:        "pcs",
+		Description: specification,
+		CreatedBy:   "system",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	if err := s.materialRepo.Create(ctx, mat); err != nil {
+		return nil, fmt.Errorf("create material: %w", err)
+	}
+
+	return mat, nil
+}
+
+// mapCategoryToIDAndPrefix 将中文分类名映射到 categoryID 和编码前缀
+func mapCategoryToIDAndPrefix(category string) (string, string) {
+	switch category {
+	case "电容", "电阻", "电感", "IC", "晶体管", "ESD器件", "晶振", "二极管", "连接器":
+		return "mcat_electronic", "E"
+	case "测试点":
+		return "mcat_other", "X"
+	default:
+		// 默认归类为电子元器件
+		return "mcat_electronic", "E"
+	}
+}
+
 // ---- Phase 2/3/4 DTOs ----
 
 type ImportResult struct {
-	Success int `json:"success"`
-	Failed  int `json:"failed"`
-	Matched int `json:"matched"`
+	Success     int `json:"created"`
+	Failed      int `json:"errors"`
+	Matched     int `json:"matched"`
+	AutoCreated int `json:"auto_created"`
 }
 
 type BOMCompareResult struct {

@@ -742,7 +742,7 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
     setImportLoading(true);
     try {
       const result = await projectBomApi.importExcel(projectId, selectedBomId, file);
-      message.success(`导入成功：创建${result?.created ?? 0}项，匹配物料${result?.matched ?? 0}项，错误${result?.errors ?? 0}项`);
+      message.success(`导入成功：创建${result?.created ?? 0}项，匹配物料${result?.matched ?? 0}项，自动建料${result?.auto_created ?? 0}项，错误${result?.errors ?? 0}项`);
       queryClient.invalidateQueries({ queryKey: ['project-bom-detail', projectId, selectedBomId] });
       queryClient.invalidateQueries({ queryKey: ['project-boms', projectId] });
     } catch {

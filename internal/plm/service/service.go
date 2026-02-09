@@ -65,7 +65,7 @@ func NewServices(repos *repository.Repositories, rdb *redis.Client, cfg *config.
 		Template:   templateSvc,
 		Automation: nil, // Will be initialized with logger later if needed
 		// V2 新增
-		ProjectBOM: NewProjectBOMService(repos.ProjectBOM, repos.Project, repos.Deliverable),
+		ProjectBOM: NewProjectBOMService(repos.ProjectBOM, repos.Project, repos.Deliverable, repos.Material),
 	}
 }
 
