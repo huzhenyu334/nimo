@@ -762,12 +762,23 @@ const TemplateDetail: React.FC = () => {
 
     setVersionSaving(true);
     try {
-      // 创建新草稿版本（传入用户指定的版本号）
+      // 创建新草稿版本（传入用户指定的版本号，后端会复制任务+依赖+表单）
       const newTemplate = await templateApi.upgrade(id, newVersionInput.trim());
 
-      // 保存当前编辑的任务到新草稿
+      // 保存当前编辑的任务到新草稿（不传版本号，草稿状态下不会递增版本）
       const payload = buildSavePayload();
-      await templateApi.batchSaveTasks(newTemplate.id, payload, newVersionInput.trim());
+      await templateApi.batchSaveTasks(newTemplate.id, payload);
+
+      // 保存用户本地修改的表单配置到新草稿
+      for (const [taskCode, fields] of Object.entries(templateForms)) {
+        if (fields && fields.length > 0) {
+          await taskFormApi.saveTemplateTaskForm(newTemplate.id, {
+            task_code: taskCode,
+            name: '完成表单',
+            fields,
+          });
+        }
+      }
 
       // 如果模板名称有改动，也更新
       if (templateName !== template.name) {

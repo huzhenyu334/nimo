@@ -294,6 +294,30 @@ func (s *TemplateService) CreateNewVersion(ctx context.Context, source *entity.P
 			}
 		}
 
+		// 复制任务表单配置
+		var sourceForms []entity.TemplateTaskForm
+		if err := tx.Where("template_id = ?", source.ID).Find(&sourceForms).Error; err != nil {
+			return fmt.Errorf("load source task forms: %w", err)
+		}
+		if len(sourceForms) > 0 {
+			now := time.Now()
+			var newForms []entity.TemplateTaskForm
+			for _, f := range sourceForms {
+				newForms = append(newForms, entity.TemplateTaskForm{
+					ID:         uuid.New().String(),
+					TemplateID: newID,
+					TaskCode:   f.TaskCode,
+					Name:       f.Name,
+					Fields:     f.Fields,
+					CreatedAt:  now,
+					UpdatedAt:  now,
+				})
+			}
+			if err := tx.Create(&newForms).Error; err != nil {
+				return fmt.Errorf("copy task forms: %w", err)
+			}
+		}
+
 		return nil
 	})
 

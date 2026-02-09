@@ -489,13 +489,14 @@ func (h *TemplateHandler) BatchSaveTasks(c *gin.Context) {
 		return
 	}
 
-	// 如果指定了版本号，更新模板版本
+	// 更新模板版本
 	if req.Version != "" {
 		template.Version = req.Version
-	} else {
-		// 自动递增版本
+	} else if template.Status != "draft" {
+		// 非草稿状态自动递增版本
 		template.Version = nextVersion(template.Version)
 	}
+	// 草稿状态且未指定版本号时，仅更新预估工期，不变更版本
 	template.EstimatedDays = calcEstimatedDays(tasks)
 	if err := h.svc.UpdateTemplate(c.Request.Context(), template); err != nil {
 		InternalError(c, "Failed to update template version")
