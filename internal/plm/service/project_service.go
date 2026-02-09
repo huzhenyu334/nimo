@@ -1127,13 +1127,30 @@ func (s *ProjectService) ConfirmTask(ctx context.Context, projectID, taskID, use
 		return fmt.Errorf("更新任务状态失败: %w", err)
 	}
 
-	// 4. 更新项目进度
+	// 4. 确认时处理 bom_upload 字段 → 创建项目BOM（无审批的任务走这条路径）
+	if s.bomSvc != nil && s.taskFormRepo != nil {
+		go func() {
+			bgCtx := context.Background()
+			form, ferr := s.taskFormRepo.FindByTaskID(bgCtx, taskID)
+			if ferr != nil || form == nil {
+				return
+			}
+			submission, serr := s.taskFormRepo.FindLatestSubmission(bgCtx, taskID)
+			if serr != nil || submission == nil {
+				return
+			}
+			formData := map[string]interface{}(submission.Data)
+			s.ProcessBOMUploadFields(bgCtx, form, formData, task.ProjectID, userID)
+		}()
+	}
+
+	// 5. 更新项目进度
 	go s.updateProjectProgress(context.Background(), task.ProjectID)
 
 	// SSE: 通知前端任务确认
 	sse.PublishTaskUpdate(task.ProjectID, task.ID, "task_confirmed")
 
-	// 5. 检查并激活依赖此任务的下游任务
+	// 6. 检查并激活依赖此任务的下游任务
 	go s.activateDownstreamTasks(context.Background(), task.ID, task.ProjectID)
 
 	return nil
