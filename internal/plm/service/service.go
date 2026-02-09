@@ -134,14 +134,6 @@ type UpdateMaterialRequest struct {
 	Currency     *string            `json:"currency"`
 }
 
-// categoryCodeToPrefix 物料类别编码到前缀映射
-var categoryCodeToPrefix = map[string]string{
-	"electronic": "E",
-	"mechanical": "M",
-	"optical":    "O",
-	"packaging":  "P",
-	"other":      "X",
-}
 
 // List 获取物料列表
 func (s *MaterialService) List(ctx context.Context, page, pageSize int, filters map[string]interface{}) (map[string]interface{}, error) {
@@ -162,24 +154,21 @@ func (s *MaterialService) Get(ctx context.Context, id string) (*entity.Material,
 
 // Create 创建物料
 func (s *MaterialService) Create(ctx context.Context, userID string, req *CreateMaterialRequest) (*entity.Material, error) {
-	// 根据 categoryID 查找类别编码，推断前缀
-	prefix := "X"
+	// 根据 categoryID 查找分类，使用其 code 生成编码
+	categoryCode := "OT-OTH"
 	if req.CategoryID != "" {
-		categories, err := s.repo.GetCategories(ctx)
+		cat, err := s.repo.FindCategoryByID(ctx, req.CategoryID)
 		if err != nil {
 			return nil, fmt.Errorf("获取物料类别失败: %w", err)
 		}
-		for _, cat := range categories {
-			if cat.ID == req.CategoryID {
-				if p, ok := categoryCodeToPrefix[cat.Code]; ok {
-					prefix = p
-				}
-				break
-			}
+		categoryCode = cat.Code
+		// 如果选的是一级分类，用 {code}-OTH 格式
+		if cat.Level == 1 {
+			categoryCode = cat.Code + "-OTH"
 		}
 	}
 
-	code, err := s.repo.GenerateCode(ctx, prefix)
+	code, err := s.repo.GenerateCode(ctx, categoryCode)
 	if err != nil {
 		return nil, fmt.Errorf("生成物料编码失败: %w", err)
 	}

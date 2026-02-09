@@ -6,7 +6,7 @@ import {
   Space,
   Tag,
   Input,
-  Select,
+  TreeSelect,
   Modal,
   Form,
   InputNumber,
@@ -23,7 +23,6 @@ import {
 import { materialsApi, Material, MaterialCategory } from '@/api';
 
 const { Search } = Input;
-const { Option } = Select;
 
 const Materials: React.FC = () => {
   const [materials, setMaterials] = useState<Material[]>([]);
@@ -104,6 +103,18 @@ const Materials: React.FC = () => {
     }
   };
 
+  // 将分类树转为 TreeSelect 的 treeData 格式
+  const categoryTreeData = categories.map((cat) => ({
+    title: cat.name,
+    value: cat.id,
+    key: cat.id,
+    children: cat.children?.map((child) => ({
+      title: child.name,
+      value: child.id,
+      key: child.id,
+    })),
+  }));
+
   const getStatusColor = (status: string) => {
     const colors: Record<string, string> = {
       active: 'green',
@@ -131,8 +142,11 @@ const Materials: React.FC = () => {
       title: '分类',
       dataIndex: 'category',
       key: 'category',
-      width: 120,
-      render: (category: MaterialCategory) => category?.name || '-',
+      width: 150,
+      render: (category: MaterialCategory) => {
+        if (!category) return '-';
+        return category.code ? `${category.name} (${category.code})` : category.name;
+      },
     },
     {
       title: '规格',
@@ -187,19 +201,15 @@ const Materials: React.FC = () => {
         title="物料管理"
         extra={
           <Space>
-            <Select
+            <TreeSelect
               placeholder="选择分类"
               allowClear
-              style={{ width: 150 }}
+              treeDefaultExpandAll
+              style={{ width: 180 }}
               value={selectedCategory || undefined}
               onChange={(v) => setSelectedCategory(v || '')}
-            >
-              {categories.map((cat) => (
-                <Option key={cat.id} value={cat.id}>
-                  {cat.name}
-                </Option>
-              ))}
-            </Select>
+              treeData={categoryTreeData}
+            />
             <Search
               placeholder="搜索物料"
               value={searchText}
@@ -238,20 +248,16 @@ const Materials: React.FC = () => {
         width={600}
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="code" label="物料编码" rules={[{ required: true, message: '请输入物料编码' }]}>
-            <Input placeholder="如: MAT-E-001" disabled={!!currentMaterial} />
-          </Form.Item>
           <Form.Item name="name" label="物料名称" rules={[{ required: true, message: '请输入物料名称' }]}>
             <Input placeholder="请输入物料名称" />
           </Form.Item>
           <Form.Item name="category_id" label="分类">
-            <Select placeholder="选择分类" allowClear>
-              {categories.map((cat) => (
-                <Option key={cat.id} value={cat.id}>
-                  {cat.name}
-                </Option>
-              ))}
-            </Select>
+            <TreeSelect
+              placeholder="选择分类"
+              allowClear
+              treeDefaultExpandAll
+              treeData={categoryTreeData}
+            />
           </Form.Item>
           <Form.Item name="unit" label="单位" rules={[{ required: true, message: '请输入单位' }]}>
             <Input placeholder="如: pcs, kg, m" />

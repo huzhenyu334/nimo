@@ -27,7 +27,9 @@ export interface MaterialCategory {
   code: string;
   name: string;
   parent_id: string;
+  level: number;
   description: string;
+  children?: MaterialCategory[];
 }
 
 export interface MaterialListResponse {

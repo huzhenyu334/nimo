@@ -746,13 +746,13 @@ func (s *ProjectBOMService) ImportPADSBOM(ctx context.Context, bomID string, rea
 		}
 
 		// 从参考编号前缀自动推断分类
-		category := inferCategoryFromReference(reference)
+		categoryName, categoryID := inferCategoryFromReference(reference)
 
 		item := entity.ProjectBOMItem{
 			ID:             uuid.New().String()[:32],
 			BOMID:          bomID,
 			ItemNumber:     itemNum,
-			Category:       category,
+			Category:       categoryName,
 			Name:           name,
 			Specification:  componentName,
 			Quantity:       qty,
@@ -772,7 +772,7 @@ func (s *ProjectBOMService) ImportPADSBOM(ctx context.Context, bomID string, rea
 			result.Matched++
 		} else {
 			// 自动创建物料
-			newMat, createErr := s.autoCreateMaterial(ctx, item.Name, componentName, category, manufacturer, manufacturerPN)
+			newMat, createErr := s.autoCreateMaterial(ctx, item.Name, componentName, categoryID, manufacturer, manufacturerPN)
 			if createErr != nil {
 				fmt.Printf("[WARN] auto-create material failed for %q: %v\n", item.Name, createErr)
 			} else if newMat != nil {
@@ -800,9 +800,10 @@ func (s *ProjectBOMService) ImportPADSBOM(ctx context.Context, bomID string, rea
 }
 
 // inferCategoryFromReference 从参考编号前缀推断物料分类
-func inferCategoryFromReference(reference string) string {
+// 返回 (显示名称, 二级分类ID)
+func inferCategoryFromReference(reference string) (string, string) {
 	if reference == "" {
-		return ""
+		return "", "mcat_el_oth"
 	}
 	// 取第一个位号（空格分隔）
 	first := strings.Fields(reference)[0]
@@ -810,26 +811,26 @@ func inferCategoryFromReference(reference string) string {
 	prefix := strings.ToUpper(strings.TrimRight(first, "0123456789-"))
 
 	switch prefix {
-	case "C":
-		return "电容"
 	case "R":
-		return "电阻"
+		return "电阻", "mcat_el_res"
+	case "C":
+		return "电容", "mcat_el_cap"
 	case "L":
-		return "电感"
+		return "电感", "mcat_el_ind"
 	case "U":
-		return "IC"
+		return "IC", "mcat_el_ic"
+	case "J", "CN":
+		return "连接器", "mcat_el_con"
+	case "D":
+		return "二极管", "mcat_el_dio"
 	case "Q":
-		return "晶体管"
-	case "E", "ESD":
-		return "ESD器件"
-	case "CON":
-		return "连接器"
+		return "晶体管", "mcat_el_trn"
 	case "Y":
-		return "晶振"
+		return "晶振", "mcat_el_osc"
 	case "TP":
-		return "测试点"
+		return "测试点", "mcat_el_oth"
 	default:
-		return ""
+		return "", "mcat_el_oth"
 	}
 }
 
@@ -1144,9 +1145,9 @@ func (s *ProjectBOMService) AckRelease(ctx context.Context, releaseID string) (*
 
 // autoCreateMaterial 根据BOM行信息自动创建物料
 func (s *ProjectBOMService) autoCreateMaterial(ctx context.Context, name, specification, category, manufacturer, manufacturerPN string) (*entity.Material, error) {
-	categoryID, prefix := mapCategoryToIDAndPrefix(category)
+	categoryID, categoryCode := mapCategoryToIDAndCode(category)
 
-	code, err := s.materialRepo.GenerateCode(ctx, prefix)
+	code, err := s.materialRepo.GenerateCode(ctx, categoryCode)
 	if err != nil {
 		return nil, fmt.Errorf("generate material code: %w", err)
 	}
@@ -1171,16 +1172,57 @@ func (s *ProjectBOMService) autoCreateMaterial(ctx context.Context, name, specif
 	return mat, nil
 }
 
-// mapCategoryToIDAndPrefix 将中文分类名映射到 categoryID 和编码前缀
-func mapCategoryToIDAndPrefix(category string) (string, string) {
+// mapCategoryToIDAndCode 将分类标识映射到二级分类 categoryID 和编码code
+// 支持传入二级分类ID（mcat_el_res格式）或中文分类名
+func mapCategoryToIDAndCode(category string) (string, string) {
+	// 如果传入的已经是二级分类ID（mcat_xx_xxx格式），直接映射
+	idToCode := map[string]string{
+		"mcat_el_res": "EL-RES",
+		"mcat_el_cap": "EL-CAP",
+		"mcat_el_ind": "EL-IND",
+		"mcat_el_ic":  "EL-IC",
+		"mcat_el_con": "EL-CON",
+		"mcat_el_dio": "EL-DIO",
+		"mcat_el_trn": "EL-TRN",
+		"mcat_el_osc": "EL-OSC",
+		"mcat_el_led": "EL-LED",
+		"mcat_el_sen": "EL-SEN",
+		"mcat_el_ant": "EL-ANT",
+		"mcat_el_mod": "EL-MOD",
+		"mcat_el_bat": "EL-BAT",
+		"mcat_el_pcb": "EL-PCB",
+		"mcat_el_oth": "EL-OTH",
+	}
+	if code, ok := idToCode[category]; ok {
+		return category, code
+	}
+
+	// 兼容中文分类名（Excel导入场景）
 	switch category {
-	case "电容", "电阻", "电感", "IC", "晶体管", "ESD器件", "晶振", "二极管", "连接器":
-		return "mcat_electronic", "E"
+	case "电阻":
+		return "mcat_el_res", "EL-RES"
+	case "电容":
+		return "mcat_el_cap", "EL-CAP"
+	case "电感":
+		return "mcat_el_ind", "EL-IND"
+	case "IC", "集成电路":
+		return "mcat_el_ic", "EL-IC"
+	case "连接器":
+		return "mcat_el_con", "EL-CON"
+	case "二极管", "ESD器件":
+		return "mcat_el_dio", "EL-DIO"
+	case "晶体管":
+		return "mcat_el_trn", "EL-TRN"
+	case "晶振":
+		return "mcat_el_osc", "EL-OSC"
+	case "LED":
+		return "mcat_el_led", "EL-LED"
+	case "传感器":
+		return "mcat_el_sen", "EL-SEN"
 	case "测试点":
-		return "mcat_other", "X"
+		return "mcat_el_oth", "EL-OTH"
 	default:
-		// 默认归类为电子元器件
-		return "mcat_electronic", "E"
+		return "mcat_el_oth", "EL-OTH"
 	}
 }
 

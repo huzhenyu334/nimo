@@ -7,7 +7,7 @@ import (
 // MaterialCategory 物料类别
 type MaterialCategory struct {
 	ID        string    `json:"id" gorm:"primaryKey;size:32"`
-	Code      string    `json:"code" gorm:"size:32;not null;uniqueIndex"`
+	Code      string    `json:"code" gorm:"size:32;not null"`
 	Name      string    `json:"name" gorm:"size:64;not null"`
 	ParentID  string    `json:"parent_id" gorm:"size:32"`
 	Path      string    `json:"path" gorm:"size:256"`
