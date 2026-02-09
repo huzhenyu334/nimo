@@ -393,6 +393,21 @@ func (r *TaskRepository) UpdateAssigneeByRole(ctx context.Context, projectID, ro
 		Update("assignee_id", userID).Error
 }
 
+// FindRoleAssignment 查询项目角色分配（按角色代码，大小写不敏感）
+func (r *TaskRepository) FindRoleAssignment(ctx context.Context, projectID, roleCode string) (*entity.ProjectRoleAssignment, error) {
+	var assignment entity.ProjectRoleAssignment
+	err := r.db.WithContext(ctx).
+		Where("project_id = ? AND LOWER(role_code) = LOWER(?)", projectID, roleCode).
+		First(&assignment).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &assignment, nil
+}
+
 // UpsertRoleAssignment 插入或更新项目角色分配
 func (r *TaskRepository) UpsertRoleAssignment(ctx context.Context, assignment *entity.ProjectRoleAssignment) error {
 	return r.db.WithContext(ctx).Exec(`

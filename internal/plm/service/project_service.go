@@ -29,7 +29,7 @@ type ProjectService struct {
 	bomSvc       *ProjectBOMService
 	// SRM集成：BOM创建后自动生成打样采购需求
 	srmProcurementSvc interface {
-		AutoCreatePRFromBOM(ctx context.Context, projectID, bomID, userID string) error
+		AutoCreatePRFromBOM(ctx context.Context, projectID, bomID, userID string) (string, error)
 	}
 }
 
@@ -51,7 +51,7 @@ func (s *ProjectService) SetFeishuClient(fc *feishu.FeishuClient, userRepo *repo
 
 // SetSRMProcurementService 注入SRM采购服务（BOM创建后自动生成打样PR）
 func (s *ProjectService) SetSRMProcurementService(svc interface {
-	AutoCreatePRFromBOM(ctx context.Context, projectID, bomID, userID string) error
+	AutoCreatePRFromBOM(ctx context.Context, projectID, bomID, userID string) (string, error)
 }) {
 	s.srmProcurementSvc = svc
 }
@@ -925,10 +925,71 @@ func (s *ProjectService) ProcessBOMUploadFields(ctx context.Context, form *entit
 		}
 		// BOM创建成功后，自动创建SRM打样采购需求
 		if s.srmProcurementSvc != nil && bomID != "" {
-			if err := s.srmProcurementSvc.AutoCreatePRFromBOM(ctx, projectID, bomID, userID); err != nil {
+			srmPRID, err := s.srmProcurementSvc.AutoCreatePRFromBOM(ctx, projectID, bomID, userID)
+			if err != nil {
 				log.Printf("[WARN] auto-create SRM PR failed for BOM %s: %v", bomID, err)
+			} else if srmPRID != "" {
+				// SRM PR创建成功，自动创建PLM采购跟踪任务
+				var phaseID *string
+				if task, err := s.taskRepo.FindByID(ctx, form.TaskID); err == nil && task != nil {
+					phaseID = task.PhaseID
+				}
+				s.CreateSRMProcurementTask(ctx, projectID, phaseID, srmPRID, userID)
 			}
 		}
+	}
+}
+
+// CreateSRMProcurementTask 自动创建SRM采购跟踪任务
+// 在BOM审批通过后、SRM PR创建成功后调用
+func (s *ProjectService) CreateSRMProcurementTask(ctx context.Context, projectID string, phaseID *string, srmPRID, userID string) {
+	// 生成任务编码
+	code, err := s.taskRepo.GenerateCode(ctx, projectID)
+	if err != nil {
+		log.Printf("[CreateSRMProcurementTask] 生成任务编码失败: %v", err)
+		return
+	}
+
+	// 查找采购角色负责人
+	var assigneeID *string
+	assignment, err := s.taskRepo.FindRoleAssignment(ctx, projectID, "采购")
+	if err == nil && assignment != nil {
+		assigneeID = &assignment.UserID
+	}
+
+	now := time.Now()
+	task := &entity.Task{
+		ID:                 uuid.New().String()[:32],
+		ProjectID:          projectID,
+		PhaseID:            phaseID,
+		Code:               code,
+		Title:              "打样采购跟踪",
+		Name:               "打样采购跟踪",
+		Description:        "BOM审批通过后自动创建，请跟踪打样采购进度",
+		TaskType:           entity.TaskTypeSRMProcurement,
+		Status:             entity.TaskStatusInProgress,
+		Priority:           entity.TaskPriorityHigh,
+		AssigneeID:         assigneeID,
+		LinkedSRMProjectID: &srmPRID,
+		CreatedBy:          userID,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	task.ActualStart = &now
+
+	if err := s.taskRepo.Create(ctx, task); err != nil {
+		log.Printf("[CreateSRMProcurementTask] 创建任务失败: %v", err)
+		return
+	}
+
+	log.Printf("[CreateSRMProcurementTask] 已创建SRM采购任务: project=%s, task=%s, assignee=%v", projectID, task.ID, assigneeID)
+
+	// SSE: 通知前端新任务
+	sse.PublishTaskUpdate(projectID, task.ID, "task_created")
+
+	// 通知负责人
+	if assigneeID != nil {
+		go s.notifyTaskActivation(context.Background(), task)
 	}
 }
 
