@@ -304,7 +304,7 @@ func (s *TemplateService) CreateNewVersion(ctx context.Context, source *entity.P
 			var newForms []entity.TemplateTaskForm
 			for _, f := range sourceForms {
 				newForms = append(newForms, entity.TemplateTaskForm{
-					ID:         uuid.New().String(),
+					ID:         uuid.New().String()[:32],
 					TemplateID: newID,
 					TaskCode:   f.TaskCode,
 					Name:       f.Name,

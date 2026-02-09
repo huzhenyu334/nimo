@@ -439,6 +439,7 @@ func main() {
 	// V8: 角色管理 + 注入审批服务到项目服务
 	handlers.Role = handler.NewRoleHandler(db, feishuWorkflowClient)
 	services.Project.SetApprovalService(approvalSvc)
+	services.Project.SetBOMService(services.ProjectBOM)
 	services.Project.SetFeishuClient(feishuWorkflowClient, repos.User)
 	approvalSvc.SetProjectService(services.Project)
 	services.Template.SetProjectService(services.Project)

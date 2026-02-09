@@ -26,11 +26,17 @@ type ProjectService struct {
 	approvalSvc  *ApprovalService
 	feishuClient *feishu.FeishuClient
 	userRepo     *repository.UserRepository
+	bomSvc       *ProjectBOMService
 }
 
 // SetApprovalService 注入审批服务（避免循环依赖）
 func (s *ProjectService) SetApprovalService(svc *ApprovalService) {
 	s.approvalSvc = svc
+}
+
+// SetBOMService 注入BOM服务（避免循环依赖）
+func (s *ProjectService) SetBOMService(svc *ProjectBOMService) {
+	s.bomSvc = svc
 }
 
 // SetFeishuClient 注入飞书客户端（用于发送消息卡片）
@@ -777,6 +783,11 @@ func (s *ProjectService) CompleteMyTask(ctx context.Context, taskID, userID stri
 			if err := s.taskFormRepo.CreateSubmission(ctx, submission); err != nil {
 				return fmt.Errorf("保存表单提交失败: %w", err)
 			}
+
+			// 4.5 检查表单中是否有 bom_upload 类型字段，自动创建项目BOM
+			if s.bomSvc != nil {
+				s.processBOMUploadFields(ctx, form, formData, task.ProjectID, userID)
+			}
 		}
 	}
 
@@ -821,6 +832,120 @@ func (s *ProjectService) CompleteMyTask(ctx context.Context, taskID, userID stri
 	sse.PublishTaskUpdate(task.ProjectID, task.ID, "task_submitted")
 
 	return nil
+}
+
+// processBOMUploadFields 检查表单字段定义，找出 bom_upload 类型的字段，
+// 然后从 formData 中提取已解析的BOM数据，自动创建项目BOM。
+func (s *ProjectService) processBOMUploadFields(ctx context.Context, form *entity.TaskForm, formData map[string]interface{}, projectID, userID string) {
+	// 解析 form.Fields 找出 type=bom_upload 的字段key
+	var fields []struct {
+		Key  string `json:"key"`
+		Type string `json:"type"`
+		Label string `json:"label"`
+	}
+	if err := json.Unmarshal(form.Fields, &fields); err != nil {
+		log.Printf("[WARN] processBOMUploadFields: parse form fields failed: %v", err)
+		return
+	}
+
+	for _, f := range fields {
+		if f.Type != "bom_upload" {
+			continue
+		}
+
+		raw, ok := formData[f.Key]
+		if !ok || raw == nil {
+			continue
+		}
+
+		bomData, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// 提取 items 数组
+		rawItems, ok := bomData["items"]
+		if !ok || rawItems == nil {
+			continue
+		}
+		itemsSlice, ok := rawItems.([]interface{})
+		if !ok || len(itemsSlice) == 0 {
+			continue
+		}
+
+		// 转换为 ParsedBOMItem 切片
+		var parsedItems []ParsedBOMItem
+		for _, ri := range itemsSlice {
+			itemMap, ok := ri.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			item := ParsedBOMItem{
+				ItemNumber:     toInt(itemMap["item_number"]),
+				Reference:      toStr(itemMap["reference"]),
+				Name:           toStr(itemMap["name"]),
+				Specification:  toStr(itemMap["specification"]),
+				Quantity:       toFloat64(itemMap["quantity"]),
+				Unit:           toStr(itemMap["unit"]),
+				Category:       toStr(itemMap["category"]),
+				Manufacturer:   toStr(itemMap["manufacturer"]),
+				ManufacturerPN: toStr(itemMap["manufacturer_pn"]),
+			}
+			if item.Unit == "" {
+				item.Unit = "pcs"
+			}
+			parsedItems = append(parsedItems, item)
+		}
+
+		if len(parsedItems) == 0 {
+			continue
+		}
+
+		// BOM名称：优先用文件名，否则用字段label
+		bomName := toStr(bomData["filename"])
+		if bomName == "" {
+			bomName = f.Label
+		}
+		if bomName == "" {
+			bomName = "BOM from task form"
+		}
+
+		if err := s.bomSvc.CreateBOMFromParsedItems(ctx, projectID, userID, bomName, parsedItems); err != nil {
+			log.Printf("[WARN] processBOMUploadFields: auto-create BOM failed for field %q: %v", f.Key, err)
+		}
+	}
+}
+
+// toStr 安全地将 interface{} 转为 string
+func toStr(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// toInt 安全地将 interface{} 转为 int
+func toInt(v interface{}) int {
+	if v == nil {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case float32:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case json.Number:
+		i, _ := n.Int64()
+		return int(i)
+	}
+	return 0
 }
 
 // processRoleAssignment 根据任务表单中的用户选择字段，自动写入项目角色分配表
