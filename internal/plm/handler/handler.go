@@ -39,6 +39,8 @@ type Handlers struct {
 	SSE         *SSEHandler
 	// V8 角色
 	Role        *RoleHandler
+	// V9 智能路由
+	Routing     *RoutingHandler
 }
 
 // NewHandlers 创建处理器集合

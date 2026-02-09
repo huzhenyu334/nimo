@@ -300,6 +300,37 @@ func main() {
 			created_at TIMESTAMP DEFAULT NOW(),
 			updated_at TIMESTAMP DEFAULT NOW()
 		)`,
+
+		// V10: 智能路由 (Phase 4)
+		`CREATE TABLE IF NOT EXISTS routing_rules (
+			id VARCHAR(36) PRIMARY KEY,
+			name VARCHAR(100) NOT NULL,
+			entity_type VARCHAR(50) NOT NULL,
+			event VARCHAR(100) NOT NULL,
+			conditions JSONB NOT NULL,
+			channel VARCHAR(20) NOT NULL,
+			priority INT DEFAULT 0,
+			action_config JSONB,
+			enabled BOOLEAN DEFAULT true,
+			description TEXT,
+			created_by VARCHAR(32),
+			created_at TIMESTAMP DEFAULT NOW(),
+			updated_at TIMESTAMP DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_routing_rules_entity_event ON routing_rules(entity_type, event)`,
+		`CREATE TABLE IF NOT EXISTS routing_logs (
+			id VARCHAR(36) PRIMARY KEY,
+			rule_id VARCHAR(36),
+			rule_name VARCHAR(100),
+			entity_type VARCHAR(50) NOT NULL,
+			entity_id VARCHAR(50),
+			event VARCHAR(100) NOT NULL,
+			channel VARCHAR(20) NOT NULL,
+			context JSONB,
+			reason TEXT,
+			created_at TIMESTAMP DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_routing_logs_entity ON routing_logs(entity_type, event)`,
 	}
 	for _, sql := range migrationSQL {
 		if err := db.Exec(sql).Error; err != nil {
@@ -396,6 +427,11 @@ func main() {
 	services.Project.SetFeishuClient(feishuWorkflowClient, repos.User)
 	approvalSvc.SetProjectService(services.Project)
 	services.Template.SetProjectService(services.Project)
+
+	// V9: 智能路由 (Phase 4)
+	routingSvc := service.NewRoutingService(db)
+	handlers.Routing = handler.NewRoutingHandler(routingSvc)
+	workflowSvc.SetRoutingService(routingSvc)
 
 	// 设置Gin模式
 	if cfg.Server.Mode == "release" {
@@ -626,6 +662,20 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				roles.GET("/:id", h.Role.Get)
 				roles.PUT("/:id", h.Role.Update)
 				roles.DELETE("/:id", h.Role.Delete)
+			}
+
+			// V9: 智能路由
+			if h.Routing != nil {
+				routingRules := authorized.Group("/routing-rules")
+				{
+					routingRules.GET("", h.Routing.ListRules)
+					routingRules.POST("", h.Routing.CreateRule)
+					routingRules.POST("/test", h.Routing.TestRoute)
+					routingRules.GET("/:id", h.Routing.GetRule)
+					routingRules.PUT("/:id", h.Routing.UpdateRule)
+					routingRules.DELETE("/:id", h.Routing.DeleteRule)
+				}
+				authorized.GET("/routing-logs", h.Routing.ListLogs)
 			}
 
 			// 任务角色（用于模板任务分配）

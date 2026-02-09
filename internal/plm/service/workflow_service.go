@@ -23,11 +23,12 @@ type RoleAssignment struct {
 
 // WorkflowService 工作流服务 —— 连接状态机引擎和飞书集成
 type WorkflowService struct {
-	db           *gorm.DB
-	engine       *engine.Engine
-	feishuClient *feishu.FeishuClient
-	projectRepo  *repository.ProjectRepository
-	taskRepo     *repository.TaskRepository
+	db             *gorm.DB
+	engine         *engine.Engine
+	feishuClient   *feishu.FeishuClient
+	projectRepo    *repository.ProjectRepository
+	taskRepo       *repository.TaskRepository
+	routingService *RoutingService
 }
 
 // NewWorkflowService 创建工作流服务
@@ -39,6 +40,11 @@ func NewWorkflowService(db *gorm.DB, eng *engine.Engine, fc *feishu.FeishuClient
 		projectRepo:  projectRepo,
 		taskRepo:     taskRepo,
 	}
+}
+
+// SetRoutingService 注入路由服务
+func (s *WorkflowService) SetRoutingService(rs *RoutingService) {
+	s.routingService = rs
 }
 
 // AssignTask 指派任务
@@ -149,7 +155,46 @@ func (s *WorkflowService) CompleteTask(ctx context.Context, projectID, taskID, o
 	}
 
 	if task.RequiresApproval {
-		// 需要审批 → reviewing
+		// 智能路由：判断走 agent 自动审批还是人工审批
+		if s.routingService != nil {
+			routeCtx := map[string]interface{}{
+				"project_id": projectID,
+				"task_id":    taskID,
+				"task_code":  task.Code,
+				"task_type":  task.TaskType,
+			}
+			decision, err := s.routingService.EvaluateRoute(ctx, "plm_task", "task_complete", routeCtx)
+			if err != nil {
+				log.Printf("[WorkflowService] 路由评估失败，走默认人工审批: %v", err)
+			} else if decision.Channel == entity.RoutingChannelAgent {
+				// Agent 自动审批 → 直接 completed
+				now := time.Now()
+				task.Status = entity.TaskStatusCompleted
+				task.CompletedAt = &now
+				task.Progress = 100
+				if err := s.taskRepo.Update(ctx, task); err != nil {
+					return fmt.Errorf("更新任务失败: %w", err)
+				}
+				s.logAction(ctx, projectID, taskID, entity.TaskActionApprove, entity.TaskStatusInProgress, entity.TaskStatusCompleted, "agent", map[string]interface{}{
+					"routing_rule_id":   decision.RuleID,
+					"routing_rule_name": decision.RuleName,
+					"routing_reason":    decision.Reason,
+				}, "智能路由: Agent自动审批通过")
+
+				s.checkAndStartDependentTasks(ctx, projectID, taskID)
+
+				if s.feishuClient != nil && task.FeishuTaskID != "" {
+					go func() {
+						if err := s.feishuClient.CompleteTask(context.Background(), task.FeishuTaskID); err != nil {
+							log.Printf("[WorkflowService] 飞书任务完成失败 (feishu_task=%s): %v", task.FeishuTaskID, err)
+						}
+					}()
+				}
+				return nil
+			}
+		}
+
+		// 需要审批 → reviewing（人工审批流程）
 		task.Status = entity.TaskStatusReviewing
 		if err := s.taskRepo.Update(ctx, task); err != nil {
 			return fmt.Errorf("更新任务失败: %w", err)
