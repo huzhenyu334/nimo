@@ -959,6 +959,7 @@ const TemplateDetail: React.FC = () => {
     { value: 'checkbox', label: '复选框' },
     { value: 'user', label: '用户选择' },
     { value: 'role_assignment', label: '角色分配' },
+    { value: 'bom_upload', label: 'BOM上传' },
   ];
 
   const openFormConfig = (task: TaskRow) => {
@@ -1717,6 +1718,11 @@ const TemplateDetail: React.FC = () => {
                       value={field.accept || ''}
                       onChange={(e) => updateFormField(idx, { accept: e.target.value })}
                     />
+                  </div>
+                )}
+                {field.type === 'bom_upload' && (
+                  <div style={{ marginTop: 8, padding: '4px 8px', background: '#e6f7ff', borderRadius: 4 }}>
+                    <Text type="secondary" style={{ fontSize: 11 }}>支持 .rep (PADS) 和 .xlsx/.xls (Excel) 格式，上传后自动解析预览BOM物料清单</Text>
                   </div>
                 )}
               </Card>

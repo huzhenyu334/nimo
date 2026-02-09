@@ -19,6 +19,9 @@ import {
   Spin,
   Divider,
   Descriptions,
+  Table,
+  Card,
+  Alert,
 } from 'antd';
 import {
   UploadOutlined,
@@ -29,11 +32,14 @@ import {
   CalendarOutlined,
   FolderOutlined,
   CheckOutlined,
+  InboxOutlined,
+  FileExcelOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 import type { UploadFile } from 'antd/es/upload';
 import dayjs from 'dayjs';
 import { projectApi, Task } from '@/api/projects';
-import { taskFormApi, TaskFormField, TaskForm } from '@/api/taskForms';
+import { taskFormApi, TaskFormField, TaskForm, ParsedBOMItem } from '@/api/taskForms';
 import { userApi, User } from '@/api/users';
 import { workflowApi } from '@/api/workflow';
 import { taskRoleApi, TaskRole } from '@/constants/roles';
@@ -154,6 +160,175 @@ const RoleAssignmentField: React.FC<{
   );
 };
 
+// ========== BOM Upload Field ==========
+
+const BOMUploadField: React.FC<{
+  value?: { filename: string; items: ParsedBOMItem[]; item_count: number };
+  onChange?: (value: { filename: string; items: ParsedBOMItem[]; item_count: number } | undefined) => void;
+}> = ({ value, onChange }) => {
+  const [parsing, setParsing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleUpload = async (file: File) => {
+    setError(null);
+    setParsing(true);
+    try {
+      const result = await taskFormApi.parseBOM(file);
+      const items = result.items || [];
+      onChange?.({ filename: file.name, items, item_count: items.length });
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.error || err?.response?.data?.message || '解析BOM文件失败';
+      setError(errMsg);
+      onChange?.(undefined);
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const handleRemove = () => {
+    onChange?.(undefined);
+    setError(null);
+  };
+
+  // Category breakdown
+  const categoryStats = useMemo(() => {
+    if (!value?.items?.length) return [];
+    const map: Record<string, number> = {};
+    for (const item of value.items) {
+      const cat = item.category || '未分类';
+      map[cat] = (map[cat] || 0) + 1;
+    }
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [value?.items]);
+
+  const columns = [
+    { title: '序号', dataIndex: 'item_number', key: 'item_number', width: 50, align: 'center' as const },
+    { title: '位号', dataIndex: 'reference', key: 'reference', width: 80, ellipsis: true },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 100, ellipsis: true },
+    { title: '规格', dataIndex: 'specification', key: 'specification', width: 120, ellipsis: true },
+    { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 50, align: 'center' as const },
+    { title: '单位', dataIndex: 'unit', key: 'unit', width: 45, align: 'center' as const },
+    { title: '类别', dataIndex: 'category', key: 'category', width: 70, ellipsis: true },
+    { title: '制造商', dataIndex: 'manufacturer', key: 'manufacturer', width: 90, ellipsis: true },
+  ];
+
+  if (!value) {
+    return (
+      <div>
+        <Upload.Dragger
+          accept=".rep,.xlsx,.xls"
+          showUploadList={false}
+          beforeUpload={(file) => { handleUpload(file); return false; }}
+          disabled={parsing}
+        >
+          {parsing ? (
+            <div style={{ padding: '12px 0' }}>
+              <Spin />
+              <div style={{ marginTop: 8, color: '#999', fontSize: 13 }}>正在解析BOM文件...</div>
+            </div>
+          ) : (
+            <div style={{ padding: '8px 0' }}>
+              <InboxOutlined style={{ fontSize: 32, color: '#1677ff' }} />
+              <div style={{ marginTop: 6, fontSize: 13, color: '#666' }}>点击或拖拽上传BOM文件</div>
+              <div style={{ fontSize: 11, color: '#999' }}>支持 .rep (PADS)、.xlsx、.xls</div>
+            </div>
+          )}
+        </Upload.Dragger>
+        {error && <Alert message={error} type="error" showIcon style={{ marginTop: 8 }} closable onClose={() => setError(null)} />}
+      </div>
+    );
+  }
+
+  return (
+    <Card size="small" bodyStyle={{ padding: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <Space size={8}>
+          <FileExcelOutlined style={{ color: '#52c41a', fontSize: 16 }} />
+          <span style={{ fontSize: 13, fontWeight: 500 }}>{value.filename}</span>
+          <Tag color="blue">{value.item_count} 项物料</Tag>
+        </Space>
+        <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={handleRemove}>重新上传</Button>
+      </div>
+      {categoryStats.length > 0 && (
+        <div style={{ marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {categoryStats.map(([cat, count]) => (
+            <Tag key={cat} style={{ fontSize: 11 }}>{cat}: {count}</Tag>
+          ))}
+        </div>
+      )}
+      <Table
+        columns={columns}
+        dataSource={value.items}
+        rowKey="item_number"
+        size="small"
+        pagination={value.items.length > 10 ? { pageSize: 10, size: 'small', showTotal: (t) => `共 ${t} 条` } : false}
+        scroll={{ x: 600 }}
+        style={{ fontSize: 12 }}
+        rowClassName={(_, idx) => idx % 2 === 1 ? 'ant-table-row-alt' : ''}
+      />
+    </Card>
+  );
+};
+
+// ========== BOM Data Display (read-only) ==========
+
+const BOMDataDisplay: React.FC<{ data: { filename: string; items: ParsedBOMItem[]; item_count: number } }> = ({ data }) => {
+  const [expanded, setExpanded] = useState(false);
+
+  const categoryStats = useMemo(() => {
+    if (!data?.items?.length) return [];
+    const map: Record<string, number> = {};
+    for (const item of data.items) {
+      const cat = item.category || '未分类';
+      map[cat] = (map[cat] || 0) + 1;
+    }
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [data?.items]);
+
+  const columns = [
+    { title: '序号', dataIndex: 'item_number', key: 'item_number', width: 50, align: 'center' as const },
+    { title: '位号', dataIndex: 'reference', key: 'reference', width: 80, ellipsis: true },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 100, ellipsis: true },
+    { title: '规格', dataIndex: 'specification', key: 'specification', width: 120, ellipsis: true },
+    { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 50, align: 'center' as const },
+    { title: '单位', dataIndex: 'unit', key: 'unit', width: 45, align: 'center' as const },
+    { title: '类别', dataIndex: 'category', key: 'category', width: 70, ellipsis: true },
+    { title: '制造商', dataIndex: 'manufacturer', key: 'manufacturer', width: 90, ellipsis: true },
+  ];
+
+  return (
+    <div>
+      <Space size={8} style={{ marginBottom: 4 }}>
+        <FileExcelOutlined style={{ color: '#52c41a' }} />
+        <span style={{ fontSize: 13 }}>{data.filename}</span>
+        <Tag color="blue">{data.item_count} 项物料</Tag>
+        <Button type="link" size="small" onClick={() => setExpanded(!expanded)} style={{ padding: 0 }}>
+          {expanded ? '收起' : '展开明细'}
+        </Button>
+      </Space>
+      {expanded && (
+        <div style={{ marginTop: 8 }}>
+          {categoryStats.length > 0 && (
+            <div style={{ marginBottom: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {categoryStats.map(([cat, count]) => (
+                <Tag key={cat} style={{ fontSize: 11 }}>{cat}: {count}</Tag>
+              ))}
+            </div>
+          )}
+          <Table
+            columns={columns}
+            dataSource={data.items}
+            rowKey="item_number"
+            size="small"
+            pagination={data.items.length > 10 ? { pageSize: 10, size: 'small' } : false}
+            scroll={{ x: 600 }}
+          />
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ========== Form Data Display (read-only for submitted/completed) ==========
 
 const FormDataDisplay: React.FC<{ projectId: string; taskId: string }> = ({ projectId, taskId }) => {
@@ -192,6 +367,14 @@ const FormDataDisplay: React.FC<{ projectId: string; taskId: string }> = ({ proj
       <Descriptions size="small" column={1} bordered>
         {fields.map((field: any) => {
           let value = data[field.key];
+          // bom_upload: render as expandable BOM data
+          if (field.type === 'bom_upload' && value && typeof value === 'object' && value.items) {
+            return (
+              <Descriptions.Item key={field.key} label={field.label}>
+                <BOMDataDisplay data={value} />
+              </Descriptions.Item>
+            );
+          }
           if (value === undefined || value === null) value = '-';
           else if (field.type === 'role_assignment' && typeof value === 'object' && !Array.isArray(value)) {
             value = Object.entries(value as Record<string, string>)
@@ -361,6 +544,7 @@ const TaskDetailPanel: React.FC<{
         </Select>
       );
       case 'role_assignment': return <RoleAssignmentField allUsers={allUsers} projectId={task.project_id} />;
+      case 'bom_upload': return <BOMUploadField />;
       default: return <Input placeholder={field.placeholder} />;
     }
   };

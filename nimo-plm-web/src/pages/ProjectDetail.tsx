@@ -62,7 +62,7 @@ import { ecnApi, ECN } from '@/api/ecn';
 import { documentsApi, Document } from '@/api/documents';
 import { workflowApi, TaskActionLog } from '@/api/workflow';
 import { approvalApi } from '@/api/approval';
-import { taskFormApi } from '@/api/taskForms';
+import { taskFormApi, ParsedBOMItem } from '@/api/taskForms';
 import { userApi } from '@/api/users';
 import UserSelect from '@/components/UserSelect';
 import { ROLE_CODES, taskRoleApi, TaskRole } from '@/constants/roles';
@@ -1516,6 +1516,65 @@ const ECNTab: React.FC<{ projectId: string; productId?: string }> = ({ productId
 
 // ============ Task Actions Component ============
 
+// ============ BOM Submission Display (read-only) ============
+
+const BOMSubmissionDisplay: React.FC<{ data: { filename: string; items: ParsedBOMItem[]; item_count: number } }> = ({ data }) => {
+  const [expanded, setExpanded] = React.useState(false);
+
+  const categoryStats = React.useMemo(() => {
+    if (!data?.items?.length) return [];
+    const map: Record<string, number> = {};
+    for (const item of data.items) {
+      const cat = item.category || '未分类';
+      map[cat] = (map[cat] || 0) + 1;
+    }
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [data?.items]);
+
+  const columns = [
+    { title: '序号', dataIndex: 'item_number', key: 'item_number', width: 50, align: 'center' as const },
+    { title: '位号', dataIndex: 'reference', key: 'reference', width: 80, ellipsis: true },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 100, ellipsis: true },
+    { title: '规格', dataIndex: 'specification', key: 'specification', width: 120, ellipsis: true },
+    { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 50, align: 'center' as const },
+    { title: '单位', dataIndex: 'unit', key: 'unit', width: 45, align: 'center' as const },
+    { title: '类别', dataIndex: 'category', key: 'category', width: 70, ellipsis: true },
+    { title: '制造商', dataIndex: 'manufacturer', key: 'manufacturer', width: 90, ellipsis: true },
+  ];
+
+  return (
+    <div>
+      <Space size={8} style={{ marginBottom: 4 }}>
+        <FileExcelOutlined style={{ color: '#52c41a' }} />
+        <span style={{ fontSize: 13 }}>{data.filename}</span>
+        <Tag color="blue">{data.item_count} 项物料</Tag>
+        <Button type="link" size="small" onClick={() => setExpanded(!expanded)} style={{ padding: 0 }}>
+          {expanded ? '收起' : '展开明细'}
+        </Button>
+      </Space>
+      {expanded && (
+        <div style={{ marginTop: 8 }}>
+          {categoryStats.length > 0 && (
+            <div style={{ marginBottom: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {categoryStats.map(([cat, count]) => (
+                <Tag key={cat} style={{ fontSize: 11 }}>{cat}: {count}</Tag>
+              ))}
+            </div>
+          )}
+          <Table
+            columns={columns}
+            dataSource={data.items}
+            rowKey="item_number"
+            size="small"
+            pagination={data.items.length > 10 ? { pageSize: 10, size: 'small' } : false}
+            scroll={{ x: 600 }}
+          />
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ============ Form Submission Display ============
 
 const FormSubmissionDisplay: React.FC<{ projectId: string; taskId: string }> = ({ projectId, taskId }) => {
@@ -1554,6 +1613,14 @@ const FormSubmissionDisplay: React.FC<{ projectId: string; taskId: string }> = (
       <Descriptions size="small" column={2} bordered>
         {fields.map((field: any) => {
           let value = data[field.key];
+          // bom_upload: show filename + count + expandable table
+          if (field.type === 'bom_upload' && value && typeof value === 'object' && value.items) {
+            return (
+              <Descriptions.Item key={field.key} label={field.label} span={2}>
+                <BOMSubmissionDisplay data={value} />
+              </Descriptions.Item>
+            );
+          }
           if (value === undefined || value === null) value = '-';
           else if (field.type === 'role_assignment' && typeof value === 'object' && !Array.isArray(value)) {
             const lines = Object.entries(value as Record<string, string>)

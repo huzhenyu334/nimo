@@ -4,7 +4,7 @@ import { ApiResponse } from '@/types';
 export interface TaskFormField {
   key: string;
   label: string;
-  type: 'text' | 'textarea' | 'number' | 'select' | 'multiselect' | 'date' | 'file' | 'checkbox' | 'user' | 'role_assignment';
+  type: 'text' | 'textarea' | 'number' | 'select' | 'multiselect' | 'date' | 'file' | 'checkbox' | 'user' | 'role_assignment' | 'bom_upload';
   required: boolean;
   placeholder?: string;
   description?: string;
@@ -104,4 +104,26 @@ export const taskFormApi = {
     const response = await apiClient.post<ApiResponse<{ files: any[] }>>('/upload', formData);
     return response.data.data.files[0];
   },
+
+  // BOM解析预览（不保存）
+  parseBOM: async (file: File): Promise<{ items: ParsedBOMItem[] }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await apiClient.post<ApiResponse<{ items: ParsedBOMItem[] }>>('/bom/parse', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data.data;
+  },
 };
+
+export interface ParsedBOMItem {
+  item_number: number;
+  reference: string;
+  name: string;
+  specification: string;
+  quantity: number;
+  unit: string;
+  category: string;
+  manufacturer: string;
+  manufacturer_pn: string;
+}

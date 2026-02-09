@@ -900,6 +900,152 @@ func (s *ProjectBOMService) GenerateTemplate() (*excelize.File, error) {
 	return f, nil
 }
 
+// ==================== Parse-only (preview, no save) ====================
+
+// ParsePADSBOM 解析PADS BOM (.rep) 返回预览数据，不保存
+func (s *ProjectBOMService) ParsePADSBOM(ctx context.Context, reader io.Reader) ([]ParsedBOMItem, error) {
+	// GBK → UTF-8
+	utf8Reader := transform.NewReader(reader, simplifiedchinese.GBK.NewDecoder())
+
+	var items []ParsedBOMItem
+	scanner := bufio.NewScanner(utf8Reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	lineNo := 0
+	itemNum := 0
+	for scanner.Scan() {
+		lineNo++
+		line := strings.TrimRight(scanner.Text(), "\r\n")
+		if line == "" {
+			continue
+		}
+		if lineNo == 1 {
+			continue
+		}
+
+		fields := strings.Split(line, "\t")
+		for i := range fields {
+			fields[i] = strings.Trim(fields[i], "\"")
+		}
+
+		if len(fields) < 4 || fields[3] == "" {
+			continue
+		}
+
+		// 备注列为 NC 的跳过
+		if len(fields) > 7 && strings.EqualFold(strings.TrimSpace(fields[7]), "NC") {
+			continue
+		}
+
+		itemNum++
+
+		qty := 1.0
+		if q, parseErr := strconv.ParseFloat(fields[1], 64); parseErr == nil {
+			qty = q
+		}
+
+		reference := ""
+		if len(fields) > 2 {
+			reference = fields[2]
+		}
+
+		componentName := fields[3]
+		name := componentName
+		if idx := strings.Index(componentName, ","); idx > 0 {
+			name = componentName[:idx]
+		}
+
+		manufacturer := ""
+		if len(fields) > 4 {
+			manufacturer = fields[4]
+		}
+
+		manufacturerPN := ""
+		if len(fields) > 6 {
+			manufacturerPN = fields[6]
+		}
+
+		categoryName, _ := inferCategoryFromReference(reference)
+
+		items = append(items, ParsedBOMItem{
+			ItemNumber:     itemNum,
+			Reference:      reference,
+			Name:           name,
+			Specification:  componentName,
+			Quantity:       qty,
+			Unit:           "pcs",
+			Category:       categoryName,
+			Manufacturer:   manufacturer,
+			ManufacturerPN: manufacturerPN,
+		})
+	}
+
+	if scanErr := scanner.Err(); scanErr != nil {
+		return nil, fmt.Errorf("read rep file: %w", scanErr)
+	}
+
+	return items, nil
+}
+
+// ParseExcelBOM 解析Excel BOM返回预览数据，不保存
+func (s *ProjectBOMService) ParseExcelBOM(ctx context.Context, f *excelize.File) ([]ParsedBOMItem, error) {
+	sheet := f.GetSheetName(0)
+	rows, err := f.GetRows(sheet)
+	if err != nil {
+		return nil, fmt.Errorf("read excel: %w", err)
+	}
+
+	var items []ParsedBOMItem
+	if len(rows) < 2 {
+		return items, nil
+	}
+
+	itemNum := 0
+	for _, row := range rows[1:] {
+		if len(row) < 3 || row[2] == "" {
+			continue
+		}
+
+		itemNum++
+		item := ParsedBOMItem{
+			ItemNumber: itemNum,
+			Unit:       "pcs",
+		}
+
+		if len(row) > 1 {
+			item.Category = row[1]
+		}
+		if len(row) > 2 {
+			item.Name = row[2]
+		}
+		if len(row) > 3 {
+			item.Specification = row[3]
+		}
+		if len(row) > 4 {
+			if q, err := strconv.ParseFloat(row[4], 64); err == nil {
+				item.Quantity = q
+			} else {
+				item.Quantity = 1
+			}
+		}
+		if len(row) > 5 && row[5] != "" {
+			item.Unit = row[5]
+		}
+		if len(row) > 6 {
+			item.Reference = row[6]
+		}
+		if len(row) > 7 {
+			item.Manufacturer = row[7]
+		}
+		if len(row) > 8 {
+			item.ManufacturerPN = row[8]
+		}
+
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
 // ==================== Phase 3: EBOM→MBOM转换 + 版本对比 ====================
 
 // ConvertToMBOM 将EBOM一键转换为MBOM
@@ -1224,6 +1370,20 @@ func mapCategoryToIDAndCode(category string) (string, string) {
 	default:
 		return "mcat_el_oth", "EL-OTH"
 	}
+}
+
+// ---- ParsedBOMItem for parse-only preview ----
+
+type ParsedBOMItem struct {
+	ItemNumber     int     `json:"item_number"`
+	Reference      string  `json:"reference"`
+	Name           string  `json:"name"`
+	Specification  string  `json:"specification"`
+	Quantity       float64 `json:"quantity"`
+	Unit           string  `json:"unit"`
+	Category       string  `json:"category"`
+	Manufacturer   string  `json:"manufacturer"`
+	ManufacturerPN string  `json:"manufacturer_pn"`
 }
 
 // ---- Phase 2/3/4 DTOs ----

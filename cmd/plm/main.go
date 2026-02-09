@@ -696,6 +696,9 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 			// Phase 2: BOM导入模板下载
 			authorized.GET("/bom-template", h.ProjectBOM.DownloadTemplate)
 
+			// BOM解析预览（不保存）
+			authorized.POST("/bom/parse", h.ProjectBOM.ParseBOM)
+
 			// Phase 3: BOM版本对比
 			authorized.GET("/bom-compare", h.ProjectBOM.CompareBOMs)
 

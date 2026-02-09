@@ -305,6 +305,46 @@ func (h *BOMHandler) ImportBOM(c *gin.Context) {
 	}
 }
 
+// ParseBOM POST /api/v1/bom/parse — parse BOM file without saving (preview)
+func (h *BOMHandler) ParseBOM(c *gin.Context) {
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		BadRequest(c, "请上传BOM文件")
+		return
+	}
+	defer file.Close()
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+
+	switch ext {
+	case ".rep":
+		items, err := h.svc.ParsePADSBOM(c.Request.Context(), file)
+		if err != nil {
+			BadRequest(c, err.Error())
+			return
+		}
+		Success(c, gin.H{"items": items})
+
+	case ".xlsx", ".xls":
+		f, err := excelize.OpenReader(file)
+		if err != nil {
+			BadRequest(c, "无法解析Excel文件: "+err.Error())
+			return
+		}
+		defer f.Close()
+
+		items, err := h.svc.ParseExcelBOM(c.Request.Context(), f)
+		if err != nil {
+			BadRequest(c, err.Error())
+			return
+		}
+		Success(c, gin.H{"items": items})
+
+	default:
+		BadRequest(c, "不支持的文件格式，请上传 .xlsx、.xls 或 .rep 文件")
+	}
+}
+
 // DownloadTemplate GET /api/v1/bom-template
 func (h *BOMHandler) DownloadTemplate(c *gin.Context) {
 	f, err := h.svc.GenerateTemplate()
