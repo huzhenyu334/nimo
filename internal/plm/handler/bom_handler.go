@@ -2,6 +2,8 @@ package handler
 
 import (
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"github.com/bitfantasy/nimo/internal/plm/service"
 	"github.com/gin-gonic/gin"
@@ -263,27 +265,44 @@ func (h *BOMHandler) ExportBOM(c *gin.Context) {
 func (h *BOMHandler) ImportBOM(c *gin.Context) {
 	bomID := c.Param("bomId")
 
-	file, _, err := c.Request.FormFile("file")
+	file, header, err := c.Request.FormFile("file")
 	if err != nil {
-		BadRequest(c, "请上传Excel文件")
+		BadRequest(c, "请上传BOM文件")
 		return
 	}
 	defer file.Close()
 
-	f, err := excelize.OpenReader(file)
-	if err != nil {
-		BadRequest(c, "无法解析Excel文件: "+err.Error())
-		return
-	}
-	defer f.Close()
+	ext := strings.ToLower(filepath.Ext(header.Filename))
 
-	result, err := h.svc.ImportBOM(c.Request.Context(), bomID, f)
-	if err != nil {
-		BadRequest(c, err.Error())
-		return
-	}
+	switch ext {
+	case ".rep":
+		// PADS BOM格式
+		result, err := h.svc.ImportPADSBOM(c.Request.Context(), bomID, file)
+		if err != nil {
+			BadRequest(c, err.Error())
+			return
+		}
+		Success(c, result)
 
-	Success(c, result)
+	case ".xlsx", ".xls":
+		// Excel格式
+		f, err := excelize.OpenReader(file)
+		if err != nil {
+			BadRequest(c, "无法解析Excel文件: "+err.Error())
+			return
+		}
+		defer f.Close()
+
+		result, err := h.svc.ImportBOM(c.Request.Context(), bomID, f)
+		if err != nil {
+			BadRequest(c, err.Error())
+			return
+		}
+		Success(c, result)
+
+	default:
+		BadRequest(c, "不支持的文件格式，请上传 .xlsx、.xls 或 .rep 文件")
+	}
 }
 
 // DownloadTemplate GET /api/v1/bom-template

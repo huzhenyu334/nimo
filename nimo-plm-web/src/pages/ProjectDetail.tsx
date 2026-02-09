@@ -1012,13 +1012,13 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
             <Button icon={<DownloadOutlined />} loading={exportLoading} onClick={handleExportExcel}>导出Excel</Button>
           </Tooltip>
           <Upload
-            accept=".xlsx,.xls"
+            accept=".xlsx,.xls,.rep"
             showUploadList={false}
             beforeUpload={(file) => { handleImportExcel(file); return false; }}
             disabled={!(s === 'draft' || s === 'rejected')}
           >
-            <Tooltip title={s === 'draft' || s === 'rejected' ? '导入Excel' : '仅草稿/已驳回状态可导入'}>
-              <Button icon={<UploadOutlined />} loading={importLoading} disabled={!(s === 'draft' || s === 'rejected')}>导入Excel</Button>
+            <Tooltip title={s === 'draft' || s === 'rejected' ? '支持Excel(.xlsx)和PADS(.rep)格式' : '仅草稿/已驳回状态可导入'}>
+              <Button icon={<UploadOutlined />} loading={importLoading} disabled={!(s === 'draft' || s === 'rejected')}>导入BOM</Button>
             </Tooltip>
           </Upload>
           <Tooltip title="下载导入模板">

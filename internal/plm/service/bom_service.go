@@ -1,17 +1,22 @@
 package service
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bitfantasy/nimo/internal/plm/entity"
 	"github.com/bitfantasy/nimo/internal/plm/repository"
 	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 type ProjectBOMService struct {
@@ -631,6 +636,181 @@ func (s *ProjectBOMService) ImportBOM(ctx context.Context, bomID string, f *exce
 	}
 
 	return result, nil
+}
+
+// ImportPADSBOM 从PADS BOM (.rep文件) 导入BOM行项
+func (s *ProjectBOMService) ImportPADSBOM(ctx context.Context, bomID string, reader io.Reader) (*ImportResult, error) {
+	bom, err := s.bomRepo.FindByID(ctx, bomID)
+	if err != nil {
+		return nil, fmt.Errorf("bom not found: %w", err)
+	}
+	if bom.Status != "draft" && bom.Status != "rejected" {
+		return nil, fmt.Errorf("只有草稿或被驳回的BOM才能导入")
+	}
+
+	// GBK → UTF-8
+	utf8Reader := transform.NewReader(reader, simplifiedchinese.GBK.NewDecoder())
+
+	result := &ImportResult{}
+
+	// 获取当前最大item_number
+	existingCount, _ := s.bomRepo.CountItems(ctx, bomID)
+	itemNum := int(existingCount)
+
+	var entities []entity.ProjectBOMItem
+	scanner := bufio.NewScanner(utf8Reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		line := strings.TrimRight(scanner.Text(), "\r\n")
+		if line == "" {
+			continue
+		}
+		// 第一行是表头，跳过
+		if lineNo == 1 {
+			continue
+		}
+
+		fields := strings.Split(line, "\t")
+		// 去除每个字段的双引号
+		for i := range fields {
+			fields[i] = strings.Trim(fields[i], "\"")
+		}
+
+		// 至少需要4列（序号、数量、参考编号、元件名称）
+		if len(fields) < 4 || fields[3] == "" {
+			result.Failed++
+			continue
+		}
+
+		// 备注列（第8列，index 7）为 NC 的跳过
+		if len(fields) > 7 && strings.EqualFold(strings.TrimSpace(fields[7]), "NC") {
+			continue
+		}
+
+		itemNum++
+
+		// 解析数量
+		qty := 1.0
+		if q, parseErr := strconv.ParseFloat(fields[1], 64); parseErr == nil {
+			qty = q
+		}
+
+		// 参考编号
+		reference := ""
+		if len(fields) > 2 {
+			reference = fields[2]
+		}
+
+		// 元件名称：逗号前的部分作为Name，完整作为Specification
+		componentName := fields[3]
+		name := componentName
+		if idx := strings.Index(componentName, ","); idx > 0 {
+			name = componentName[:idx]
+		}
+
+		// 制造商
+		manufacturer := ""
+		if len(fields) > 4 {
+			manufacturer = fields[4]
+		}
+
+		// 说明 + 备注合并为Notes
+		notes := ""
+		if len(fields) > 5 {
+			notes = fields[5]
+		}
+		if len(fields) > 7 && fields[7] != "" {
+			if notes != "" {
+				notes += "; "
+			}
+			notes += fields[7]
+		}
+
+		// Part Number
+		manufacturerPN := ""
+		if len(fields) > 6 {
+			manufacturerPN = fields[6]
+		}
+
+		// 从参考编号前缀自动推断分类
+		category := inferCategoryFromReference(reference)
+
+		item := entity.ProjectBOMItem{
+			ID:             uuid.New().String()[:32],
+			BOMID:          bomID,
+			ItemNumber:     itemNum,
+			Category:       category,
+			Name:           name,
+			Specification:  componentName,
+			Quantity:       qty,
+			Unit:           "pcs",
+			Reference:      reference,
+			Manufacturer:   manufacturer,
+			ManufacturerPN: manufacturerPN,
+			Notes:          notes,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+
+		// 尝试匹配物料库
+		mat, matchErr := s.bomRepo.MatchMaterialByNameAndPN(ctx, item.Name, item.ManufacturerPN)
+		if matchErr == nil && mat != nil {
+			item.MaterialID = &mat.ID
+			result.Matched++
+		}
+
+		entities = append(entities, item)
+		result.Success++
+	}
+
+	if scanErr := scanner.Err(); scanErr != nil {
+		return nil, fmt.Errorf("read rep file: %w", scanErr)
+	}
+
+	if len(entities) > 0 {
+		if err := s.bomRepo.BatchCreateItems(ctx, entities); err != nil {
+			return nil, fmt.Errorf("batch create: %w", err)
+		}
+		s.updateBOMCost(ctx, bomID)
+	}
+
+	return result, nil
+}
+
+// inferCategoryFromReference 从参考编号前缀推断物料分类
+func inferCategoryFromReference(reference string) string {
+	if reference == "" {
+		return ""
+	}
+	// 取第一个位号（空格分隔）
+	first := strings.Fields(reference)[0]
+	// 去除尾部数字和'-'，提取字母前缀
+	prefix := strings.ToUpper(strings.TrimRight(first, "0123456789-"))
+
+	switch prefix {
+	case "C":
+		return "电容"
+	case "R":
+		return "电阻"
+	case "L":
+		return "电感"
+	case "U":
+		return "IC"
+	case "Q":
+		return "晶体管"
+	case "E", "ESD":
+		return "ESD器件"
+	case "CON":
+		return "连接器"
+	case "Y":
+		return "晶振"
+	case "TP":
+		return "测试点"
+	default:
+		return ""
+	}
 }
 
 // GenerateTemplate 生成BOM导入模板xlsx
