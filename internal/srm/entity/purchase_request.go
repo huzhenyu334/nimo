@@ -64,6 +64,20 @@ type PRItem struct {
 	Specification string   `json:"specification" gorm:"size:500"`
 	Category      string   `json:"category" gorm:"size:100"`
 
+	// 物料分类（用于前端分Tab）
+	SourceBOMType string  `json:"source_bom_type" gorm:"size:20"`  // EBOM/SBOM/ABOM/TOOLING
+	MaterialGroup string  `json:"material_group" gorm:"size:20"`   // electronic/structural/assembly/tooling
+
+	// 展示增强
+	ImageURL      string   `json:"image_url" gorm:"size:500"`       // 物料图片
+	ProcessType   string   `json:"process_type" gorm:"size:100"`    // 工艺类型（CNC/注塑/FPC/光学研磨等）
+	ToolingCost   *float64 `json:"tooling_cost" gorm:"type:decimal(12,2)"` // 模具费/治具费
+	ToolingStatus string   `json:"tooling_status" gorm:"size:20"`   // 模具状态: none/designing/making/done
+
+	// 治具专用
+	JigPhase    string `json:"jig_phase" gorm:"size:20"`    // 治具阶段: design/fabrication/acceptance
+	JigProgress int    `json:"jig_progress" gorm:"default:0"` // 治具进度百分比
+
 	// 需求数量
 	Quantity float64 `json:"quantity" gorm:"type:decimal(10,2);not null"`
 	Unit     string  `json:"unit" gorm:"size:20;default:pcs"`

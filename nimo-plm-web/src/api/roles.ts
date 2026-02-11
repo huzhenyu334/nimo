@@ -40,11 +40,11 @@ export const roleApi = {
     const res = await apiClient.get('/roles');
     return res.data.data?.items || [];
   },
-  create: async (data: { code: string; name: string; sort_order?: number }): Promise<Role> => {
+  create: async (data: { name: string; sort_order?: number }): Promise<Role> => {
     const res = await apiClient.post('/roles', data);
     return res.data.data;
   },
-  update: async (id: string, data: { code?: string; name?: string; sort_order?: number }): Promise<Role> => {
+  update: async (id: string, data: { name?: string; sort_order?: number }): Promise<Role> => {
     const res = await apiClient.put(`/roles/${id}`, data);
     return res.data.data;
   },

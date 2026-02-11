@@ -293,7 +293,19 @@ func (h *BOMHandler) ImportBOM(c *gin.Context) {
 		}
 		defer f.Close()
 
-		result, err := h.svc.ImportBOM(c.Request.Context(), bomID, f)
+		// 根据BOM类型路由到不同的导入方法
+		bom, err := h.svc.GetBOM(c.Request.Context(), bomID)
+		if err != nil {
+			BadRequest(c, "BOM not found: "+err.Error())
+			return
+		}
+
+		var result *service.ImportResult
+		if bom.BOMType == "SBOM" {
+			result, err = h.svc.ImportStructuralBOM(c.Request.Context(), bomID, f)
+		} else {
+			result, err = h.svc.ImportBOM(c.Request.Context(), bomID, f)
+		}
 		if err != nil {
 			BadRequest(c, err.Error())
 			return
@@ -345,17 +357,24 @@ func (h *BOMHandler) ParseBOM(c *gin.Context) {
 	}
 }
 
-// DownloadTemplate GET /api/v1/bom-template
+// DownloadTemplate GET /api/v1/bom-template?bom_type=SBOM
 func (h *BOMHandler) DownloadTemplate(c *gin.Context) {
-	f, err := h.svc.GenerateTemplate()
+	bomType := c.Query("bom_type") // EBOM(默认) 或 SBOM
+
+	f, err := h.svc.GenerateTemplate(bomType)
 	if err != nil {
 		InternalError(c, err.Error())
 		return
 	}
 	defer f.Close()
 
+	filename := "BOM_Import_Template.xlsx"
+	if bomType == "SBOM" {
+		filename = "SBOM_Import_Template.xlsx"
+	}
+
 	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	c.Header("Content-Disposition", "attachment; filename=\"BOM_Import_Template.xlsx\"")
+	c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
 	c.Header("Content-Transfer-Encoding", "binary")
 
 	if err := f.Write(c.Writer); err != nil {

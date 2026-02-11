@@ -213,6 +213,96 @@ export interface ActivityLog {
   created_at: string;
 }
 
+// --- Settlement Types ---
+
+export interface Settlement {
+  id: string;
+  settlement_code: string;
+  supplier_id: string;
+  period_start?: string;
+  period_end?: string;
+  status: string;
+  po_amount?: number;
+  received_amount?: number;
+  deduction?: number;
+  final_amount?: number;
+  currency: string;
+  invoice_no: string;
+  invoice_amount?: number;
+  invoice_url: string;
+  confirmed_by_buyer: boolean;
+  confirmed_by_supplier: boolean;
+  confirmed_at?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  notes: string;
+  disputes?: SettlementDispute[];
+  supplier?: Supplier;
+}
+
+export interface SettlementDispute {
+  id: string;
+  settlement_id: string;
+  dispute_type: string;
+  description: string;
+  amount_diff?: number;
+  status: string;
+  resolution: string;
+  created_at: string;
+}
+
+// --- CorrectiveAction Types ---
+
+export interface CorrectiveAction {
+  id: string;
+  ca_code: string;
+  inspection_id: string;
+  supplier_id: string;
+  problem_desc: string;
+  severity: string;
+  status: string;
+  root_cause: string;
+  corrective_action: string;
+  preventive_action: string;
+  response_deadline?: string;
+  responded_at?: string;
+  verified_at?: string;
+  closed_at?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// --- SupplierEvaluation Types ---
+
+export interface SupplierEvaluation {
+  id: string;
+  supplier_id: string;
+  period: string;
+  eval_type: string;
+  quality_score?: number;
+  delivery_score?: number;
+  price_score?: number;
+  service_score?: number;
+  total_score?: number;
+  quality_weight: number;
+  delivery_weight: number;
+  price_weight: number;
+  service_weight: number;
+  grade: string;
+  total_pos: number;
+  on_time_pos: number;
+  quality_passed: number;
+  quality_total: number;
+  remarks: string;
+  evaluator_id: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  supplier?: Supplier;
+}
+
 // ============ API ============
 
 export const srmApi = {
@@ -452,6 +542,189 @@ export const srmApi = {
     page_size?: number;
   }): Promise<PaginatedResponse<ActivityLog>> => {
     const response = await apiClient.get<ApiResponse<PaginatedResponse<ActivityLog>>>(`/srm/activities/${entityType}/${entityId}`, { params });
+    return response.data.data;
+  },
+
+  // --- Settlements ---
+  listSettlements: async (params?: {
+    supplier_id?: string;
+    status?: string;
+    page?: number;
+    page_size?: number;
+  }): Promise<PaginatedResponse<Settlement>> => {
+    const response = await apiClient.get<ApiResponse<PaginatedResponse<Settlement>>>('/srm/settlements', { params });
+    return response.data.data;
+  },
+
+  getSettlement: async (id: string): Promise<Settlement> => {
+    const response = await apiClient.get<ApiResponse<Settlement>>(`/srm/settlements/${id}`);
+    return response.data.data;
+  },
+
+  createSettlement: async (data: {
+    supplier_id: string;
+    period_start?: string;
+    period_end?: string;
+    deduction?: number;
+    currency?: string;
+    notes?: string;
+  }): Promise<Settlement> => {
+    const response = await apiClient.post<ApiResponse<Settlement>>('/srm/settlements', data);
+    return response.data.data;
+  },
+
+  updateSettlement: async (id: string, data: Partial<Settlement>): Promise<Settlement> => {
+    const response = await apiClient.put<ApiResponse<Settlement>>(`/srm/settlements/${id}`, data);
+    return response.data.data;
+  },
+
+  deleteSettlement: async (id: string): Promise<void> => {
+    await apiClient.delete(`/srm/settlements/${id}`);
+  },
+
+  confirmSettlementBuyer: async (id: string): Promise<Settlement> => {
+    const response = await apiClient.post<ApiResponse<Settlement>>(`/srm/settlements/${id}/confirm-buyer`);
+    return response.data.data;
+  },
+
+  confirmSettlementSupplier: async (id: string): Promise<Settlement> => {
+    const response = await apiClient.post<ApiResponse<Settlement>>(`/srm/settlements/${id}/confirm-supplier`);
+    return response.data.data;
+  },
+
+  addSettlementDispute: async (id: string, data: {
+    dispute_type: string;
+    description?: string;
+    amount_diff?: number;
+  }): Promise<SettlementDispute> => {
+    const response = await apiClient.post<ApiResponse<SettlementDispute>>(`/srm/settlements/${id}/disputes`, data);
+    return response.data.data;
+  },
+
+  updateSettlementDispute: async (settlementId: string, disputeId: string, data: Partial<SettlementDispute>): Promise<SettlementDispute> => {
+    const response = await apiClient.put<ApiResponse<SettlementDispute>>(`/srm/settlements/${settlementId}/disputes/${disputeId}`, data);
+    return response.data.data;
+  },
+
+  generateSettlement: async (data: {
+    supplier_id: string;
+    period_start: string;
+    period_end: string;
+  }): Promise<Settlement> => {
+    const response = await apiClient.post<ApiResponse<Settlement>>('/srm/settlements/generate', data);
+    return response.data.data;
+  },
+
+  // --- Corrective Actions ---
+  listCorrectiveActions: async (params?: {
+    supplier_id?: string;
+    status?: string;
+    severity?: string;
+    page?: number;
+    page_size?: number;
+  }): Promise<PaginatedResponse<CorrectiveAction>> => {
+    const response = await apiClient.get<ApiResponse<PaginatedResponse<CorrectiveAction>>>('/srm/corrective-actions', { params });
+    return response.data.data;
+  },
+
+  getCorrectiveAction: async (id: string): Promise<CorrectiveAction> => {
+    const response = await apiClient.get<ApiResponse<CorrectiveAction>>(`/srm/corrective-actions/${id}`);
+    return response.data.data;
+  },
+
+  createCorrectiveAction: async (data: {
+    inspection_id?: string;
+    supplier_id: string;
+    problem_desc: string;
+    severity: string;
+    response_deadline?: string;
+  }): Promise<CorrectiveAction> => {
+    const response = await apiClient.post<ApiResponse<CorrectiveAction>>('/srm/corrective-actions', data);
+    return response.data.data;
+  },
+
+  updateCorrectiveAction: async (id: string, data: Partial<CorrectiveAction>): Promise<CorrectiveAction> => {
+    const response = await apiClient.put<ApiResponse<CorrectiveAction>>(`/srm/corrective-actions/${id}`, data);
+    return response.data.data;
+  },
+
+  respondCorrectiveAction: async (id: string, data: {
+    root_cause: string;
+    corrective_action: string;
+    preventive_action?: string;
+  }): Promise<CorrectiveAction> => {
+    const response = await apiClient.post<ApiResponse<CorrectiveAction>>(`/srm/corrective-actions/${id}/respond`, data);
+    return response.data.data;
+  },
+
+  verifyCorrectiveAction: async (id: string): Promise<CorrectiveAction> => {
+    const response = await apiClient.post<ApiResponse<CorrectiveAction>>(`/srm/corrective-actions/${id}/verify`);
+    return response.data.data;
+  },
+
+  closeCorrectiveAction: async (id: string): Promise<CorrectiveAction> => {
+    const response = await apiClient.post<ApiResponse<CorrectiveAction>>(`/srm/corrective-actions/${id}/close`);
+    return response.data.data;
+  },
+
+  // --- Evaluations ---
+  listEvaluations: async (params?: {
+    supplier_id?: string;
+    status?: string;
+    eval_type?: string;
+    period?: string;
+    page?: number;
+    page_size?: number;
+  }): Promise<PaginatedResponse<SupplierEvaluation>> => {
+    const response = await apiClient.get<ApiResponse<PaginatedResponse<SupplierEvaluation>>>('/srm/evaluations', { params });
+    return response.data.data;
+  },
+
+  getEvaluation: async (id: string): Promise<SupplierEvaluation> => {
+    const response = await apiClient.get<ApiResponse<SupplierEvaluation>>(`/srm/evaluations/${id}`);
+    return response.data.data;
+  },
+
+  createEvaluation: async (data: {
+    supplier_id: string;
+    period: string;
+    eval_type?: string;
+    quality_score?: number;
+    delivery_score?: number;
+    price_score?: number;
+    service_score?: number;
+    remarks?: string;
+  }): Promise<SupplierEvaluation> => {
+    const response = await apiClient.post<ApiResponse<SupplierEvaluation>>('/srm/evaluations', data);
+    return response.data.data;
+  },
+
+  updateEvaluation: async (id: string, data: Partial<SupplierEvaluation>): Promise<SupplierEvaluation> => {
+    const response = await apiClient.put<ApiResponse<SupplierEvaluation>>(`/srm/evaluations/${id}`, data);
+    return response.data.data;
+  },
+
+  submitEvaluation: async (id: string): Promise<SupplierEvaluation> => {
+    const response = await apiClient.post<ApiResponse<SupplierEvaluation>>(`/srm/evaluations/${id}/submit`);
+    return response.data.data;
+  },
+
+  approveEvaluation: async (id: string): Promise<SupplierEvaluation> => {
+    const response = await apiClient.post<ApiResponse<SupplierEvaluation>>(`/srm/evaluations/${id}/approve`);
+    return response.data.data;
+  },
+
+  autoGenerateEvaluation: async (data: {
+    supplier_id: string;
+    period: string;
+    eval_type?: string;
+  }): Promise<SupplierEvaluation> => {
+    const response = await apiClient.post<ApiResponse<SupplierEvaluation>>('/srm/evaluations/auto-generate', data);
+    return response.data.data;
+  },
+
+  getSupplierEvaluationHistory: async (supplierId: string): Promise<SupplierEvaluation[]> => {
+    const response = await apiClient.get<ApiResponse<SupplierEvaluation[]>>(`/srm/evaluations/supplier/${supplierId}`);
     return response.data.data;
   },
 };

@@ -53,6 +53,7 @@ import {
   SendOutlined,
   LockOutlined,
   SearchOutlined,
+  ShoppingCartOutlined,
 } from '@ant-design/icons';
 import { projectApi, Project, Task } from '@/api/projects';
 import { projectBomApi, ProjectBOMItem, CreateProjectBOMRequest, BOMItemRequest } from '@/api/projectBom';
@@ -64,7 +65,9 @@ import { workflowApi, TaskActionLog } from '@/api/workflow';
 import { approvalApi } from '@/api/approval';
 import { taskFormApi, ParsedBOMItem } from '@/api/taskForms';
 import { userApi } from '@/api/users';
+import { srmApi } from '@/api/srm';
 import UserSelect from '@/components/UserSelect';
+import CMFPanel from '@/components/CMFPanel';
 import { ROLE_CODES, taskRoleApi, TaskRole } from '@/constants/roles';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
@@ -722,6 +725,14 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
     onError: () => message.error('转换失败'),
   });
 
+  const submitToSRMMutation = useMutation({
+    mutationFn: () => srmApi.createPRFromBOM({ project_id: projectId, bom_id: selectedBomId! }),
+    onSuccess: (pr) => {
+      message.success(`已创建采购需求 ${pr.pr_code}`);
+    },
+    onError: () => message.error('提交到SRM失败'),
+  });
+
   // Export Excel handler
   const handleExportExcel = async () => {
     if (!selectedBomId) return;
@@ -755,7 +766,7 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
   // Download template handler
   const handleDownloadTemplate = async () => {
     try {
-      await projectBomApi.downloadTemplate();
+      await projectBomApi.downloadTemplate(bomDetail?.bom_type);
     } catch {
       message.error('下载模板失败');
     }
@@ -892,83 +903,198 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
     );
   };
 
-  // Table columns
-  const columns: ColumnsType<ProjectBOMItem> = [
-    { title: '序号', dataIndex: 'item_number', width: 55, fixed: 'left',
-      render: (_, __, idx) => idx + 1 },
-    { title: '物料编码', width: 120,
-      render: (_, record) => {
-        const code = record.material?.code;
-        return (
-          <Space size={4}>
-            <Text code style={{ fontSize: 11 }}>{code || '-'}</Text>
-            {isEditable && (
-              <SearchOutlined
-                style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12 }}
-                onClick={() => { setEditingRowId(record.id); setMaterialModalOpen(true); }}
-              />
-            )}
-          </Space>
-        );
-      },
-    },
-    { title: '物料名称', dataIndex: 'name', width: 140,
-      render: (v, record) => renderEditableCell(v, record, 'name') },
-    { title: '规格描述', dataIndex: 'specification', width: 150, ellipsis: true,
-      render: (v, record) => renderEditableCell(v, record, 'specification') },
-    { title: '分类', dataIndex: 'category', width: 100,
-      render: (v, record) => renderEditableCell(v, record, 'category', 'select',
-        CATEGORY_OPTIONS.map(c => ({ label: c, value: c }))) },
-    { title: '数量', dataIndex: 'quantity', width: 70, align: 'right',
-      render: (v, record) => renderEditableCell(v, record, 'quantity', 'number') },
-    { title: '单位', dataIndex: 'unit', width: 55,
-      render: (v, record) => renderEditableCell(v, record, 'unit') },
-    { title: '单价(¥)', dataIndex: 'unit_price', width: 90, align: 'right',
-      render: (v, record) => renderEditableCell(v != null ? v.toFixed(2) : null, record, 'unit_price', 'number') },
-    { title: '小计(¥)', dataIndex: 'extended_cost', width: 90, align: 'right',
-      render: (v: number | null, record) => {
-        const cost = v ?? (record.quantity && record.unit_price ? record.quantity * record.unit_price : null);
-        return cost != null ? <Text strong style={{ color: '#cf1322' }}>¥{cost.toFixed(2)}</Text> : '-';
-      },
-    },
-    { title: '制造商', dataIndex: 'manufacturer', width: 110, ellipsis: true,
-      render: (v, record) => renderEditableCell(v, record, 'manufacturer') },
-    { title: '制造商料号', dataIndex: 'manufacturer_pn', width: 110, ellipsis: true,
-      render: (v, record) => renderEditableCell(v, record, 'manufacturer_pn') },
-    { title: '供应商', dataIndex: 'supplier', width: 110, ellipsis: true,
-      render: (v, record) => renderEditableCell(v, record, 'supplier') },
-    { title: '交期(天)', dataIndex: 'lead_time_days', width: 75, align: 'right',
-      render: (v, record) => renderEditableCell(v, record, 'lead_time_days', 'number') },
-    { title: '采购类型', dataIndex: 'procurement_type', width: 100,
-      render: (v, record) => renderEditableCell(
-        PROCUREMENT_OPTIONS.find(o => o.value === v)?.label?.split('（')[0] || v,
-        record, 'procurement_type', 'select', PROCUREMENT_OPTIONS) },
-    { title: '关键件', dataIndex: 'is_critical', width: 65, align: 'center',
-      render: (v: boolean, record) => isEditable ? (
-        <Checkbox checked={v} onChange={(e) => handleCellSave(record, 'is_critical', e.target.checked)} />
-      ) : (v ? <Tag color="red">是</Tag> : '-'),
-    },
-    { title: '备注', dataIndex: 'notes', width: 120, ellipsis: true,
-      render: (v, record) => renderEditableCell(v, record, 'notes') },
+  // SBOM下拉选项常量
+  const PROCESS_TYPE_OPTIONS = [
+    { label: '注塑', value: '注塑' }, { label: 'CNC', value: 'CNC' },
+    { label: '冲压', value: '冲压' }, { label: '模切', value: '模切' },
+    { label: '3D打印', value: '3D打印' }, { label: '激光切割', value: '激光切割' },
+    { label: 'SMT', value: 'SMT' }, { label: '手工', value: '手工' },
+  ];
+  const ASSEMBLY_METHOD_OPTIONS = [
+    { label: '卡扣', value: '卡扣' }, { label: '螺丝', value: '螺丝' },
+    { label: '胶合', value: '胶合' }, { label: '超声波焊接', value: '超声波焊接' },
+    { label: '热熔', value: '热熔' }, { label: '激光焊接', value: '激光焊接' },
+  ];
+  const TOLERANCE_GRADE_OPTIONS = [
+    { label: '普通', value: '普通' }, { label: '精密', value: '精密' }, { label: '超精密', value: '超精密' },
   ];
 
-  // Add operation column when editable
-  if (isEditable) {
-    columns.push({
-      title: '操作', width: 80, fixed: 'right', align: 'center',
-      render: (_, record) => (
-        <Space size={4}>
-          <Tooltip title="从物料库选择">
-            <Button size="small" type="text" icon={<SearchOutlined />}
-              onClick={() => { setEditingRowId(record.id); setMaterialModalOpen(true); }} />
-          </Tooltip>
-          <Popconfirm title="确认删除此行？" onConfirm={() => deleteItemMutation.mutate(record.id)}>
-            <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
-        </Space>
-      ),
-    });
-  }
+  // File upload handler for SBOM drawing files
+  const handleDrawingUpload = async (file: File, record: ProjectBOMItem, fileIdField: string, fileNameField: string) => {
+    try {
+      const result = await taskFormApi.uploadFile(file);
+      updateItemMutation.mutate({
+        itemId: record.id,
+        data: {
+          name: record.name,
+          quantity: record.quantity,
+          unit: record.unit,
+          [fileIdField]: result.id,
+          [fileNameField]: result.filename,
+        },
+      });
+      message.success('上传成功');
+    } catch {
+      message.error('上传失败');
+    }
+    return false;
+  };
+
+  // Dynamic table columns based on BOM type
+  const getColumns = (bomType: string, editable: boolean): ColumnsType<ProjectBOMItem> => {
+    // 共用列
+    const commonCols: ColumnsType<ProjectBOMItem> = [
+      { title: '序号', dataIndex: 'item_number', width: 55, fixed: 'left',
+        render: (_, __, idx) => idx + 1 },
+      { title: '物料编码', width: 120,
+        render: (_, record) => {
+          const code = record.material?.code;
+          return (
+            <Space size={4}>
+              <Text code style={{ fontSize: 11 }}>{code || '-'}</Text>
+              {editable && (
+                <SearchOutlined
+                  style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12 }}
+                  onClick={() => { setEditingRowId(record.id); setMaterialModalOpen(true); }}
+                />
+              )}
+            </Space>
+          );
+        },
+      },
+      { title: '物料名称', dataIndex: 'name', width: 140,
+        render: (v, record) => renderEditableCell(v, record, 'name') },
+      { title: '规格描述', dataIndex: 'specification', width: 150, ellipsis: true,
+        render: (v, record) => renderEditableCell(v, record, 'specification') },
+      { title: '分类', dataIndex: 'category', width: 100,
+        render: (v, record) => renderEditableCell(v, record, 'category', 'select',
+          CATEGORY_OPTIONS.map(c => ({ label: c, value: c }))) },
+      { title: '数量', dataIndex: 'quantity', width: 70, align: 'right',
+        render: (v, record) => renderEditableCell(v, record, 'quantity', 'number') },
+      { title: '单位', dataIndex: 'unit', width: 55,
+        render: (v, record) => renderEditableCell(v, record, 'unit') },
+    ];
+
+    // EBOM特有列
+    const ebomCols: ColumnsType<ProjectBOMItem> = [
+      { title: '单价(¥)', dataIndex: 'unit_price', width: 90, align: 'right',
+        render: (v, record) => renderEditableCell(v != null ? v.toFixed(2) : null, record, 'unit_price', 'number') },
+      { title: '小计(¥)', dataIndex: 'extended_cost', width: 90, align: 'right',
+        render: (v: number | null, record) => {
+          const cost = v ?? (record.quantity && record.unit_price ? record.quantity * record.unit_price : null);
+          return cost != null ? <Text strong style={{ color: '#cf1322' }}>¥{cost.toFixed(2)}</Text> : '-';
+        },
+      },
+      { title: '制造商', dataIndex: 'manufacturer', width: 110, ellipsis: true,
+        render: (v, record) => renderEditableCell(v, record, 'manufacturer') },
+      { title: '制造商料号', dataIndex: 'manufacturer_pn', width: 110, ellipsis: true,
+        render: (v, record) => renderEditableCell(v, record, 'manufacturer_pn') },
+      { title: '供应商', dataIndex: 'supplier', width: 110, ellipsis: true,
+        render: (v, record) => renderEditableCell(v, record, 'supplier') },
+      { title: '交期(天)', dataIndex: 'lead_time_days', width: 75, align: 'right',
+        render: (v, record) => renderEditableCell(v, record, 'lead_time_days', 'number') },
+      { title: '采购类型', dataIndex: 'procurement_type', width: 100,
+        render: (v, record) => renderEditableCell(
+          PROCUREMENT_OPTIONS.find(o => o.value === v)?.label?.split('（')[0] || v,
+          record, 'procurement_type', 'select', PROCUREMENT_OPTIONS) },
+      { title: '关键件', dataIndex: 'is_critical', width: 65, align: 'center',
+        render: (v: boolean, record) => editable ? (
+          <Checkbox checked={v} onChange={(e) => handleCellSave(record, 'is_critical', e.target.checked)} />
+        ) : (v ? <Tag color="red">是</Tag> : '-'),
+      },
+    ];
+
+    // SBOM特有列
+    const sbomCols: ColumnsType<ProjectBOMItem> = [
+      { title: '材质', dataIndex: 'material_type', width: 100,
+        render: (v, record) => renderEditableCell(v, record, 'material_type') },
+      { title: '工艺', dataIndex: 'process_type', width: 90,
+        render: (v, record) => renderEditableCell(v, record, 'process_type', 'select', PROCESS_TYPE_OPTIONS) },
+      { title: '颜色', dataIndex: 'color', width: 90,
+        render: (v, record) => renderEditableCell(v, record, 'color') },
+      { title: '表面处理', dataIndex: 'surface_treatment', width: 120,
+        render: (v, record) => renderEditableCell(v, record, 'surface_treatment') },
+      { title: '图纸编号', dataIndex: 'drawing_no', width: 100,
+        render: (v, record) => renderEditableCell(v, record, 'drawing_no') },
+      { title: '2D图纸', dataIndex: 'drawing_2d_file_name', width: 100,
+        render: (v, record) => (
+          <Space size={4}>
+            <Text style={{ fontSize: 11 }} ellipsis={{ tooltip: v }}>{v || '-'}</Text>
+            {editable && (
+              <Upload
+                showUploadList={false}
+                beforeUpload={(file) => handleDrawingUpload(file, record, 'drawing_2d_file_id', 'drawing_2d_file_name')}
+              >
+                <UploadOutlined style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12 }} />
+              </Upload>
+            )}
+          </Space>
+        ),
+      },
+      { title: '3D模型', dataIndex: 'drawing_3d_file_name', width: 100,
+        render: (v, record) => (
+          <Space size={4}>
+            <Text style={{ fontSize: 11 }} ellipsis={{ tooltip: v }}>{v || '-'}</Text>
+            {editable && (
+              <Upload
+                showUploadList={false}
+                beforeUpload={(file) => handleDrawingUpload(file, record, 'drawing_3d_file_id', 'drawing_3d_file_name')}
+              >
+                <UploadOutlined style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12 }} />
+              </Upload>
+            )}
+          </Space>
+        ),
+      },
+      { title: '重量g', dataIndex: 'weight_grams', width: 75, align: 'right',
+        render: (v, record) => renderEditableCell(v, record, 'weight_grams', 'number') },
+      { title: '目标价', dataIndex: 'target_price', width: 90, align: 'right',
+        render: (v, record) => renderEditableCell(v != null ? `¥${v.toFixed(2)}` : null, record, 'target_price', 'number') },
+      { title: '模具费', dataIndex: 'tooling_estimate', width: 90, align: 'right',
+        render: (v, record) => renderEditableCell(v != null ? `¥${v.toFixed(2)}` : null, record, 'tooling_estimate', 'number') },
+      { title: '成本备注', dataIndex: 'cost_notes', width: 120, ellipsis: true,
+        render: (v, record) => renderEditableCell(v, record, 'cost_notes') },
+      { title: '外观件', dataIndex: 'is_appearance_part', width: 65, align: 'center',
+        render: (v: boolean, record) => editable ? (
+          <Checkbox checked={v} onChange={(e) => handleCellSave(record, 'is_appearance_part', e.target.checked)} />
+        ) : (v ? <Tag color="blue">是</Tag> : '-'),
+      },
+      { title: '装配方式', dataIndex: 'assembly_method', width: 100,
+        render: (v, record) => renderEditableCell(v, record, 'assembly_method', 'select', ASSEMBLY_METHOD_OPTIONS) },
+      { title: '公差等级', dataIndex: 'tolerance_grade', width: 85,
+        render: (v, record) => renderEditableCell(v, record, 'tolerance_grade', 'select', TOLERANCE_GRADE_OPTIONS) },
+    ];
+
+    const typeCols = bomType === 'SBOM' ? sbomCols : ebomCols;
+    const noteCol: ColumnsType<ProjectBOMItem> = [
+      { title: '备注', dataIndex: 'notes', width: 120, ellipsis: true,
+        render: (v, record) => renderEditableCell(v, record, 'notes') },
+    ];
+
+    const cols = [...commonCols, ...typeCols, ...noteCol];
+
+    if (editable) {
+      cols.push({
+        title: '操作', width: 80, fixed: 'right', align: 'center',
+        render: (_, record) => (
+          <Space size={4}>
+            <Tooltip title="从物料库选择">
+              <Button size="small" type="text" icon={<SearchOutlined />}
+                onClick={() => { setEditingRowId(record.id); setMaterialModalOpen(true); }} />
+            </Tooltip>
+            <Popconfirm title="确认删除此行？" onConfirm={() => deleteItemMutation.mutate(record.id)}>
+              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
+          </Space>
+        ),
+      });
+    }
+
+    return cols;
+  };
+
+  const bomType = bomDetail?.bom_type || 'EBOM';
+  const columns = getColumns(bomType, isEditable);
 
   // Stats
   const items = bomDetail?.items || [];
@@ -978,6 +1104,15 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
     return sum + (cost || 0);
   }, 0);
   const criticalCount = items.filter(i => i.is_critical).length;
+  // SBOM stats
+  const isSBOM = bomType === 'SBOM';
+  const appearanceCount = items.filter(i => i.is_appearance_part).length;
+  const totalWeight = items.reduce((sum, item) => sum + (item.weight_grams || 0), 0);
+  const totalTargetPrice = items.reduce((sum, item) => {
+    const price = item.target_price || 0;
+    return sum + price * (item.quantity || 1);
+  }, 0);
+  const totalTooling = items.reduce((sum, item) => sum + (item.tooling_estimate || 0), 0);
 
   // Action buttons based on status
   const renderActions = () => {
@@ -1032,6 +1167,14 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
           <Tooltip title="版本对比">
             <Button icon={<SwapOutlined />} onClick={() => { setCompareModalOpen(true); setCompareResult(null); setCompareBom1(undefined); setCompareBom2(undefined); }}>版本对比</Button>
           </Tooltip>
+          {items.length > 0 && (
+            <Popconfirm title="确认将此BOM提交到SRM创建采购需求？" onConfirm={() => submitToSRMMutation.mutate()}>
+              <Button type="primary" icon={<ShoppingCartOutlined />} loading={submitToSRMMutation.isPending}
+                style={{ background: '#722ed1', borderColor: '#722ed1' }}>
+                提交到SRM
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       </Space>
     );
@@ -1080,17 +1223,40 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
                 </div>
               </div>
               <div style={{ borderLeft: '1px solid #f0f0f0', paddingLeft: 16 }}>
-                <Text type="secondary" style={{ fontSize: 12 }}>物料数</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>{isSBOM ? '零件数' : '物料数'}</Text>
                 <div><Text strong>{totalItems}</Text></div>
               </div>
-              <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>总成本</Text>
-                <div><Text strong style={{ color: '#cf1322', fontSize: 16 }}>¥{totalCost.toFixed(2)}</Text></div>
-              </div>
-              <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>关键件</Text>
-                <div><Text strong style={{ color: criticalCount > 0 ? '#cf1322' : undefined }}>{criticalCount}</Text></div>
-              </div>
+              {isSBOM ? (
+                <>
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>外观件</Text>
+                    <div><Text strong style={{ color: appearanceCount > 0 ? '#1677ff' : undefined }}>{appearanceCount}</Text></div>
+                  </div>
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>总重量</Text>
+                    <div><Text strong>{totalWeight.toFixed(1)}g</Text></div>
+                  </div>
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>目标成本</Text>
+                    <div><Text strong style={{ color: '#cf1322', fontSize: 16 }}>¥{totalTargetPrice.toFixed(2)}</Text></div>
+                  </div>
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>模具费</Text>
+                    <div><Text strong style={{ color: '#cf1322' }}>¥{totalTooling.toFixed(2)}</Text></div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>总成本</Text>
+                    <div><Text strong style={{ color: '#cf1322', fontSize: 16 }}>¥{totalCost.toFixed(2)}</Text></div>
+                  </div>
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>关键件</Text>
+                    <div><Text strong style={{ color: criticalCount > 0 ? '#cf1322' : undefined }}>{criticalCount}</Text></div>
+                  </div>
+                </>
+              )}
               {bomDetail.creator && (
                 <div>
                   <Text type="secondary" style={{ fontSize: 12 }}>创建者</Text>
@@ -1134,7 +1300,7 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
             rowKey="id"
             size="small"
             pagination={false}
-            scroll={{ x: 1800, y: 450 }}
+            scroll={{ x: isSBOM ? 2300 : 1800, y: 450 }}
             locale={{ emptyText: '暂无物料行项，点击下方添加' }}
             rowClassName={(record) => record.is_critical ? 'critical-row' : ''}
           />
@@ -1155,11 +1321,22 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
               )}
             </div>
             <Space size={24}>
-              <Text type="secondary">共 <Text strong>{totalItems}</Text> 项物料</Text>
-              <Text type="secondary">关键件 <Text strong style={{ color: criticalCount > 0 ? '#cf1322' : undefined }}>{criticalCount}</Text> 项</Text>
-              <Text>
-                总成本 <Text strong style={{ color: '#cf1322', fontSize: 18 }}>¥{totalCost.toFixed(2)}</Text>
-              </Text>
+              <Text type="secondary">共 <Text strong>{totalItems}</Text> 项{isSBOM ? '零件' : '物料'}</Text>
+              {isSBOM ? (
+                <>
+                  <Text type="secondary">外观件 <Text strong style={{ color: appearanceCount > 0 ? '#1677ff' : undefined }}>{appearanceCount}</Text> 项</Text>
+                  <Text type="secondary">总重量 <Text strong>{totalWeight.toFixed(1)}g</Text></Text>
+                  <Text>目标成本合计 <Text strong style={{ color: '#cf1322', fontSize: 18 }}>¥{totalTargetPrice.toFixed(2)}</Text></Text>
+                  <Text>模具费合计 <Text strong style={{ color: '#cf1322', fontSize: 18 }}>¥{totalTooling.toFixed(2)}</Text></Text>
+                </>
+              ) : (
+                <>
+                  <Text type="secondary">关键件 <Text strong style={{ color: criticalCount > 0 ? '#cf1322' : undefined }}>{criticalCount}</Text> 项</Text>
+                  <Text>
+                    总成本 <Text strong style={{ color: '#cf1322', fontSize: 18 }}>¥{totalCost.toFixed(2)}</Text>
+                  </Text>
+                </>
+              )}
             </Space>
           </div>
         </>
@@ -2273,6 +2450,11 @@ const ProjectDetail: React.FC = () => {
               key: 'bom',
               label: 'BOM管理',
               children: <BOMTab projectId={project.id} />,
+            },
+            {
+              key: 'cmf',
+              label: 'CMF配色',
+              children: <CMFPanel projectId={project.id} />,
             },
             {
               key: 'documents',

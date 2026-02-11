@@ -18,6 +18,9 @@ import {
   ShoppingCartOutlined,
   SafetyCertificateOutlined,
   AppstoreOutlined,
+  AccountBookOutlined,
+  ToolOutlined,
+  StarOutlined,
 } from '@ant-design/icons';
 import { Dropdown, Avatar, Space, Spin } from 'antd';
 import { useAuth } from '@/contexts/AuthContext';
@@ -112,6 +115,10 @@ const MainLayout: React.FC = () => {
           { path: '/srm/purchase-requests', name: '采购需求', icon: <FileTextOutlined /> },
           { path: '/srm/purchase-orders', name: '采购订单', icon: <ShoppingCartOutlined /> },
           { path: '/srm/inspections', name: '来料检验', icon: <SafetyCertificateOutlined /> },
+          { path: '/srm/settlements', name: '对账结算', icon: <AccountBookOutlined /> },
+          { path: '/srm/corrective-actions', name: '8D改进', icon: <ToolOutlined /> },
+          { path: '/srm/evaluations', name: '供应商评价', icon: <StarOutlined /> },
+          { path: '/srm/equipment', name: '通用设备', icon: <ToolOutlined /> },
           { path: '/srm', name: '采购总览', icon: <DashboardOutlined /> },
         ],
       },

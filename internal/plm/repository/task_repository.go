@@ -105,7 +105,7 @@ func (r *TaskRepository) ListByAssignee(ctx context.Context, userID string, filt
 	err := query.
 		Preload("Project").
 		Preload("Assignee").
-		Order("due_date ASC, priority DESC").
+		Order("created_at DESC").
 		Find(&tasks).Error
 
 	return tasks, err
@@ -311,8 +311,11 @@ func (r *TaskRepository) ListByAssigneeWithPaging(ctx context.Context, userID st
 
 	query := r.db.WithContext(ctx).Model(&entity.Task{}).Where("assignee_id = ?", userID)
 
+	// 如果没有指定status筛选，默认排除pending任务（前置依赖未完成的不显示）
 	if status, ok := filters["status"].(string); ok && status != "" {
 		query = query.Where("status = ?", status)
+	} else {
+		query = query.Where("status NOT IN ?", []string{"pending", "cancelled"})
 	}
 	if priority, ok := filters["priority"].(string); ok && priority != "" {
 		query = query.Where("priority = ?", priority)
@@ -326,7 +329,7 @@ func (r *TaskRepository) ListByAssigneeWithPaging(ctx context.Context, userID st
 	err := query.
 		Preload("Project").
 		Preload("Assignee").
-		Order("due_date ASC, priority DESC").
+		Order("created_at DESC").
 		Offset(offset).
 		Limit(pageSize).
 		Find(&tasks).Error
@@ -383,6 +386,21 @@ func (r *TaskRepository) ListDependentTasks(ctx context.Context, taskID string) 
 		Where("id IN (SELECT task_id FROM task_dependencies WHERE depends_on_task_id = ?)", taskID).
 		Find(&tasks).Error
 	return tasks, err
+}
+
+// FindByProjectAndCode 按项目ID + 任务Code查找任务
+func (r *TaskRepository) FindByProjectAndCode(ctx context.Context, projectID, code string) (*entity.Task, error) {
+	var task entity.Task
+	err := r.db.WithContext(ctx).
+		Where("project_id = ? AND code = ?", projectID, code).
+		First(&task).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &task, nil
 }
 
 // UpdateAssigneeByRole 按角色批量更新任务的 assignee_id（大小写不敏感匹配）

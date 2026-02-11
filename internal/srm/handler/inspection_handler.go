@@ -14,6 +14,50 @@ func NewInspectionHandler(svc *service.InspectionService) *InspectionHandler {
 	return &InspectionHandler{svc: svc}
 }
 
+// CreateInspection 创建检验单
+// POST /api/v1/srm/inspections
+func (h *InspectionHandler) CreateInspection(c *gin.Context) {
+	var req struct {
+		POID         string  `json:"po_id"`
+		POItemID     string  `json:"po_item_id"`
+		SupplierID   string  `json:"supplier_id"`
+		MaterialID   string  `json:"material_id"`
+		MaterialCode string  `json:"material_code" binding:"required"`
+		MaterialName string  `json:"material_name" binding:"required"`
+		Quantity     float64 `json:"quantity"`
+		SampleQty    int     `json:"sample_qty"`
+		Notes        string  `json:"notes"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+
+	inspection, err := h.svc.CreateInspectionFromPOItem(
+		c.Request.Context(),
+		req.POID, req.POItemID, req.SupplierID,
+		req.MaterialID, req.MaterialCode, req.MaterialName,
+		req.Quantity,
+	)
+	if err != nil {
+		InternalError(c, "创建检验失败: "+err.Error())
+		return
+	}
+
+	// 补充sample_qty和notes
+	if req.SampleQty > 0 || req.Notes != "" {
+		updateReq := service.UpdateInspectionRequest{
+			SampleQty: &req.SampleQty,
+			Notes:     &req.Notes,
+		}
+		if updated, err := h.svc.UpdateInspection(c.Request.Context(), inspection.ID, &updateReq); err == nil {
+			inspection = updated
+		}
+	}
+
+	Success(c, inspection)
+}
+
 // ListInspections 检验列表
 // GET /api/v1/srm/inspections?supplier_id=xxx&status=xxx&result=xxx&po_id=xxx
 func (h *InspectionHandler) ListInspections(c *gin.Context) {

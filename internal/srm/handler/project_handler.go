@@ -243,11 +243,35 @@ func (h *ProjectHandler) RejectDelayRequest(c *gin.Context) {
 	Success(c, dr)
 }
 
+// GetItemsByGroup 按物料组获取PR行项
+// GET /api/v1/srm/projects/:id/items-by-group
+func (h *ProjectHandler) GetItemsByGroup(c *gin.Context) {
+	id := c.Param("id")
+	result, err := h.svc.GetItemsByGroup(c.Request.Context(), id)
+	if err != nil {
+		InternalError(c, "获取分组行项失败: "+err.Error())
+		return
+	}
+	Success(c, result)
+}
+
+// GetProjectProgressByGroup 按物料组获取进度
+// GET /api/v1/srm/projects/:id/progress-by-group
+func (h *ProjectHandler) GetProjectProgressByGroup(c *gin.Context) {
+	id := c.Param("id")
+	result, err := h.svc.GetProjectProgressByGroup(c.Request.Context(), id)
+	if err != nil {
+		InternalError(c, "获取分组进度失败: "+err.Error())
+		return
+	}
+	Success(c, result)
+}
+
 // ListEntityActivityLogs 查询任意实体的操作日志
-// GET /api/v1/srm/activity-logs?entity_type=pr&entity_id=xxx
+// GET /api/v1/srm/activities/:entityType/:entityId
 func (h *ProjectHandler) ListEntityActivityLogs(c *gin.Context) {
-	entityType := c.Query("entity_type")
-	entityID := c.Query("entity_id")
+	entityType := c.Param("entityType")
+	entityID := c.Param("entityId")
 	if entityType == "" || entityID == "" {
 		BadRequest(c, "entity_type和entity_id必填")
 		return

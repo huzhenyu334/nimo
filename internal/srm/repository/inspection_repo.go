@@ -45,6 +45,8 @@ func (r *InspectionRepository) FindAll(ctx context.Context, page, pageSize int, 
 
 	offset := (page - 1) * pageSize
 	err := query.
+		Preload("PO").
+		Preload("Supplier").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(pageSize).
@@ -57,6 +59,8 @@ func (r *InspectionRepository) FindAll(ctx context.Context, page, pageSize int, 
 func (r *InspectionRepository) FindByID(ctx context.Context, id string) (*entity.Inspection, error) {
 	var inspection entity.Inspection
 	err := r.db.WithContext(ctx).
+		Preload("PO").
+		Preload("Supplier").
 		Where("id = ?", id).
 		First(&inspection).Error
 	if err != nil {

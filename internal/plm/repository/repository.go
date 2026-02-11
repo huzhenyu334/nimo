@@ -34,6 +34,8 @@ type Repositories struct {
 	Codename        *CodenameRepository
 	// V6 任务表单
 	TaskForm        *TaskFormRepository
+	// V13 CMF
+	CMF             *CMFRepository
 }
 
 // NewRepositories 创建仓库集合
@@ -60,5 +62,7 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Codename:        NewCodenameRepository(db),
 		// V6 任务表单
 		TaskForm:        NewTaskFormRepository(db),
+		// V13 CMF
+		CMF:             NewCMFRepository(db),
 	}
 }

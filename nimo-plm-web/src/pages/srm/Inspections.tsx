@@ -83,18 +83,22 @@ const Inspections: React.FC = () => {
     },
     {
       title: 'PO编码',
-      dataIndex: 'po_id',
-      key: 'po_id',
-      width: 100,
-      render: (id: string) => id?.slice(0, 8) || '-',
+      key: 'po_code',
+      width: 130,
+      render: (_: unknown, record: Inspection) => {
+        const poCode = (record as any).po?.po_code;
+        return poCode ? <span style={{ fontFamily: 'monospace' }}>{poCode}</span> : (record.po_id ? record.po_id.slice(0, 8) : '-');
+      },
     },
     { title: '物料', dataIndex: 'material_name', key: 'material_name', width: 160, ellipsis: true },
     {
       title: '供应商',
-      dataIndex: 'supplier_id',
-      key: 'supplier_id',
-      width: 100,
-      render: (id: string) => id?.slice(0, 8) || '-',
+      key: 'supplier_name',
+      width: 120,
+      render: (_: unknown, record: Inspection) => {
+        const supplierName = (record as any).supplier?.name || (record as any).supplier?.short_name;
+        return supplierName || (record.supplier_id ? record.supplier_id.slice(0, 8) : '-');
+      },
     },
     {
       title: '数量',

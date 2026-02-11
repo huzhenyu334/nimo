@@ -60,6 +60,23 @@ export interface ProjectBOMItem {
   is_alternative: boolean;
   alternative_for?: string;
   notes?: string;
+  // SBOM 结构BOM专用字段
+  material_type?: string;
+  color?: string;
+  surface_treatment?: string;
+  process_type?: string;
+  drawing_no?: string;
+  drawing_2d_file_id?: string;
+  drawing_2d_file_name?: string;
+  drawing_3d_file_id?: string;
+  drawing_3d_file_name?: string;
+  weight_grams?: number;
+  target_price?: number;
+  tooling_estimate?: number;
+  cost_notes?: string;
+  is_appearance_part?: boolean;
+  assembly_method?: string;
+  tolerance_grade?: string;
   created_at: string;
   updated_at: string;
   // Relations
@@ -102,6 +119,23 @@ export interface BOMItemRequest {
   is_alternative?: boolean;
   notes?: string;
   item_number?: number;
+  // SBOM 结构BOM专用字段
+  material_type?: string;
+  color?: string;
+  surface_treatment?: string;
+  process_type?: string;
+  drawing_no?: string;
+  drawing_2d_file_id?: string;
+  drawing_2d_file_name?: string;
+  drawing_3d_file_id?: string;
+  drawing_3d_file_name?: string;
+  weight_grams?: number;
+  target_price?: number;
+  tooling_estimate?: number;
+  cost_notes?: string;
+  is_appearance_part?: boolean;
+  assembly_method?: string;
+  tolerance_grade?: string;
 }
 
 export const projectBomApi = {
@@ -230,12 +264,13 @@ export const projectBomApi = {
   },
 
   // 下载导入模板
-  downloadTemplate: async (): Promise<void> => {
-    const response = await apiClient.get('/bom-template', { responseType: 'blob' });
+  downloadTemplate: async (bomType?: string): Promise<void> => {
+    const query = bomType ? `?bom_type=${bomType}` : '';
+    const response = await apiClient.get(`/bom-template${query}`, { responseType: 'blob' });
     const url = window.URL.createObjectURL(new Blob([response.data]));
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'BOM导入模板.xlsx';
+    a.download = `BOM导入模板${bomType ? `_${bomType}` : ''}.xlsx`;
     a.click();
     window.URL.revokeObjectURL(url);
   },

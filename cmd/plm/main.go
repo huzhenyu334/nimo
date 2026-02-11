@@ -22,6 +22,7 @@ import (
 	srmhandler "github.com/bitfantasy/nimo/internal/srm/handler"
 	srmrepo "github.com/bitfantasy/nimo/internal/srm/repository"
 	srmsvc "github.com/bitfantasy/nimo/internal/srm/service"
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
@@ -75,6 +76,18 @@ func main() {
 		zapLogger.Warn("AutoMigrate task form tables warning", zap.Error(err))
 	}
 
+	// V13: project_boms 增加 task_id 列
+	db.Exec("ALTER TABLE project_boms ADD COLUMN IF NOT EXISTS task_id VARCHAR(32)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_project_boms_task_id ON project_boms(task_id)")
+
+	// AutoMigrate for CMF tables
+	if err := db.AutoMigrate(
+		&entity.CMFSpec{},
+		&entity.CMFItem{},
+	); err != nil {
+		zapLogger.Warn("AutoMigrate CMF tables warning", zap.Error(err))
+	}
+
 	// 清理旧的唯一索引（EmployeeNo 允许为空，不再需要唯一约束）
 	// 清理所有可能的 employee_no 唯一约束/索引
 	db.Exec("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_employee_no_key")
@@ -85,8 +98,14 @@ func main() {
 	migrationSQL := []string{
 		"ALTER TABLE template_tasks ADD COLUMN IF NOT EXISTS auto_create_feishu_task boolean DEFAULT false",
 		"ALTER TABLE template_tasks ADD COLUMN IF NOT EXISTS feishu_approval_code varchar(100) DEFAULT ''",
+		"ALTER TABLE template_tasks ADD COLUMN IF NOT EXISTS is_locked boolean DEFAULT false",
+		"ALTER TABLE template_tasks DROP CONSTRAINT IF EXISTS template_tasks_task_type_check",
+		"ALTER TABLE template_tasks ADD CONSTRAINT template_tasks_task_type_check CHECK (task_type IN ('MILESTONE', 'TASK', 'SUBTASK', 'srm_procurement'))",
 		"ALTER TABLE tasks ADD COLUMN IF NOT EXISTS auto_create_feishu_task boolean DEFAULT false",
 		"ALTER TABLE tasks ADD COLUMN IF NOT EXISTS feishu_approval_code varchar(100) DEFAULT ''",
+		"ALTER TABLE tasks ADD COLUMN IF NOT EXISTS is_locked boolean DEFAULT false",
+		"ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_task_type_check",
+		"ALTER TABLE tasks ADD CONSTRAINT tasks_task_type_check CHECK (task_type IN ('MILESTONE', 'TASK', 'SUBTASK', 'srm_procurement'))",
 
 		// 状态机引擎表 (Phase 1)
 		`CREATE TABLE IF NOT EXISTS state_machine_definitions (
@@ -336,6 +355,24 @@ func main() {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_routing_logs_entity ON routing_logs(entity_type, event)`,
 
+		// V12: 结构BOM专属字段
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS material_type VARCHAR(64)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS color VARCHAR(64)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS surface_treatment VARCHAR(128)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS process_type VARCHAR(32)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS drawing_no VARCHAR(64)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS drawing2d_file_id VARCHAR(32)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS drawing2d_file_name VARCHAR(256)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS drawing3d_file_id VARCHAR(32)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS drawing3d_file_name VARCHAR(256)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS weight_grams NUMERIC(10,2)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS target_price NUMERIC(15,4)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS tooling_estimate NUMERIC(15,2)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS cost_notes TEXT`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS is_appearance_part BOOLEAN DEFAULT false`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS assembly_method VARCHAR(32)`,
+		`ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS tolerance_grade VARCHAR(32)`,
+
 		// V11: BOM发布快照表（ERP对接）
 		`CREATE TABLE IF NOT EXISTS bom_releases (
 			id VARCHAR(36) PRIMARY KEY,
@@ -453,6 +490,9 @@ func main() {
 	handlers.Routing = handler.NewRoutingHandler(routingSvc)
 	workflowSvc.SetRoutingService(routingSvc)
 
+	// V13: CMF控件
+	handlers.CMF = handler.NewCMFHandler(repos.CMF, repos.ProjectBOM, repos.Task)
+
 	// === SRM模块初始化 ===
 	// AutoMigrate SRM实体
 	if err := db.AutoMigrate(
@@ -470,10 +510,73 @@ func main() {
 		&srmentity.SRMProject{},
 		&srmentity.ActivityLog{},
 		&srmentity.DelayRequest{},
+		&srmentity.SupplierEvaluation{},
+		&srmentity.Equipment{},
+		&srmentity.RFQ{},
+		&srmentity.RFQQuote{},
 	); err != nil {
 		zapLogger.Warn("AutoMigrate SRM tables warning", zap.Error(err))
 	}
-	zapLogger.Info("SRM database migration completed")
+
+	// V14: PRItem增加物料分类/展示增强/治具字段
+	v14SQL := []string{
+		"ALTER TABLE srm_pr_items ADD COLUMN IF NOT EXISTS source_bom_type VARCHAR(20)",
+		"ALTER TABLE srm_pr_items ADD COLUMN IF NOT EXISTS material_group VARCHAR(20)",
+		"ALTER TABLE srm_pr_items ADD COLUMN IF NOT EXISTS image_url VARCHAR(500)",
+		"ALTER TABLE srm_pr_items ADD COLUMN IF NOT EXISTS process_type VARCHAR(100)",
+		"ALTER TABLE srm_pr_items ADD COLUMN IF NOT EXISTS tooling_cost DECIMAL(12,2)",
+		"ALTER TABLE srm_pr_items ADD COLUMN IF NOT EXISTS tooling_status VARCHAR(20)",
+		"ALTER TABLE srm_pr_items ADD COLUMN IF NOT EXISTS jig_phase VARCHAR(20)",
+		"ALTER TABLE srm_pr_items ADD COLUMN IF NOT EXISTS jig_progress INT DEFAULT 0",
+	}
+	for _, sql := range v14SQL {
+		if err := db.Exec(sql).Error; err != nil {
+			zapLogger.Warn("V14 migration warning", zap.String("sql", sql), zap.Error(err))
+		}
+	}
+	// V15: RFQ询价单 + PR物料状态扩展
+	v15SQL := []string{
+		`CREATE TABLE IF NOT EXISTS srm_rfqs (
+			id VARCHAR(32) PRIMARY KEY,
+			code VARCHAR(32) NOT NULL UNIQUE,
+			srm_project_id VARCHAR(32) NOT NULL,
+			pr_item_id VARCHAR(32) NOT NULL,
+			material_name VARCHAR(200),
+			status VARCHAR(20) DEFAULT 'draft',
+			deadline TIMESTAMP,
+			created_by VARCHAR(32),
+			created_at TIMESTAMP DEFAULT NOW(),
+			updated_at TIMESTAMP DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_srm_rfqs_project ON srm_rfqs(srm_project_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_srm_rfqs_pr_item ON srm_rfqs(pr_item_id)`,
+		`CREATE TABLE IF NOT EXISTS srm_rfq_quotes (
+			id VARCHAR(32) PRIMARY KEY,
+			rfq_id VARCHAR(32) NOT NULL,
+			supplier_id VARCHAR(32) NOT NULL,
+			supplier_name VARCHAR(200),
+			unit_price DECIMAL(12,4),
+			currency VARCHAR(10) DEFAULT 'CNY',
+			moq INT,
+			lead_time_days INT,
+			tooling_cost DECIMAL(12,2),
+			sample_cost DECIMAL(12,2),
+			validity VARCHAR(50),
+			notes TEXT,
+			is_selected BOOLEAN DEFAULT false,
+			quoted_at TIMESTAMP,
+			created_at TIMESTAMP DEFAULT NOW(),
+			updated_at TIMESTAMP DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_srm_rfq_quotes_rfq ON srm_rfq_quotes(rfq_id)`,
+		"ALTER TABLE srm_pr_items ADD COLUMN IF NOT EXISTS rfq_id VARCHAR(32)",
+	}
+	for _, sql := range v15SQL {
+		if err := db.Exec(sql).Error; err != nil {
+			zapLogger.Warn("V15 migration warning", zap.String("sql", sql), zap.Error(err))
+		}
+	}
+	zapLogger.Info("SRM database migration completed (including V15)")
 
 	// SRM仓库和服务
 	srmRepos := srmrepo.NewRepositories(db)
@@ -482,11 +585,20 @@ func main() {
 	srmInspectionSvc := srmsvc.NewInspectionService(srmRepos.Inspection, srmRepos.PR)
 	srmDashboardSvc := srmsvc.NewDashboardService(db)
 	srmProjectSvc := srmsvc.NewSRMProjectService(srmRepos.Project, srmRepos.PR, srmRepos.ActivityLog, srmRepos.DelayRequest, db)
-	srmHandlers := srmhandler.NewHandlers(srmSupplierSvc, srmProcurementSvc, srmInspectionSvc, srmDashboardSvc, srmRepos.PO, srmProjectSvc)
+	srmSettlementSvc := srmsvc.NewSettlementService(srmRepos.Settlement)
+	srmCorrectiveActionSvc := srmsvc.NewCorrectiveActionService(srmRepos.CorrectiveAction, srmRepos.Inspection)
+	srmEvaluationSvc := srmsvc.NewEvaluationService(srmRepos.Evaluation)
+	srmEvaluationSvc.SetSupplierRepo(srmRepos.Supplier)
+	srmEquipmentSvc := srmsvc.NewEquipmentService(srmRepos.Equipment)
+	srmRFQSvc := srmsvc.NewRFQService(srmRepos.RFQ, srmRepos.PO, srmRepos.PR, srmRepos.ActivityLog, db)
+	srmPRItemSvc := srmsvc.NewPRItemService(srmRepos.PR, srmRepos.Project, srmRepos.ActivityLog, db)
+	srmHandlers := srmhandler.NewHandlers(srmSupplierSvc, srmProcurementSvc, srmInspectionSvc, srmDashboardSvc, srmRepos.PO, srmProjectSvc, srmSettlementSvc, srmCorrectiveActionSvc, srmEvaluationSvc, srmEquipmentSvc, srmRFQSvc, srmPRItemSvc)
 
-	// SRM→飞书：注入飞书客户端到采购服务
+	// SRM→飞书：注入飞书客户端到SRM各服务
 	if feishuWorkflowClient != nil {
 		srmProcurementSvc.SetFeishuClient(feishuWorkflowClient)
+		srmInspectionSvc.SetFeishuClient(feishuWorkflowClient)
+		srmCorrectiveActionSvc.SetFeishuClient(feishuWorkflowClient)
 	}
 
 	// PLM→SRM集成：BOM创建后自动生成打样采购需求
@@ -503,6 +615,7 @@ func main() {
 	router.Use(middleware.Logger(zapLogger))
 	router.Use(middleware.CORS())
 	router.Use(middleware.RequestID())
+	router.Use(gzip.Gzip(gzip.DefaultCompression))
 
 	// 注册路由
 	registerRoutes(router, handlers, services, cfg, srmHandlers)
@@ -620,7 +733,13 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 	// 静态文件服务 - 上传文件
 	r.Static("/uploads", "./uploads")
 
-	// 静态文件服务 - 前端
+	// 静态文件服务 - 前端 (hashed filenames → immutable cache)
+	r.Use(func(c *gin.Context) {
+		if len(c.Request.URL.Path) > 8 && c.Request.URL.Path[:8] == "/assets/" {
+			c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		}
+		c.Next()
+	})
 	r.Static("/assets", "./web/plm/assets")
 	r.StaticFile("/logo.svg", "./web/plm/logo.svg")
 	r.StaticFile("/vite.svg", "./web/plm/vite.svg")
@@ -721,7 +840,13 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				roles.GET("/:id", h.Role.Get)
 				roles.PUT("/:id", h.Role.Update)
 				roles.DELETE("/:id", h.Role.Delete)
+				roles.GET("/:id/members", h.Role.ListMembers)
+				roles.POST("/:id/members", h.Role.AddMembers)
+				roles.DELETE("/:id/members", h.Role.RemoveMembers)
 			}
+
+			// 部门树（角色成员选择用）
+			authorized.GET("/departments", h.Role.ListDepartments)
 
 			// V9: 智能路由
 			if h.Routing != nil {
@@ -855,6 +980,16 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				// Phase 3: EBOM→MBOM转换
 				projects.POST("/:id/boms/:bomId/convert-to-mbom", h.ProjectBOM.ConvertToMBOM)
 
+				// V13: CMF控件
+				projects.GET("/:id/cmf-specs", h.CMF.ListSpecsByProject)
+				projects.GET("/:id/tasks/:taskId/cmf-specs", h.CMF.ListSpecsByTask)
+				projects.POST("/:id/tasks/:taskId/cmf-specs", h.CMF.CreateSpec)
+				projects.GET("/:id/tasks/:taskId/cmf-source", h.CMF.ResolveSource)
+				projects.GET("/:id/cmf-specs/:specId", h.CMF.GetSpec)
+				projects.PUT("/:id/cmf-specs/:specId", h.CMF.UpdateSpec)
+				projects.DELETE("/:id/cmf-specs/:specId", h.CMF.DeleteSpec)
+				projects.GET("/:id/bom-appearance-parts", h.CMF.ListAppearanceParts)
+
 				// V2: 交付物管理
 				projects.GET("/:id/deliverables", h.Deliverable.ListByProject)
 				projects.GET("/:id/phases/:phaseId/deliverables", h.Deliverable.ListByPhase)
@@ -977,6 +1112,7 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				pos := srmGroup.Group("/purchase-orders")
 				{
 					pos.GET("", srmH.PO.ListPOs)
+					pos.GET("/export", srmH.PO.ExportPOs)
 					pos.POST("", srmH.PO.CreatePO)
 					pos.GET("/:id", srmH.PO.GetPO)
 					pos.PUT("/:id", srmH.PO.UpdatePO)
@@ -988,6 +1124,7 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				inspections := srmGroup.Group("/inspections")
 				{
 					inspections.GET("", srmH.Inspection.ListInspections)
+					inspections.POST("", srmH.Inspection.CreateInspection)
 					inspections.GET("/:id", srmH.Inspection.GetInspection)
 					inspections.PUT("/:id", srmH.Inspection.UpdateInspection)
 					inspections.POST("/:id/complete", srmH.Inspection.CompleteInspection)
@@ -1004,7 +1141,19 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 					projects.GET("/:id", srmH.Project.GetProject)
 					projects.PUT("/:id", srmH.Project.UpdateProject)
 					projects.GET("/:id/progress", srmH.Project.GetProjectProgress)
+					projects.GET("/:id/progress-by-group", srmH.Project.GetProjectProgressByGroup)
+					projects.GET("/:id/items-by-group", srmH.Project.GetItemsByGroup)
 					projects.GET("/:id/activities", srmH.Project.ListActivityLogs)
+				}
+
+				// 通用设备
+				equipment := srmGroup.Group("/equipment")
+				{
+					equipment.GET("", srmH.Equipment.List)
+					equipment.POST("", srmH.Equipment.Create)
+					equipment.GET("/:id", srmH.Equipment.Get)
+					equipment.PUT("/:id", srmH.Equipment.Update)
+					equipment.DELETE("/:id", srmH.Equipment.Delete)
 				}
 
 				// 延期审批
@@ -1016,6 +1165,63 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 					delays.POST("/:id/approve", srmH.Project.ApproveDelayRequest)
 					delays.POST("/:id/reject", srmH.Project.RejectDelayRequest)
 				}
+
+				// 对账结算
+				settlements := srmGroup.Group("/settlements")
+				{
+					settlements.GET("", srmH.Settlement.ListSettlements)
+					settlements.GET("/export", srmH.Settlement.ExportSettlements)
+					settlements.POST("", srmH.Settlement.CreateSettlement)
+					settlements.POST("/generate", srmH.Settlement.GenerateSettlement)
+					settlements.GET("/:id", srmH.Settlement.GetSettlement)
+					settlements.PUT("/:id", srmH.Settlement.UpdateSettlement)
+					settlements.DELETE("/:id", srmH.Settlement.DeleteSettlement)
+					settlements.POST("/:id/confirm-buyer", srmH.Settlement.ConfirmByBuyer)
+					settlements.POST("/:id/confirm-supplier", srmH.Settlement.ConfirmBySupplier)
+					settlements.POST("/:id/disputes", srmH.Settlement.AddDispute)
+					settlements.PUT("/:id/disputes/:disputeId", srmH.Settlement.UpdateDispute)
+				}
+
+				// 8D改进
+				cas := srmGroup.Group("/corrective-actions")
+				{
+					cas.GET("", srmH.CorrectiveAction.ListCorrectiveActions)
+					cas.POST("", srmH.CorrectiveAction.CreateCorrectiveAction)
+					cas.GET("/:id", srmH.CorrectiveAction.GetCorrectiveAction)
+					cas.PUT("/:id", srmH.CorrectiveAction.UpdateCorrectiveAction)
+					cas.POST("/:id/respond", srmH.CorrectiveAction.SupplierRespond)
+					cas.POST("/:id/verify", srmH.CorrectiveAction.Verify)
+					cas.POST("/:id/close", srmH.CorrectiveAction.Close)
+				}
+
+				// 供应商评价
+				evals := srmGroup.Group("/evaluations")
+				{
+					evals.GET("", srmH.Evaluation.ListEvaluations)
+					evals.POST("", srmH.Evaluation.CreateEvaluation)
+					evals.POST("/auto-generate", srmH.Evaluation.AutoGenerate)
+					evals.GET("/supplier/:supplierId", srmH.Evaluation.GetSupplierHistory)
+					evals.GET("/:id", srmH.Evaluation.GetEvaluation)
+					evals.PUT("/:id", srmH.Evaluation.UpdateEvaluation)
+					evals.POST("/:id/submit", srmH.Evaluation.Submit)
+					evals.POST("/:id/approve", srmH.Evaluation.Approve)
+				}
+
+				// 询价单 RFQ
+				rfqs := srmGroup.Group("/rfq")
+				{
+					rfqs.GET("", srmH.RFQ.ListRFQs)
+					rfqs.POST("", srmH.RFQ.CreateRFQ)
+					rfqs.GET("/:id", srmH.RFQ.GetRFQ)
+					rfqs.POST("/:id/quotes", srmH.RFQ.AddQuote)
+					rfqs.PUT("/:id/quotes/:quoteId", srmH.RFQ.UpdateQuote)
+					rfqs.POST("/:id/quotes/:quoteId/select", srmH.RFQ.SelectQuote)
+					rfqs.POST("/:id/convert-to-po", srmH.RFQ.ConvertToPO)
+					rfqs.GET("/:id/comparison", srmH.RFQ.GetComparison)
+				}
+
+				// PR物料状态
+				srmGroup.PUT("/pr-items/:id/status", srmH.PRItem.UpdatePRItemStatus)
 
 				// 操作日志
 				srmGroup.GET("/activities/:entityType/:entityId", srmH.Project.ListEntityActivityLogs)

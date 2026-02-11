@@ -980,6 +980,7 @@ const TemplateDetail: React.FC = () => {
     { value: 'user', label: '用户选择' },
     { value: 'role_assignment', label: '角色分配' },
     { value: 'bom_upload', label: 'BOM上传' },
+    { value: 'cmf', label: 'CMF配色' },
   ];
 
   const openFormConfig = (task: TaskRow) => {
@@ -1809,8 +1810,43 @@ const TemplateDetail: React.FC = () => {
                   </div>
                 )}
                 {field.type === 'bom_upload' && (
-                  <div style={{ marginTop: 8, padding: '4px 8px', background: '#e6f7ff', borderRadius: 4 }}>
-                    <Text type="secondary" style={{ fontSize: 11 }}>支持 .rep (PADS) 和 .xlsx/.xls (Excel) 格式，上传后自动解析预览BOM物料清单</Text>
+                  <div style={{ marginTop: 8 }}>
+                    <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>BOM类型</Text>
+                    <Select
+                      size="small"
+                      style={{ width: '100%' }}
+                      value={field.bom_type || 'EBOM'}
+                      onChange={(val) => updateFormField(idx, { bom_type: val })}
+                      options={[
+                        { value: 'EBOM', label: '电子BOM (EBOM)' },
+                        { value: 'SBOM', label: '结构BOM (SBOM)' },
+                      ]}
+                    />
+                    <div style={{ marginTop: 4, padding: '4px 8px', background: '#e6f7ff', borderRadius: 4 }}>
+                      <Text type="secondary" style={{ fontSize: 11 }}>支持 .rep (PADS) 和 .xlsx/.xls (Excel) 格式，上传后自动解析预览BOM物料清单</Text>
+                    </div>
+                  </div>
+                )}
+                {field.type === 'cmf' && (
+                  <div style={{ marginTop: 8 }}>
+                    <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>关联SBOM来源任务</Text>
+                    <Select
+                      size="small"
+                      style={{ width: '100%' }}
+                      placeholder="选择含有BOM上传字段的任务"
+                      value={field.source_task_code || undefined}
+                      onChange={(val) => updateFormField(idx, { source_task_code: val })}
+                      allowClear
+                      options={tasks
+                        .filter((t) => {
+                          const fields = templateForms[t.task_code] || [];
+                          return fields.some((f) => f.type === 'bom_upload');
+                        })
+                        .map((t) => ({ value: t.task_code, label: `${t.name} (${t.task_code})` }))}
+                    />
+                    <div style={{ marginTop: 4, padding: '4px 8px', background: '#f6ffed', borderRadius: 4 }}>
+                      <Text type="secondary" style={{ fontSize: 11 }}>CMF配色控件将从所选任务的SBOM中提取外观件，自动生成配色表</Text>
+                    </div>
                   </div>
                 )}
               </Card>

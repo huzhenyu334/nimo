@@ -34,6 +34,10 @@ type Inspection struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Notes     string    `json:"notes" gorm:"type:text"`
+
+	// 关联
+	PO       *PurchaseOrder `json:"po,omitempty" gorm:"foreignKey:POID"`
+	Supplier *Supplier      `json:"supplier,omitempty" gorm:"foreignKey:SupplierID"`
 }
 
 func (Inspection) TableName() string {

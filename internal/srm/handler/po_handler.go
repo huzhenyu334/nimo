@@ -2,9 +2,12 @@ package handler
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/bitfantasy/nimo/internal/srm/service"
 	"github.com/gin-gonic/gin"
+	"github.com/xuri/excelize/v2"
 )
 
 // POItemReceiver PO行项收货接口
@@ -98,7 +101,7 @@ func (h *POHandler) UpdatePO(c *gin.Context) {
 
 	po, err := h.svc.UpdatePO(c.Request.Context(), id, &req)
 	if err != nil {
-		InternalError(c, "更新采购订单失败: "+err.Error())
+		BadRequest(c, "更新采购订单失败: "+err.Error())
 		return
 	}
 
@@ -113,11 +116,110 @@ func (h *POHandler) ApprovePO(c *gin.Context) {
 
 	po, err := h.svc.ApprovePO(c.Request.Context(), id, userID)
 	if err != nil {
-		InternalError(c, "审批失败: "+err.Error())
+		if strings.Contains(err.Error(), "不可重复审批") {
+			BadRequest(c, err.Error())
+			return
+		}
+		BadRequest(c, "审批失败: "+err.Error())
 		return
 	}
 
 	Success(c, po)
+}
+
+// ExportPOs 导出采购订单Excel
+// GET /api/v1/srm/purchase-orders/export?supplier_id=xxx&status=xxx&type=xxx
+func (h *POHandler) ExportPOs(c *gin.Context) {
+	filters := map[string]string{
+		"supplier_id": c.Query("supplier_id"),
+		"status":      c.Query("status"),
+		"type":        c.Query("type"),
+		"search":      c.Query("search"),
+	}
+
+	// 获取全部数据（不分页）
+	items, _, err := h.svc.ListPOs(c.Request.Context(), 1, 10000, filters)
+	if err != nil {
+		InternalError(c, "获取采购订单数据失败: "+err.Error())
+		return
+	}
+
+	f := excelize.NewFile()
+	defer f.Close()
+	sheet := "采购订单"
+	f.SetSheetName("Sheet1", sheet)
+
+	// 表头
+	headers := []string{"PO编码", "供应商", "类型", "状态", "总金额", "创建时间"}
+	for i, hdr := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue(sheet, cell, hdr)
+	}
+
+	// 表头样式
+	style, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true},
+		Fill: excelize.Fill{Type: "pattern", Color: []string{"#E0E0E0"}, Pattern: 1},
+	})
+	f.SetRowStyle(sheet, 1, 1, style)
+
+	typeMap := map[string]string{
+		"sample": "打样", "production": "量产",
+	}
+	statusMap := map[string]string{
+		"draft": "草稿", "approved": "已审批", "sent": "已发送",
+		"partial": "部分收货", "received": "已收货", "completed": "已完成", "cancelled": "已取消",
+	}
+
+	for i, po := range items {
+		row := i + 2
+
+		f.SetCellValue(sheet, cellName(1, row), po.POCode)
+
+		supplierName := ""
+		if po.Supplier != nil {
+			supplierName = po.Supplier.Name
+		}
+		f.SetCellValue(sheet, cellName(2, row), supplierName)
+
+		typeText := po.Type
+		if t, ok := typeMap[po.Type]; ok {
+			typeText = t
+		}
+		f.SetCellValue(sheet, cellName(3, row), typeText)
+
+		statusText := po.Status
+		if t, ok := statusMap[po.Status]; ok {
+			statusText = t
+		}
+		f.SetCellValue(sheet, cellName(4, row), statusText)
+
+		if po.TotalAmount != nil {
+			f.SetCellValue(sheet, cellName(5, row), *po.TotalAmount)
+		}
+
+		f.SetCellValue(sheet, cellName(6, row), po.CreatedAt.Format("2006-01-02 15:04:05"))
+	}
+
+	// 设置列宽
+	colWidths := []float64{18, 20, 10, 12, 14, 20}
+	for i, w := range colWidths {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		f.SetColWidth(sheet, col, col, w)
+	}
+
+	filename := "purchase_orders"
+	if sid := c.Query("supplier_id"); sid != "" {
+		filename = fmt.Sprintf("purchase_orders_%s", sid)
+	}
+
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.xlsx"`, filename))
+
+	if err := f.Write(c.Writer); err != nil {
+		InternalError(c, "生成Excel失败: "+err.Error())
+		return
+	}
 }
 
 // ReceiveItem PO行项收货

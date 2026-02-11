@@ -41,6 +41,7 @@ func (s *ProjectBOMService) CreateBOM(ctx context.Context, projectID string, inp
 		ID:          uuid.New().String()[:32],
 		ProjectID:   projectID,
 		PhaseID:     input.PhaseID,
+		TaskID:      input.TaskID,
 		BOMType:     input.BOMType,
 		Version:     input.Version,
 		Name:        input.Name,
@@ -236,8 +237,25 @@ func (s *ProjectBOMService) AddItem(ctx context.Context, bomID string, input *BO
 		IsCritical:      input.IsCritical,
 		IsAlternative:   input.IsAlternative,
 		Notes:           input.Notes,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		// 结构BOM专属字段
+		MaterialType:      input.MaterialType,
+		Color:             input.Color,
+		SurfaceTreatment:  input.SurfaceTreatment,
+		ProcessType:       input.ProcessType,
+		DrawingNo:         input.DrawingNo,
+		Drawing2DFileID:   input.Drawing2DFileID,
+		Drawing2DFileName: input.Drawing2DFileName,
+		Drawing3DFileID:   input.Drawing3DFileID,
+		Drawing3DFileName: input.Drawing3DFileName,
+		WeightGrams:       input.WeightGrams,
+		TargetPrice:       input.TargetPrice,
+		ToolingEstimate:   input.ToolingEstimate,
+		CostNotes:         input.CostNotes,
+		IsAppearancePart:  input.IsAppearancePart,
+		AssemblyMethod:    input.AssemblyMethod,
+		ToleranceGrade:    input.ToleranceGrade,
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
 	}
 
 	if item.Unit == "" {
@@ -387,6 +405,24 @@ func (s *ProjectBOMService) UpdateItem(ctx context.Context, bomID, itemID string
 	item.ParentItemID = input.ParentItemID
 	item.Level = input.Level
 
+	// 结构BOM专属字段
+	item.MaterialType = input.MaterialType
+	item.Color = input.Color
+	item.SurfaceTreatment = input.SurfaceTreatment
+	item.ProcessType = input.ProcessType
+	item.DrawingNo = input.DrawingNo
+	item.Drawing2DFileID = input.Drawing2DFileID
+	item.Drawing2DFileName = input.Drawing2DFileName
+	item.Drawing3DFileID = input.Drawing3DFileID
+	item.Drawing3DFileName = input.Drawing3DFileName
+	item.WeightGrams = input.WeightGrams
+	item.TargetPrice = input.TargetPrice
+	item.ToolingEstimate = input.ToolingEstimate
+	item.CostNotes = input.CostNotes
+	item.IsAppearancePart = input.IsAppearancePart
+	item.AssemblyMethod = input.AssemblyMethod
+	item.ToleranceGrade = input.ToleranceGrade
+
 	// 计算小计
 	if input.UnitPrice != nil {
 		extCost := input.Quantity * *input.UnitPrice
@@ -441,7 +477,14 @@ var bomExportHeaders = []string{
 	"是否关键", "备注",
 }
 
-// ExportBOM 导出BOM为xlsx
+var sbomExportHeaders = []string{
+	"序号", "层级", "零件名称", "物料编码", "规格", "数量", "单位",
+	"材质", "颜色", "表面处理", "工艺类型", "图纸编号", "重量(g)",
+	"目标单价", "模具费预估", "是否外观件", "装配方式", "公差等级",
+	"供应商", "备注",
+}
+
+// ExportBOM 导出BOM为xlsx（根据BOMType自动选择格式）
 func (s *ProjectBOMService) ExportBOM(ctx context.Context, bomID string) (*excelize.File, string, error) {
 	bom, err := s.bomRepo.FindByID(ctx, bomID)
 	if err != nil {
@@ -453,11 +496,18 @@ func (s *ProjectBOMService) ExportBOM(ctx context.Context, bomID string) (*excel
 		return nil, "", fmt.Errorf("list items: %w", err)
 	}
 
+	if bom.BOMType == "SBOM" {
+		return s.exportStructuralBOM(bom, items)
+	}
+	return s.exportElectronicBOM(bom, items)
+}
+
+// exportElectronicBOM 导出电子BOM格式
+func (s *ProjectBOMService) exportElectronicBOM(bom *entity.ProjectBOM, items []entity.ProjectBOMItem) (*excelize.File, string, error) {
 	f := excelize.NewFile()
 	sheet := "BOM"
 	f.SetSheetName("Sheet1", sheet)
 
-	// 表头样式: 加粗
 	boldStyle, _ := f.NewStyle(&excelize.Style{
 		Font: &excelize.Font{Bold: true, Size: 11},
 		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#D9E1F2"}},
@@ -466,7 +516,6 @@ func (s *ProjectBOMService) ExportBOM(ctx context.Context, bomID string) (*excel
 		},
 	})
 
-	// 写入表头
 	for i, h := range bomExportHeaders {
 		col, _ := excelize.ColumnNumberToName(i + 1)
 		cell := col + "1"
@@ -474,7 +523,6 @@ func (s *ProjectBOMService) ExportBOM(ctx context.Context, bomID string) (*excel
 		f.SetCellStyle(sheet, cell, cell, boldStyle)
 	}
 
-	// 写入数据行
 	var totalCost float64
 	for rowIdx, item := range items {
 		row := rowIdx + 2
@@ -504,7 +552,6 @@ func (s *ProjectBOMService) ExportBOM(ctx context.Context, bomID string) (*excel
 		f.SetCellValue(sheet, fmt.Sprintf("O%d", row), item.Notes)
 	}
 
-	// 底部汇总行
 	summaryRow := len(items) + 2
 	summaryStyle, _ := f.NewStyle(&excelize.Style{
 		Font: &excelize.Font{Bold: true},
@@ -514,7 +561,6 @@ func (s *ProjectBOMService) ExportBOM(ctx context.Context, bomID string) (*excel
 	f.SetCellValue(sheet, fmt.Sprintf("M%d", summaryRow), totalCost)
 	f.SetCellStyle(sheet, fmt.Sprintf("A%d", summaryRow), fmt.Sprintf("O%d", summaryRow), summaryStyle)
 
-	// 列宽自适应
 	colWidths := []float64{6, 10, 20, 20, 8, 6, 14, 16, 16, 16, 16, 10, 10, 8, 20}
 	for i, w := range colWidths {
 		col, _ := excelize.ColumnNumberToName(i + 1)
@@ -522,6 +568,91 @@ func (s *ProjectBOMService) ExportBOM(ctx context.Context, bomID string) (*excel
 	}
 
 	filename := fmt.Sprintf("BOM_%s_%s.xlsx", bom.Name, bom.Version)
+	return f, filename, nil
+}
+
+// exportStructuralBOM 导出结构BOM格式
+func (s *ProjectBOMService) exportStructuralBOM(bom *entity.ProjectBOM, items []entity.ProjectBOMItem) (*excelize.File, string, error) {
+	f := excelize.NewFile()
+	sheet := "SBOM"
+	f.SetSheetName("Sheet1", sheet)
+
+	boldStyle, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true, Size: 11},
+		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#E2EFDA"}},
+		Border: []excelize.Border{
+			{Type: "bottom", Color: "000000", Style: 1},
+		},
+	})
+
+	for i, h := range sbomExportHeaders {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		cell := col + "1"
+		f.SetCellValue(sheet, cell, h)
+		f.SetCellStyle(sheet, cell, cell, boldStyle)
+	}
+
+	var totalTargetPrice float64
+	var totalTooling float64
+	for rowIdx, item := range items {
+		row := rowIdx + 2
+		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), item.ItemNumber)
+		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), item.Level)
+		f.SetCellValue(sheet, fmt.Sprintf("C%d", row), item.Name)
+		// 物料编码：优先使用MaterialID关联的编码
+		materialCode := ""
+		if item.ManufacturerPN != "" {
+			materialCode = item.ManufacturerPN
+		}
+		f.SetCellValue(sheet, fmt.Sprintf("D%d", row), materialCode)
+		f.SetCellValue(sheet, fmt.Sprintf("E%d", row), item.Specification)
+		f.SetCellValue(sheet, fmt.Sprintf("F%d", row), item.Quantity)
+		f.SetCellValue(sheet, fmt.Sprintf("G%d", row), item.Unit)
+		f.SetCellValue(sheet, fmt.Sprintf("H%d", row), item.MaterialType)
+		f.SetCellValue(sheet, fmt.Sprintf("I%d", row), item.Color)
+		f.SetCellValue(sheet, fmt.Sprintf("J%d", row), item.SurfaceTreatment)
+		f.SetCellValue(sheet, fmt.Sprintf("K%d", row), item.ProcessType)
+		f.SetCellValue(sheet, fmt.Sprintf("L%d", row), item.DrawingNo)
+		if item.WeightGrams != nil {
+			f.SetCellValue(sheet, fmt.Sprintf("M%d", row), *item.WeightGrams)
+		}
+		if item.TargetPrice != nil {
+			f.SetCellValue(sheet, fmt.Sprintf("N%d", row), *item.TargetPrice)
+			totalTargetPrice += *item.TargetPrice * item.Quantity
+		}
+		if item.ToolingEstimate != nil {
+			f.SetCellValue(sheet, fmt.Sprintf("O%d", row), *item.ToolingEstimate)
+			totalTooling += *item.ToolingEstimate
+		}
+		appearance := "N"
+		if item.IsAppearancePart {
+			appearance = "Y"
+		}
+		f.SetCellValue(sheet, fmt.Sprintf("P%d", row), appearance)
+		f.SetCellValue(sheet, fmt.Sprintf("Q%d", row), item.AssemblyMethod)
+		f.SetCellValue(sheet, fmt.Sprintf("R%d", row), item.ToleranceGrade)
+		f.SetCellValue(sheet, fmt.Sprintf("S%d", row), item.Supplier)
+		f.SetCellValue(sheet, fmt.Sprintf("T%d", row), item.Notes)
+	}
+
+	// 底部汇总行
+	summaryRow := len(items) + 2
+	summaryStyle, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true},
+	})
+	f.SetCellValue(sheet, fmt.Sprintf("A%d", summaryRow), "汇总")
+	f.SetCellValue(sheet, fmt.Sprintf("C%d", summaryRow), fmt.Sprintf("总零件数: %d", len(items)))
+	f.SetCellValue(sheet, fmt.Sprintf("N%d", summaryRow), totalTargetPrice)
+	f.SetCellValue(sheet, fmt.Sprintf("O%d", summaryRow), totalTooling)
+	f.SetCellStyle(sheet, fmt.Sprintf("A%d", summaryRow), fmt.Sprintf("T%d", summaryRow), summaryStyle)
+
+	colWidths := []float64{6, 6, 20, 16, 20, 8, 6, 14, 12, 14, 12, 14, 10, 10, 12, 10, 12, 10, 16, 20}
+	for i, w := range colWidths {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		f.SetColWidth(sheet, col, col, w)
+	}
+
+	filename := fmt.Sprintf("SBOM_%s_%s.xlsx", bom.Name, bom.Version)
 	return f, filename, nil
 }
 
@@ -637,6 +768,155 @@ func (s *ProjectBOMService) ImportBOM(ctx context.Context, bomID string, f *exce
 		result.Success++
 
 		_ = i // suppress unused
+	}
+
+	if len(entities) > 0 {
+		if err := s.bomRepo.BatchCreateItems(ctx, entities); err != nil {
+			return nil, fmt.Errorf("batch create: %w", err)
+		}
+		s.updateBOMCost(ctx, bomID)
+	}
+
+	return result, nil
+}
+
+// ImportStructuralBOM 从Excel导入结构BOM行项
+func (s *ProjectBOMService) ImportStructuralBOM(ctx context.Context, bomID string, f *excelize.File) (*ImportResult, error) {
+	bom, err := s.bomRepo.FindByID(ctx, bomID)
+	if err != nil {
+		return nil, fmt.Errorf("bom not found: %w", err)
+	}
+	if bom.Status != "draft" && bom.Status != "rejected" {
+		return nil, fmt.Errorf("只有草稿或被驳回的BOM才能导入")
+	}
+
+	sheet := f.GetSheetName(0)
+	rows, err := f.GetRows(sheet)
+	if err != nil {
+		return nil, fmt.Errorf("read excel: %w", err)
+	}
+
+	result := &ImportResult{}
+	if len(rows) < 2 {
+		return result, nil
+	}
+
+	existingCount, _ := s.bomRepo.CountItems(ctx, bomID)
+	itemNum := int(existingCount)
+
+	var entities []entity.ProjectBOMItem
+	for _, row := range rows[1:] {
+		// 至少需要零件名称（列索引2）
+		if len(row) < 3 || row[2] == "" {
+			result.Failed++
+			continue
+		}
+
+		itemNum++
+		item := entity.ProjectBOMItem{
+			ID:         uuid.New().String()[:32],
+			BOMID:      bomID,
+			ItemNumber: itemNum,
+			Unit:       "pcs",
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+		}
+
+		// 按结构BOM模板列顺序解析：
+		// 0:序号 1:层级 2:零件名称 3:物料编码 4:规格 5:数量 6:单位
+		// 7:材质 8:颜色 9:表面处理 10:工艺类型 11:图纸编号 12:重量(g)
+		// 13:目标单价 14:模具费预估 15:是否外观件 16:装配方式 17:公差等级
+		// 18:供应商 19:备注
+		if len(row) > 1 {
+			if lvl, err := strconv.Atoi(strings.TrimSpace(row[1])); err == nil {
+				item.Level = lvl
+			}
+		}
+		if len(row) > 2 {
+			item.Name = strings.TrimSpace(row[2])
+		}
+		if len(row) > 3 {
+			item.ManufacturerPN = strings.TrimSpace(row[3]) // 物料编码
+		}
+		if len(row) > 4 {
+			item.Specification = strings.TrimSpace(row[4])
+		}
+		if len(row) > 5 {
+			if q, err := strconv.ParseFloat(strings.TrimSpace(row[5]), 64); err == nil {
+				item.Quantity = q
+			} else {
+				item.Quantity = 1
+			}
+		}
+		if len(row) > 6 && strings.TrimSpace(row[6]) != "" {
+			item.Unit = strings.TrimSpace(row[6])
+		}
+		if len(row) > 7 {
+			item.MaterialType = strings.TrimSpace(row[7])
+		}
+		if len(row) > 8 {
+			item.Color = strings.TrimSpace(row[8])
+		}
+		if len(row) > 9 {
+			item.SurfaceTreatment = strings.TrimSpace(row[9])
+		}
+		if len(row) > 10 {
+			item.ProcessType = strings.TrimSpace(row[10])
+		}
+		if len(row) > 11 {
+			item.DrawingNo = strings.TrimSpace(row[11])
+		}
+		if len(row) > 12 {
+			if w, err := strconv.ParseFloat(strings.TrimSpace(row[12]), 64); err == nil {
+				item.WeightGrams = &w
+			}
+		}
+		if len(row) > 13 {
+			if p, err := strconv.ParseFloat(strings.TrimSpace(row[13]), 64); err == nil {
+				item.TargetPrice = &p
+			}
+		}
+		if len(row) > 14 {
+			if t, err := strconv.ParseFloat(strings.TrimSpace(row[14]), 64); err == nil {
+				item.ToolingEstimate = &t
+			}
+		}
+		if len(row) > 15 {
+			val := strings.TrimSpace(row[15])
+			if val == "Y" || val == "y" || val == "是" || val == "1" {
+				item.IsAppearancePart = true
+			}
+		}
+		if len(row) > 16 {
+			item.AssemblyMethod = strings.TrimSpace(row[16])
+		}
+		if len(row) > 17 {
+			item.ToleranceGrade = strings.TrimSpace(row[17])
+		}
+		if len(row) > 18 {
+			item.Supplier = strings.TrimSpace(row[18])
+		}
+		if len(row) > 19 {
+			item.Notes = strings.TrimSpace(row[19])
+		}
+
+		// 尝试匹配物料库
+		mat, matchErr := s.bomRepo.MatchMaterialByNameAndPN(ctx, item.Name, item.ManufacturerPN)
+		if matchErr == nil && mat != nil {
+			item.MaterialID = &mat.ID
+			result.Matched++
+		} else {
+			newMat, createErr := s.autoCreateMaterial(ctx, item.Name, item.Specification, "结构件", item.Supplier, item.ManufacturerPN)
+			if createErr != nil {
+				fmt.Printf("[WARN] auto-create material failed for %q: %v\n", item.Name, createErr)
+			} else if newMat != nil {
+				item.MaterialID = &newMat.ID
+				result.AutoCreated++
+			}
+		}
+
+		entities = append(entities, item)
+		result.Success++
 	}
 
 	if len(entities) > 0 {
@@ -834,8 +1114,16 @@ func inferCategoryFromReference(reference string) (string, string) {
 	}
 }
 
-// GenerateTemplate 生成BOM导入模板xlsx
-func (s *ProjectBOMService) GenerateTemplate() (*excelize.File, error) {
+// GenerateTemplate 生成BOM导入模板xlsx（根据bomType选择格式）
+func (s *ProjectBOMService) GenerateTemplate(bomType string) (*excelize.File, error) {
+	if bomType == "SBOM" {
+		return s.generateStructuralTemplate()
+	}
+	return s.generateElectronicTemplate()
+}
+
+// generateElectronicTemplate 生成电子BOM导入模板
+func (s *ProjectBOMService) generateElectronicTemplate() (*excelize.File, error) {
 	f := excelize.NewFile()
 	sheet := "BOM模板"
 	f.SetSheetName("Sheet1", sheet)
@@ -852,14 +1140,12 @@ func (s *ProjectBOMService) GenerateTemplate() (*excelize.File, error) {
 		f.SetCellStyle(sheet, cell, cell, boldStyle)
 	}
 
-	// 列宽
 	colWidths := []float64{6, 10, 20, 20, 8, 6, 14, 16, 16, 16, 16, 10, 10, 8, 20}
 	for i, w := range colWidths {
 		col, _ := excelize.ColumnNumberToName(i + 1)
 		f.SetColWidth(sheet, col, col, w)
 	}
 
-	// 数据验证说明sheet
 	helpSheet := "填写说明"
 	f.NewSheet(helpSheet)
 	helpData := [][]string{
@@ -890,8 +1176,77 @@ func (s *ProjectBOMService) GenerateTemplate() (*excelize.File, error) {
 	f.SetColWidth(helpSheet, "B", "B", 40)
 	f.SetColWidth(helpSheet, "C", "C", 10)
 
-	// 示例数据行
 	sampleData := []string{"1", "电阻", "100K电阻 0402", "100KΩ ±1% 0402", "10", "pcs", "R1-R10", "Yageo", "RC0402FR-07100KL", "DigiKey", "311-100KLRCT-ND", "0.05", "", "否", ""}
+	for j, val := range sampleData {
+		col, _ := excelize.ColumnNumberToName(j + 1)
+		f.SetCellValue(sheet, fmt.Sprintf("%s2", col), val)
+	}
+
+	return f, nil
+}
+
+// generateStructuralTemplate 生成结构BOM导入模板
+func (s *ProjectBOMService) generateStructuralTemplate() (*excelize.File, error) {
+	f := excelize.NewFile()
+	sheet := "结构BOM模板"
+	f.SetSheetName("Sheet1", sheet)
+
+	boldStyle, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true, Size: 11},
+		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#E2EFDA"}},
+	})
+
+	for i, h := range sbomExportHeaders {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		cell := col + "1"
+		f.SetCellValue(sheet, cell, h)
+		f.SetCellStyle(sheet, cell, cell, boldStyle)
+	}
+
+	colWidths := []float64{6, 6, 20, 16, 20, 8, 6, 14, 12, 14, 12, 14, 10, 10, 12, 10, 12, 10, 16, 20}
+	for i, w := range colWidths {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		f.SetColWidth(sheet, col, col, w)
+	}
+
+	// 填写说明sheet
+	helpSheet := "填写说明"
+	f.NewSheet(helpSheet)
+	helpData := [][]string{
+		{"列名", "说明", "是否必填"},
+		{"序号", "自动编号，可留空", "否"},
+		{"层级", "BOM层级，0=顶层，1=一级子件，2=二级子件...", "否"},
+		{"零件名称", "零件/组件名称", "是"},
+		{"物料编码", "物料编码或制造商料号", "否"},
+		{"规格", "规格型号描述", "否"},
+		{"数量", "用量数字，默认1", "是"},
+		{"单位", "pcs/kg/m/set，默认pcs", "否"},
+		{"材质", "如: PC, ABS, PA66+GF30, 铝合金6061, 不锈钢304, 硅胶", "否"},
+		{"颜色", "如: 磨砂黑, Pantone Black 6C, 透明", "否"},
+		{"表面处理", "如: 阳极氧化, 喷涂, 电镀, 丝印, UV转印, PVD", "否"},
+		{"工艺类型", "如: 注塑, CNC, 冲压, 模切, 3D打印, 激光切割", "否"},
+		{"图纸编号", "工程图纸编号", "否"},
+		{"重量(g)", "单个零件重量(克)", "否"},
+		{"目标单价", "目标单价(元)", "否"},
+		{"模具费预估", "模具费用预估(元)", "否"},
+		{"是否外观件", "填写 Y/N", "否"},
+		{"装配方式", "如: 卡扣, 螺丝, 胶合, 超声波焊接, 热熔", "否"},
+		{"公差等级", "如: 普通, 精密, 超精密", "否"},
+		{"供应商", "供应商名称", "否"},
+		{"备注", "备注信息", "否"},
+	}
+	for i, row := range helpData {
+		for j, val := range row {
+			col, _ := excelize.ColumnNumberToName(j + 1)
+			f.SetCellValue(helpSheet, fmt.Sprintf("%s%d", col, i+1), val)
+		}
+	}
+	f.SetColWidth(helpSheet, "A", "A", 14)
+	f.SetColWidth(helpSheet, "B", "B", 50)
+	f.SetColWidth(helpSheet, "C", "C", 10)
+
+	// 示例数据行
+	sampleData := []string{"1", "0", "前壳", "SC-001", "前壳组件", "1", "pcs", "PC+ABS", "磨砂黑", "喷涂+丝印", "注塑", "DWG-SC-001", "35.5", "2.50", "80000", "Y", "卡扣", "精密", "东莞XX模具", ""}
 	for j, val := range sampleData {
 		col, _ := excelize.ColumnNumberToName(j + 1)
 		f.SetCellValue(sheet, fmt.Sprintf("%s2", col), val)
@@ -1389,12 +1744,15 @@ type ParsedBOMItem struct {
 // CreateBOMFromParsedItems 根据已解析的BOM条目创建项目BOM（含自动建料）
 // 用于任务表单中 bom_upload 字段的自动BOM创建
 // 返回创建的BOM ID和错误
-func (s *ProjectBOMService) CreateBOMFromParsedItems(ctx context.Context, projectID, userID string, bomName string, items []ParsedBOMItem) (string, error) {
+func (s *ProjectBOMService) CreateBOMFromParsedItems(ctx context.Context, projectID, userID string, bomName string, items []ParsedBOMItem, bomType string) (string, error) {
+	if bomType == "" {
+		bomType = "EBOM"
+	}
 	// 1. 创建 ProjectBOM 记录
 	bom := &entity.ProjectBOM{
 		ID:        uuid.New().String()[:32],
 		ProjectID: projectID,
-		BOMType:   "EBOM",
+		BOMType:   bomType,
 		Version:   "v1.0",
 		Name:      bomName,
 		Status:    "draft",
@@ -1518,6 +1876,7 @@ type FieldChange struct {
 
 type CreateBOMInput struct {
 	PhaseID     *string `json:"phase_id"`
+	TaskID      *string `json:"task_id"`
 	BOMType     string  `json:"bom_type" binding:"required"`
 	Version     string  `json:"version"`
 	Name        string  `json:"name" binding:"required"`
@@ -1553,6 +1912,24 @@ type BOMItemInput struct {
 	IsAlternative   bool     `json:"is_alternative"`
 	Notes           string   `json:"notes"`
 	ItemNumber      int      `json:"item_number"`
+
+	// 结构BOM专属字段
+	MaterialType      string   `json:"material_type"`
+	Color             string   `json:"color"`
+	SurfaceTreatment  string   `json:"surface_treatment"`
+	ProcessType       string   `json:"process_type"`
+	DrawingNo         string   `json:"drawing_no"`
+	Drawing2DFileID   *string  `json:"drawing_2d_file_id"`
+	Drawing2DFileName string   `json:"drawing_2d_file_name"`
+	Drawing3DFileID   *string  `json:"drawing_3d_file_id"`
+	Drawing3DFileName string   `json:"drawing_3d_file_name"`
+	WeightGrams       *float64 `json:"weight_grams"`
+	TargetPrice       *float64 `json:"target_price"`
+	ToolingEstimate   *float64 `json:"tooling_estimate"`
+	CostNotes         string   `json:"cost_notes"`
+	IsAppearancePart  bool     `json:"is_appearance_part"`
+	AssemblyMethod    string   `json:"assembly_method"`
+	ToleranceGrade    string   `json:"tolerance_grade"`
 }
 
 type ReorderItemsInput struct {

@@ -7,6 +7,7 @@ type ProjectBOM struct {
 	ID            string     `json:"id" gorm:"primaryKey;size:32"`
 	ProjectID     string     `json:"project_id" gorm:"size:32;not null"`
 	PhaseID       *string    `json:"phase_id" gorm:"size:32"`
+	TaskID        *string    `json:"task_id" gorm:"size:32;index"`
 	BOMType       string     `json:"bom_type" gorm:"size:16;not null;default:EBOM"` // EBOM/SBOM/OBOM/FWBOM
 	Version       string     `json:"version" gorm:"size:16;not null;default:v1.0"`
 	Name          string     `json:"name" gorm:"size:128;not null"`
@@ -70,6 +71,25 @@ type ProjectBOMItem struct {
 	IsAlternative   bool     `json:"is_alternative" gorm:"default:false"`
 	AlternativeFor  *string  `json:"alternative_for,omitempty" gorm:"size:32"`
 	Notes           string   `json:"notes,omitempty"`
+
+	// 结构BOM专属字段
+	MaterialType     string   `json:"material_type,omitempty" gorm:"size:64"`          // 材质：PC, ABS, PA66+GF30, 铝合金6061, 不锈钢304, 硅胶
+	Color            string   `json:"color,omitempty" gorm:"size:64"`                  // 颜色/外观：磨砂黑, Pantone Black 6C
+	SurfaceTreatment string   `json:"surface_treatment,omitempty" gorm:"size:128"`     // 表面处理：阳极氧化, 喷涂, 电镀, 丝印, UV转印, PVD
+	ProcessType      string   `json:"process_type,omitempty" gorm:"size:32"`           // 工艺类型：注塑, CNC, 冲压, 模切, 3D打印, 激光切割
+	DrawingNo        string   `json:"drawing_no,omitempty" gorm:"size:64"`             // 图纸编号
+	Drawing2DFileID  *string  `json:"drawing_2d_file_id,omitempty" gorm:"column:drawing2d_file_id;size:32"`     // 2D工程图文件ID
+	Drawing2DFileName string  `json:"drawing_2d_file_name,omitempty" gorm:"column:drawing2d_file_name;size:256"`  // 2D文件名
+	Drawing3DFileID  *string  `json:"drawing_3d_file_id,omitempty" gorm:"column:drawing3d_file_id;size:32"`     // 3D模型文件ID
+	Drawing3DFileName string  `json:"drawing_3d_file_name,omitempty" gorm:"column:drawing3d_file_name;size:256"`  // 3D文件名
+	WeightGrams      *float64 `json:"weight_grams,omitempty" gorm:"type:numeric(10,2)"` // 重量(克)
+	TargetPrice      *float64 `json:"target_price,omitempty" gorm:"type:numeric(15,4)"` // 目标单价
+	ToolingEstimate  *float64 `json:"tooling_estimate,omitempty" gorm:"type:numeric(15,2)"` // 模具费预估
+	CostNotes        string   `json:"cost_notes,omitempty" gorm:"type:text"`           // 成本备注
+	IsAppearancePart bool     `json:"is_appearance_part" gorm:"default:false"`          // 是否外观件
+	AssemblyMethod   string   `json:"assembly_method,omitempty" gorm:"size:32"`        // 装配方式：卡扣, 螺丝, 胶合, 超声波焊接, 热熔
+	ToleranceGrade   string   `json:"tolerance_grade,omitempty" gorm:"size:32"`        // 公差等级：普通/精密/超精密
+
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 

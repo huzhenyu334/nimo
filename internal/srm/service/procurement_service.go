@@ -350,10 +350,19 @@ func (s *ProcurementService) AutoCreatePRFromBOM(ctx context.Context, projectID,
 		RequestedBy: userID,
 	}
 
+	// 根据BOM类型确定source_bom_type和material_group
+	sourceBOMType := bom.BOMType // e.g. EBOM/SBOM/ABOM
+	materialGroup := bomTypeToMaterialGroup(sourceBOMType)
+
 	for i, item := range items {
 		unit := item.Unit
 		if unit == "" {
 			unit = "pcs"
+		}
+		itemMaterialGroup := materialGroup
+		// ABOM情况下按item category推断
+		if sourceBOMType == "ABOM" && item.Category != "" {
+			itemMaterialGroup = categoryToMaterialGroup(item.Category)
 		}
 		pr.Items = append(pr.Items, entity.PRItem{
 			ID:            uuid.New().String()[:32],
@@ -367,6 +376,8 @@ func (s *ProcurementService) AutoCreatePRFromBOM(ctx context.Context, projectID,
 			Unit:          unit,
 			Status:        entity.PRItemStatusPending,
 			SortOrder:     i + 1,
+			SourceBOMType: sourceBOMType,
+			MaterialGroup: itemMaterialGroup,
 		})
 	}
 
@@ -374,7 +385,7 @@ func (s *ProcurementService) AutoCreatePRFromBOM(ctx context.Context, projectID,
 		return "", fmt.Errorf("创建打样PR失败: %w", err)
 	}
 
-	log.Printf("[SRM] 自动创建打样PR: %s (项目=%s, BOM=%s, %d项)", pr.PRCode, project.Name, bom.Name, len(items))
+	log.Printf("[SRM] 自动创建打样PR: %s (项目=%s, BOM=%s, %d项, group=%s)", pr.PRCode, project.Name, bom.Name, len(items), materialGroup)
 
 	// 发送飞书通知
 	go s.sendPRCreatedNotification(context.Background(), project.Name, pr.PRCode, len(items))
@@ -433,6 +444,67 @@ func (s *ProcurementService) sendPRCreatedNotification(ctx context.Context, proj
 		log.Printf("[SRM] 发送飞书PR创建通知失败: %v", err)
 	} else {
 		log.Printf("[SRM] 飞书PR创建通知已发送: %s", prCode)
+	}
+}
+
+// sendPOApprovedNotification 发送PO审批通过飞书通知
+func (s *ProcurementService) sendPOApprovedNotification(ctx context.Context, po *entity.PurchaseOrder) {
+	if s.feishuClient == nil {
+		return
+	}
+
+	// 硬编码管理员用户ID
+	adminUserID := "ou_5b159fc157d4042f1e8088b1ffebb2da"
+
+	// SRM采购订单页面链接
+	rawURL := "http://43.134.86.237:8080/srm/purchase-orders"
+	detailURL := fmt.Sprintf("https://applink.feishu.cn/client/web_url/open?url=%s&mode=window", url.QueryEscape(rawURL))
+
+	totalText := "未定价"
+	if po.TotalAmount != nil {
+		totalText = fmt.Sprintf("¥%.2f", *po.TotalAmount)
+	}
+
+	itemCount := len(po.Items)
+
+	card := feishu.InteractiveCard{
+		Config: &feishu.CardConfig{WideScreenMode: true},
+		Header: &feishu.CardHeader{
+			Title:    feishu.CardText{Tag: "plain_text", Content: "✅ 采购订单已审批"},
+			Template: "green",
+		},
+		Elements: []feishu.CardElement{
+			{
+				Tag: "div",
+				Fields: []feishu.CardField{
+					{IsShort: true, Text: feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("**订单编码**\n%s", po.POCode)}},
+					{IsShort: true, Text: feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("**订单金额**\n%s", totalText)}},
+					{IsShort: true, Text: feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("**行项数量**\n%d 项", itemCount)}},
+				},
+			},
+			{
+				Tag:  "div",
+				Text: &feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("采购订单 **%s** 已审批通过，可以发送给供应商确认。", po.POCode)},
+			},
+			{Tag: "hr"},
+			{
+				Tag: "action",
+				Actions: []feishu.CardAction{
+					{
+						Tag:  "button",
+						Text: feishu.CardText{Tag: "plain_text", Content: "查看采购订单"},
+						Type: "primary",
+						URL:  detailURL,
+					},
+				},
+			},
+		},
+	}
+
+	if err := s.feishuClient.SendUserCard(ctx, adminUserID, card); err != nil {
+		log.Printf("[SRM] 发送飞书PO审批通知失败: %v", err)
+	} else {
+		log.Printf("[SRM] 飞书PO审批通知已发送: %s", po.POCode)
 	}
 }
 
@@ -509,13 +581,22 @@ func (s *ProcurementService) GeneratePOsFromPR(ctx context.Context, prID, userID
 
 	var createdPOs []*entity.PurchaseOrder
 
+	// 先获取基准编码，后续在循环中递增
+	baseCode, err := s.poRepo.GenerateCode(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("生成PO编码失败: %w", err)
+	}
+	// 解析基准序号
+	year := time.Now().Format("2006")
+	var baseSeq int
+	fmt.Sscanf(baseCode, "PO-"+year+"-%04d", &baseSeq)
+	poIndex := 0
+
 	// 在事务中为每个供应商创建PO
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for supplierID, items := range supplierGroups {
-			code, err := s.poRepo.GenerateCode(ctx)
-			if err != nil {
-				return fmt.Errorf("生成PO编码失败: %w", err)
-			}
+			code := fmt.Sprintf("PO-%s-%04d", year, baseSeq+poIndex)
+			poIndex++
 
 			// 找最早的交期
 			var earliestDate *time.Time
@@ -742,6 +823,10 @@ func (s *ProcurementService) ApprovePO(ctx context.Context, id, userID string) (
 		return nil, err
 	}
 
+	if po.Status == entity.POStatusApproved {
+		return nil, fmt.Errorf("该采购订单已审批通过，不可重复审批")
+	}
+
 	now := time.Now()
 	oldStatus := po.Status
 	po.Status = entity.POStatusApproved
@@ -754,6 +839,9 @@ func (s *ProcurementService) ApprovePO(ctx context.Context, id, userID string) (
 
 	s.logActivity(ctx, "po", po.ID, po.POCode, "status_change", oldStatus, entity.POStatusApproved,
 		"采购订单审批通过", userID)
+
+	// 发送PO审批通过飞书通知
+	go s.sendPOApprovedNotification(context.Background(), po)
 
 	return po, nil
 }
@@ -778,4 +866,34 @@ func strPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// bomTypeToMaterialGroup BOM类型映射到物料分组
+func bomTypeToMaterialGroup(bomType string) string {
+	switch bomType {
+	case "EBOM":
+		return "electronic"
+	case "SBOM":
+		return "structural"
+	case "ABOM":
+		return "assembly"
+	case "TOOLING":
+		return "tooling"
+	default:
+		return "electronic" // 默认电子料
+	}
+}
+
+// categoryToMaterialGroup 根据物料类别推断物料分组（ABOM场景）
+func categoryToMaterialGroup(category string) string {
+	switch category {
+	case "electronic", "电子", "IC", "PCB", "PCBA", "connector", "passive":
+		return "electronic"
+	case "structural", "结构", "机构", "外壳", "housing", "bracket":
+		return "structural"
+	case "tooling", "治具", "模具", "jig", "fixture", "mold":
+		return "tooling"
+	default:
+		return "assembly"
+	}
 }

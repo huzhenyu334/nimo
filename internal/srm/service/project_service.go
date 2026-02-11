@@ -292,6 +292,131 @@ func (s *SRMProjectService) GetProjectProgress(ctx context.Context, srmProjectID
 	return s.projectRepo.FindByID(ctx, srmProjectID)
 }
 
+// GroupStat 分组统计
+type GroupStat struct {
+	Total   int `json:"total"`
+	Passed  int `json:"passed"`
+	Percent int `json:"percent"`
+}
+
+// ProjectProgressByGroup 按物料组获取进度
+type ProjectProgressByGroup struct {
+	Overall GroupStat            `json:"overall"`
+	Groups  map[string]GroupStat `json:"groups"`
+}
+
+// GetProjectProgressByGroup 按material_group分组获取采购项目进度
+func (s *SRMProjectService) GetProjectProgressByGroup(ctx context.Context, srmProjectID string) (*ProjectProgressByGroup, error) {
+	type GroupCount struct {
+		MaterialGroup string
+		Total         int
+		Passed        int
+	}
+	var counts []GroupCount
+	err := s.db.WithContext(ctx).
+		Raw(`SELECT COALESCE(i.material_group, 'unknown') as material_group,
+				COUNT(*) as total,
+				COUNT(*) FILTER (WHERE i.inspection_result = 'passed' OR i.status = 'completed') as passed
+			FROM srm_pr_items i
+			JOIN srm_purchase_requests pr ON i.pr_id = pr.id
+			WHERE pr.srm_project_id = ?
+			GROUP BY i.material_group`, srmProjectID).
+		Scan(&counts).Error
+	if err != nil {
+		return nil, fmt.Errorf("统计分组进度失败: %w", err)
+	}
+
+	result := &ProjectProgressByGroup{
+		Groups: make(map[string]GroupStat),
+	}
+
+	var overallTotal, overallPassed int
+	for _, c := range counts {
+		group := c.MaterialGroup
+		if group == "" {
+			group = "unknown"
+		}
+		pct := 0
+		if c.Total > 0 {
+			pct = c.Passed * 100 / c.Total
+		}
+		result.Groups[group] = GroupStat{
+			Total:   c.Total,
+			Passed:  c.Passed,
+			Percent: pct,
+		}
+		overallTotal += c.Total
+		overallPassed += c.Passed
+	}
+
+	overallPct := 0
+	if overallTotal > 0 {
+		overallPct = overallPassed * 100 / overallTotal
+	}
+	result.Overall = GroupStat{
+		Total:   overallTotal,
+		Passed:  overallPassed,
+		Percent: overallPct,
+	}
+
+	return result, nil
+}
+
+// GetItemsByGroup 按material_group分组获取PR行项
+// 返回格式: {electronic: [...items], structural: [...items], assembly: [...items], tooling: [...items]}
+func (s *SRMProjectService) GetItemsByGroup(ctx context.Context, srmProjectID string) (map[string]interface{}, error) {
+	var items []entity.PRItem
+	// Try srm_project_id first, fallback to project_id
+	err := s.db.WithContext(ctx).
+		Raw(`SELECT i.* FROM srm_pr_items i
+			JOIN srm_purchase_requests pr ON i.pr_id = pr.id
+			WHERE pr.srm_project_id = ? OR pr.project_id = ?
+			ORDER BY i.sort_order ASC`, srmProjectID, srmProjectID).
+		Scan(&items).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询PR行项失败: %w", err)
+	}
+
+	// Initialize all groups as empty arrays (frontend expects all 4 keys)
+	result := map[string]interface{}{
+		"electronic": []map[string]interface{}{},
+		"structural": []map[string]interface{}{},
+		"assembly":   []map[string]interface{}{},
+		"tooling":    []map[string]interface{}{},
+	}
+
+	for _, item := range items {
+		group := item.MaterialGroup
+		if group == "" {
+			group = "electronic" // default
+		}
+		// Build item map matching frontend GroupedItem interface
+		itemMap := map[string]interface{}{
+			"id":              item.ID,
+			"material_name":   item.MaterialName,
+			"material_code":   item.MaterialCode,
+			"category":        item.Category,
+			"quantity":        item.Quantity,
+			"unit_price":      0,
+			"status":          item.Status,
+			"group_type":      group,
+			"specification":   item.Specification,
+			"process_type":    item.ProcessType,
+			"tooling_cost":    item.ToolingCost,
+			"jig_phase":       item.JigPhase,
+			"jig_progress":    item.JigProgress,
+			"image_url":       item.ImageURL,
+		}
+		if arr, ok := result[group].([]map[string]interface{}); ok {
+			result[group] = append(arr, itemMap)
+		} else {
+			result[group] = []map[string]interface{}{itemMap}
+		}
+	}
+
+	return result, nil
+}
+
 // === 延期审批 ===
 
 // CreateDelayRequest 创建延期申请

@@ -4,13 +4,15 @@ import { ApiResponse } from '@/types';
 export interface TaskFormField {
   key: string;
   label: string;
-  type: 'text' | 'textarea' | 'number' | 'select' | 'multiselect' | 'date' | 'file' | 'checkbox' | 'user' | 'role_assignment' | 'bom_upload';
+  type: 'text' | 'textarea' | 'number' | 'select' | 'multiselect' | 'date' | 'file' | 'checkbox' | 'user' | 'role_assignment' | 'bom_upload' | 'cmf';
   required: boolean;
   placeholder?: string;
   description?: string;
   options?: string[];
   accept?: string;
   multiple?: boolean;
+  source_task_code?: string; // CMF字段：指定从哪个任务的SBOM提取外观件
+  bom_type?: 'EBOM' | 'SBOM'; // BOM上传字段：BOM类型
 }
 
 export interface TaskForm {

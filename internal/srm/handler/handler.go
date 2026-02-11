@@ -9,12 +9,18 @@ import (
 
 // Handlers SRM处理器集合
 type Handlers struct {
-	Supplier   *SupplierHandler
-	PR         *PRHandler
-	PO         *POHandler
-	Inspection *InspectionHandler
-	Dashboard  *DashboardHandler
-	Project    *ProjectHandler
+	Supplier         *SupplierHandler
+	PR               *PRHandler
+	PO               *POHandler
+	Inspection       *InspectionHandler
+	Dashboard        *DashboardHandler
+	Project          *ProjectHandler
+	Settlement       *SettlementHandler
+	CorrectiveAction *CorrectiveActionHandler
+	Evaluation       *EvaluationHandler
+	Equipment        *EquipmentHandler
+	RFQ              *RFQHandler
+	PRItem           *PRItemHandler
 }
 
 // NewHandlers 创建SRM处理器集合
@@ -25,14 +31,26 @@ func NewHandlers(
 	dashboardSvc *service.DashboardService,
 	poRepo POItemReceiver,
 	projectSvc *service.SRMProjectService,
+	settlementSvc *service.SettlementService,
+	correctiveActionSvc *service.CorrectiveActionService,
+	evaluationSvc *service.EvaluationService,
+	equipmentSvc *service.EquipmentService,
+	rfqSvc *service.RFQService,
+	prItemSvc *service.PRItemService,
 ) *Handlers {
 	return &Handlers{
-		Supplier:   NewSupplierHandler(supplierSvc),
-		PR:         NewPRHandler(procurementSvc),
-		PO:         NewPOHandler(procurementSvc, poRepo),
-		Inspection: NewInspectionHandler(inspectionSvc),
-		Dashboard:  NewDashboardHandler(dashboardSvc),
-		Project:    NewProjectHandler(projectSvc),
+		Supplier:         NewSupplierHandler(supplierSvc),
+		PR:               NewPRHandler(procurementSvc),
+		PO:               NewPOHandler(procurementSvc, poRepo),
+		Inspection:       NewInspectionHandler(inspectionSvc),
+		Dashboard:        NewDashboardHandler(dashboardSvc),
+		Project:          NewProjectHandler(projectSvc),
+		Settlement:       NewSettlementHandler(settlementSvc),
+		CorrectiveAction: NewCorrectiveActionHandler(correctiveActionSvc),
+		Evaluation:       NewEvaluationHandler(evaluationSvc),
+		Equipment:        NewEquipmentHandler(equipmentSvc),
+		RFQ:              NewRFQHandler(rfqSvc),
+		PRItem:           NewPRItemHandler(prItemSvc),
 	}
 }
 

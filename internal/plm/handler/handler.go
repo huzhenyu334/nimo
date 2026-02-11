@@ -41,6 +41,8 @@ type Handlers struct {
 	Role        *RoleHandler
 	// V9 智能路由
 	Routing     *RoutingHandler
+	// V13 CMF
+	CMF         *CMFHandler
 }
 
 // NewHandlers 创建处理器集合

@@ -69,7 +69,7 @@ const RoleManagement: React.FC = () => {
 
   // ========== Mutations ==========
   const createRoleMut = useMutation({
-    mutationFn: (data: { code: string; name: string }) => roleApi.create(data),
+    mutationFn: (data: { name: string }) => roleApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['roles'] });
       message.success('角色创建成功');
@@ -80,7 +80,7 @@ const RoleManagement: React.FC = () => {
   });
 
   const updateRoleMut = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { code?: string; name?: string } }) =>
+    mutationFn: ({ id, data }: { id: string; data: { name?: string } }) =>
       roleApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['roles'] });
@@ -94,10 +94,10 @@ const RoleManagement: React.FC = () => {
 
   const deleteRoleMut = useMutation({
     mutationFn: (id: string) => roleApi.delete(id),
-    onSuccess: () => {
+    onSuccess: (_data, deletedId) => {
       queryClient.invalidateQueries({ queryKey: ['roles'] });
       message.success('角色删除成功');
-      if (selectedRoleId === editingRole?.id) setSelectedRoleId('');
+      if (selectedRoleId === deletedId) setSelectedRoleId('');
     },
     onError: () => message.error('角色删除失败'),
   });
@@ -125,7 +125,7 @@ const RoleManagement: React.FC = () => {
   // ========== Filtered data ==========
   const filteredRoles = useMemo(() => {
     if (!roleSearch) return roles;
-    return roles.filter((r) => r.name.includes(roleSearch) || r.code.includes(roleSearch));
+    return roles.filter((r) => r.name.includes(roleSearch));
   }, [roles, roleSearch]);
 
   const filteredMembers = useMemo(() => {
@@ -146,7 +146,7 @@ const RoleManagement: React.FC = () => {
 
   const openEditRole = (role: Role) => {
     setEditingRole(role);
-    roleForm.setFieldsValue({ code: role.code, name: role.name });
+    roleForm.setFieldsValue({ name: role.name });
     setRoleModalOpen(true);
   };
 
@@ -304,7 +304,6 @@ const RoleManagement: React.FC = () => {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <h2 style={{ margin: 0, fontSize: 20 }}>{selectedRole.name}</h2>
-                  <span style={{ color: '#8c8c8c', fontSize: 13 }}>角色编码：{selectedRole.code}</span>
                 </div>
                 <Space>
                   <TeamOutlined style={{ fontSize: 16, color: '#8c8c8c' }} />
@@ -391,9 +390,6 @@ const RoleManagement: React.FC = () => {
         confirmLoading={createRoleMut.isPending || updateRoleMut.isPending}
       >
         <Form form={roleForm} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item name="code" label="角色编码" rules={[{ required: true, message: '请输入角色编码' }]}>
-            <Input placeholder="如 project_manager" disabled={!!editingRole} />
-          </Form.Item>
           <Form.Item name="name" label="角色名称" rules={[{ required: true, message: '请输入角色名称' }]}>
             <Input placeholder="如 项目经理" />
           </Form.Item>

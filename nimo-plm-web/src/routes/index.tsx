@@ -9,6 +9,11 @@ import PurchaseOrders from '@/pages/srm/PurchaseOrders';
 import Inspections from '@/pages/srm/Inspections';
 import SRMProjects from '@/pages/srm/Projects';
 import KanbanBoard from '@/pages/srm/KanbanBoard';
+import Settlements from '@/pages/srm/Settlements';
+import CorrectiveActions from '@/pages/srm/CorrectiveActions';
+import Evaluations from '@/pages/srm/Evaluations';
+import SRMProjectDetail from '@/pages/srm/ProjectDetail';
+import SRMEquipment from '@/pages/srm/Equipment';
 import { useAuth } from '@/contexts/AuthContext';
 
 // 受保护路由组件
@@ -114,6 +119,26 @@ export const router = createBrowserRouter([
       {
         path: 'srm/kanban',
         element: <KanbanBoard />,
+      },
+      {
+        path: 'srm/settlements',
+        element: <Settlements />,
+      },
+      {
+        path: 'srm/corrective-actions',
+        element: <CorrectiveActions />,
+      },
+      {
+        path: 'srm/evaluations',
+        element: <Evaluations />,
+      },
+      {
+        path: 'srm/projects/:id',
+        element: <SRMProjectDetail />,
+      },
+      {
+        path: 'srm/equipment',
+        element: <SRMEquipment />,
       },
     ],
   },

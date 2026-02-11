@@ -849,11 +849,14 @@ func (s *ProjectService) CompleteMyTask(ctx context.Context, taskID, userID stri
 // 然后从 formData 中提取已解析的BOM数据，自动创建项目BOM。
 // 由审批通过时调用。
 func (s *ProjectService) ProcessBOMUploadFields(ctx context.Context, form *entity.TaskForm, formData map[string]interface{}, projectID, userID string) {
+	log.Printf("[ProcessBOMUploadFields] entry: formID=%s, taskID=%s, projectID=%s", form.ID, form.TaskID, projectID)
+
 	// 解析 form.Fields 找出 type=bom_upload 的字段key
 	var fields []struct {
-		Key  string `json:"key"`
-		Type string `json:"type"`
-		Label string `json:"label"`
+		Key     string `json:"key"`
+		Type    string `json:"type"`
+		Label   string `json:"label"`
+		BomType string `json:"bom_type"`
 	}
 	if err := json.Unmarshal(form.Fields, &fields); err != nil {
 		log.Printf("[WARN] processBOMUploadFields: parse form fields failed: %v", err)
@@ -864,6 +867,8 @@ func (s *ProjectService) ProcessBOMUploadFields(ctx context.Context, form *entit
 		if f.Type != "bom_upload" {
 			continue
 		}
+
+		log.Printf("[ProcessBOMUploadFields] found bom_upload field: key=%s, label=%s, bom_type=%s", f.Key, f.Label, f.BomType)
 
 		raw, ok := formData[f.Key]
 		if !ok || raw == nil {
@@ -909,6 +914,8 @@ func (s *ProjectService) ProcessBOMUploadFields(ctx context.Context, form *entit
 			parsedItems = append(parsedItems, item)
 		}
 
+		log.Printf("[ProcessBOMUploadFields] parsed items: field=%s, count=%d", f.Key, len(parsedItems))
+
 		if len(parsedItems) == 0 {
 			continue
 		}
@@ -922,11 +929,18 @@ func (s *ProjectService) ProcessBOMUploadFields(ctx context.Context, form *entit
 			bomName = "BOM from task form"
 		}
 
-		bomID, err := s.bomSvc.CreateBOMFromParsedItems(ctx, projectID, userID, bomName, parsedItems)
+		// BOM类型：从field定义读取，默认EBOM
+		bomType := f.BomType
+		if bomType == "" {
+			bomType = "EBOM"
+		}
+
+		bomID, err := s.bomSvc.CreateBOMFromParsedItems(ctx, projectID, userID, bomName, parsedItems, bomType)
 		if err != nil {
-			log.Printf("[WARN] processBOMUploadFields: auto-create BOM failed for field %q: %v", f.Key, err)
+			log.Printf("[ProcessBOMUploadFields] auto-create BOM failed: field=%s, bomType=%s, err=%v", f.Key, bomType, err)
 			continue
 		}
+		log.Printf("[ProcessBOMUploadFields] BOM created successfully: field=%s, bomType=%s, bomID=%s, items=%d", f.Key, bomType, bomID, len(parsedItems))
 		// BOM创建成功后，自动创建SRM打样采购需求
 		// 注意：不再创建PLM采购跟踪任务，该任务由模板自动生成并通过依赖链激活
 		if s.srmProcurementSvc != nil && bomID != "" {
@@ -1208,26 +1222,24 @@ func (s *ProjectService) ConfirmTask(ctx context.Context, projectID, taskID, use
 	}
 
 	// 4. 确认时处理表单副作用（无审批的任务走这条路径）
-	//    - bom_upload → 创建项目BOM
-	//    - role_assignment / user → 角色绑定
-	go func() {
+	//    - role_assignment / user → 角色绑定（同步，必须在激活下游任务之前完成）
+	//    - bom_upload → 创建项目BOM（同步，防止服务器重启丢失数据）
+	s.processRoleAssignment(context.Background(), task)
+
+	// BOM processing - synchronous to prevent data loss on server restart
+	{
 		bgCtx := context.Background()
-		// 角色绑定
-		s.processRoleAssignment(bgCtx, task)
-		// BOM创建
 		if s.bomSvc != nil && s.taskFormRepo != nil {
 			form, ferr := s.taskFormRepo.FindByTaskID(bgCtx, taskID)
-			if ferr != nil || form == nil {
-				return
+			if ferr == nil && form != nil {
+				submission, serr := s.taskFormRepo.FindLatestSubmission(bgCtx, taskID)
+				if serr == nil && submission != nil {
+					formData := map[string]interface{}(submission.Data)
+					s.ProcessBOMUploadFields(bgCtx, form, formData, task.ProjectID, userID)
+				}
 			}
-			submission, serr := s.taskFormRepo.FindLatestSubmission(bgCtx, taskID)
-			if serr != nil || submission == nil {
-				return
-			}
-			formData := map[string]interface{}(submission.Data)
-			s.ProcessBOMUploadFields(bgCtx, form, formData, task.ProjectID, userID)
 		}
-	}()
+	}
 
 	// 5. 更新项目进度
 	go s.updateProjectProgress(context.Background(), task.ProjectID)

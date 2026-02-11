@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net/url"
 	"time"
 
+	"github.com/bitfantasy/nimo/internal/shared/feishu"
 	"github.com/bitfantasy/nimo/internal/srm/entity"
 	"github.com/bitfantasy/nimo/internal/srm/repository"
 	"github.com/google/uuid"
@@ -16,6 +19,7 @@ type InspectionService struct {
 	repo            *repository.InspectionRepository
 	prRepo          *repository.PRRepository
 	activityLogRepo *repository.ActivityLogRepository
+	feishuClient    *feishu.FeishuClient
 }
 
 func NewInspectionService(repo *repository.InspectionRepository, prRepo *repository.PRRepository) *InspectionService {
@@ -28,6 +32,11 @@ func NewInspectionService(repo *repository.InspectionRepository, prRepo *reposit
 // SetActivityLogRepo 注入操作日志仓库
 func (s *InspectionService) SetActivityLogRepo(repo *repository.ActivityLogRepository) {
 	s.activityLogRepo = repo
+}
+
+// SetFeishuClient 注入飞书客户端
+func (s *InspectionService) SetFeishuClient(fc *feishu.FeishuClient) {
+	s.feishuClient = fc
 }
 
 // ListInspections 获取检验列表
@@ -128,7 +137,72 @@ func (s *InspectionService) CompleteInspection(ctx context.Context, id, userID s
 			action, "in_progress", "completed", content, userID, "")
 	}
 
+	// 检验不合格时发送飞书通知
+	if req.Result == "failed" {
+		go s.sendInspectionFailedNotification(context.Background(), inspection)
+	}
+
 	return inspection, nil
+}
+
+// sendInspectionFailedNotification 发送检验不合格飞书通知
+func (s *InspectionService) sendInspectionFailedNotification(ctx context.Context, inspection *entity.Inspection) {
+	if s.feishuClient == nil {
+		return
+	}
+
+	// 硬编码管理员用户ID（采购+品质负责人）
+	adminUserID := "ou_5b159fc157d4042f1e8088b1ffebb2da"
+
+	// SRM检验页面链接
+	rawURL := "http://43.134.86.237:8080/srm/inspections"
+	detailURL := fmt.Sprintf("https://applink.feishu.cn/client/web_url/open?url=%s&mode=window", url.QueryEscape(rawURL))
+
+	notes := inspection.Notes
+	if notes == "" {
+		notes = "无"
+	}
+
+	card := feishu.InteractiveCard{
+		Config: &feishu.CardConfig{WideScreenMode: true},
+		Header: &feishu.CardHeader{
+			Title:    feishu.CardText{Tag: "plain_text", Content: "⚠️ 来料检验不合格"},
+			Template: "red",
+		},
+		Elements: []feishu.CardElement{
+			{
+				Tag: "div",
+				Fields: []feishu.CardField{
+					{IsShort: true, Text: feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("**检验编码**\n%s", inspection.InspectionCode)}},
+					{IsShort: true, Text: feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("**物料名称**\n%s", inspection.MaterialName)}},
+					{IsShort: true, Text: feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("**物料编码**\n%s", inspection.MaterialCode)}},
+					{IsShort: true, Text: feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("**检验结果**\n❌ 不合格")}},
+				},
+			},
+			{
+				Tag:  "div",
+				Text: &feishu.CardText{Tag: "lark_md", Content: fmt.Sprintf("**备注**\n%s", notes)},
+			},
+			{Tag: "hr"},
+			{
+				Tag: "action",
+				Actions: []feishu.CardAction{
+					{
+						Tag:  "button",
+						Text: feishu.CardText{Tag: "plain_text", Content: "查看检验详情"},
+						Type: "primary",
+						URL:  detailURL,
+					},
+				},
+			},
+		},
+	}
+
+	if err := s.feishuClient.SendUserCard(ctx, adminUserID, card); err != nil {
+		log.Printf("[SRM] 发送飞书检验不合格通知失败: %v", err)
+	} else {
+		log.Printf("[SRM] 飞书检验不合格通知已发送: %s", inspection.InspectionCode)
+	}
 }
 
 // CreateInspectionFromPOItem 从PO行项创建检验任务
