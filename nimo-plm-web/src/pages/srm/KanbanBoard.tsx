@@ -18,8 +18,10 @@ import {
   DatePicker,
   Divider,
   App,
+  Table,
+  Checkbox,
 } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { ReloadOutlined, AppstoreOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { srmApi, SRMProject, PRItem, PurchaseRequest, ActivityLog, Supplier } from '@/api/srm';
@@ -27,8 +29,8 @@ import dayjs from 'dayjs';
 
 // Kanban column definitions
 const KANBAN_COLUMNS = [
-  { key: 'pending', label: '待询价', color: '#d9d9d9' },
-  { key: 'sourcing', label: '寻源中', color: '#13c2c2' },
+  { key: 'pending', label: '寻源中', color: '#d9d9d9' },
+  { key: 'sourcing', label: '待下单', color: '#13c2c2' },
   { key: 'ordered', label: '已下单', color: '#1890ff' },
   { key: 'shipped', label: '已发货', color: '#722ed1' },
   { key: 'received', label: '已收货', color: '#2f54eb' },
@@ -45,8 +47,37 @@ interface KanbanItem extends PRItem {
   project_target_date?: string;
 }
 
+// Passive component categories
+const PASSIVE_CATEGORIES = new Set(['电容', '电阻', '电感', '晶振', '晶体管', '测试点', 'electronic']);
+
+const isPassiveComponent = (category: string) => PASSIVE_CATEGORIES.has(category);
+
+// Category sort order: IC → 被动元件(aggregated) → 结构件 → 治具 → 辅料(组装)
+const CATEGORY_ORDER: Record<string, number> = {
+  'IC': 0,
+  '_passive_': 1,
+  '结构件': 2,
+  'structural': 2,
+  '治具': 3,
+  '组装': 4,
+};
+
+const getCategorySortKey = (category: string): number => {
+  if (isPassiveComponent(category)) return CATEGORY_ORDER['_passive_'];
+  return CATEGORY_ORDER[category] ?? 2.5;
+};
+
+// Aggregated card representation
+interface PassiveGroup {
+  type: 'passive_group';
+  items: KanbanItem[];
+  status: string;
+}
+
+type ColumnEntry = { type: 'single'; item: KanbanItem } | PassiveGroup;
+
 const itemStatusLabels: Record<string, string> = {
-  pending: '待询价', sourcing: '寻源中', ordered: '已下单', shipped: '已发货',
+  pending: '寻源中', sourcing: '待下单', ordered: '已下单', shipped: '已发货',
   received: '已收货', inspecting: '检验中', passed: '已通过', failed: '未通过',
 };
 
@@ -82,6 +113,14 @@ const KanbanBoard: React.FC = () => {
   const [assignModalItem, setAssignModalItem] = useState<KanbanItem | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [assignForm] = Form.useForm();
+
+  // Passive group drawer state
+  const [passiveDrawer, setPassiveDrawer] = useState<PassiveGroup | null>(null);
+  const [selectedPassiveIds, setSelectedPassiveIds] = useState<string[]>([]);
+  const [batchAssignModal, setBatchAssignModal] = useState(false);
+  const [batchStatusModal, setBatchStatusModal] = useState(false);
+  const [batchAssignForm] = Form.useForm();
+  const [batchTargetStatus, setBatchTargetStatus] = useState('');
 
   // Load SRM projects for selector
   const { data: projectsData, isLoading: projectsLoading } = useQuery({
@@ -143,7 +182,6 @@ const KanbanBoard: React.FC = () => {
       if (groups[status]) {
         groups[status].push(item);
       } else if (item.status === 'failed') {
-        // Show failed items in inspecting column
         groups['inspecting'].push(item);
       } else {
         groups['pending'].push(item);
@@ -151,6 +189,47 @@ const KanbanBoard: React.FC = () => {
     });
     return groups;
   }, [allItems]);
+
+  // Build sorted column entries with passive aggregation
+  const columnEntries = useMemo(() => {
+    const result: Record<string, ColumnEntry[]> = {};
+    KANBAN_COLUMNS.forEach((col) => {
+      const items = columnData[col.key] || [];
+      const passiveItems: KanbanItem[] = [];
+      const nonPassiveItems: KanbanItem[] = [];
+
+      items.forEach((item) => {
+        if (isPassiveComponent(item.category)) {
+          passiveItems.push(item);
+        } else {
+          nonPassiveItems.push(item);
+        }
+      });
+
+      const entries: ColumnEntry[] = nonPassiveItems.map((item) => ({
+        type: 'single' as const,
+        item,
+      }));
+
+      if (passiveItems.length > 0) {
+        entries.push({
+          type: 'passive_group' as const,
+          items: passiveItems,
+          status: col.key,
+        });
+      }
+
+      // Sort by category order
+      entries.sort((a, b) => {
+        const catA = a.type === 'single' ? getCategorySortKey(a.item.category) : CATEGORY_ORDER['_passive_'];
+        const catB = b.type === 'single' ? getCategorySortKey(b.item.category) : CATEGORY_ORDER['_passive_'];
+        return catA - catB;
+      });
+
+      result[col.key] = entries;
+    });
+    return result;
+  }, [columnData]);
 
   // Summary stats
   const stats = useMemo(() => {
@@ -218,6 +297,57 @@ const KanbanBoard: React.FC = () => {
     }
   };
 
+  // Batch assign supplier for passive group
+  const handleBatchAssignSupplier = async () => {
+    if (selectedPassiveIds.length === 0) return;
+    try {
+      const values = await batchAssignForm.validateFields();
+      setActionLoading(true);
+      const items = passiveDrawer?.items.filter((i) => selectedPassiveIds.includes(i.id)) || [];
+      await Promise.all(
+        items.map((item) =>
+          srmApi.assignSupplier(item.pr_id, item.id, {
+            supplier_id: values.supplier_id,
+            unit_price: values.unit_price,
+            expected_date: values.expected_date ? values.expected_date.toISOString() : undefined,
+          })
+        )
+      );
+      message.success(`已批量分配 ${items.length} 颗物料`);
+      setBatchAssignModal(false);
+      batchAssignForm.resetFields();
+      setSelectedPassiveIds([]);
+      setPassiveDrawer(null);
+      refreshKanban();
+    } catch {
+      message.error('批量分配失败');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Batch status change for passive group
+  const handleBatchStatusChange = async () => {
+    if (selectedPassiveIds.length === 0 || !batchTargetStatus) return;
+    setActionLoading(true);
+    try {
+      const items = passiveDrawer?.items.filter((i) => selectedPassiveIds.includes(i.id)) || [];
+      await Promise.all(
+        items.map((item) => srmApi.updatePRItemStatus(item.id, batchTargetStatus))
+      );
+      message.success(`已批量变更 ${items.length} 颗物料状态`);
+      setBatchStatusModal(false);
+      setBatchTargetStatus('');
+      setSelectedPassiveIds([]);
+      setPassiveDrawer(null);
+      refreshKanban();
+    } catch {
+      message.error('批量变更失败');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const projects = projectsData?.items || [];
   const isLoading = projectsLoading || prLoading;
 
@@ -279,6 +409,30 @@ const KanbanBoard: React.FC = () => {
     );
   };
 
+  // Get available batch status actions for a passive group
+  const getBatchStatusActions = (group: PassiveGroup) => {
+    return STATUS_ACTIONS[group.status] || [];
+  };
+
+  // Column card count (accounting for aggregation: passive group = 1 visual card, but badge shows real count)
+  const getColumnItemCount = (colKey: string) => columnData[colKey]?.length || 0;
+
+  // Passive group table columns for drawer
+  const passiveTableColumns = [
+    { title: '物料名称', dataIndex: 'material_name', key: 'material_name', ellipsis: true },
+    { title: '规格', dataIndex: 'specification', key: 'specification', ellipsis: true, render: (v: string) => v || '-' },
+    { title: '分类', dataIndex: 'category', key: 'category', width: 70 },
+    { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 60, render: (v: number, r: KanbanItem) => `${v} ${r.unit || ''}` },
+    {
+      title: '供应商', key: 'supplier', width: 100,
+      render: (_: unknown, r: KanbanItem) => r.supplier_id ? (supplierMap[r.supplier_id] || '-') : <Tag color="orange">未分配</Tag>,
+    },
+    {
+      title: '状态', dataIndex: 'status', key: 'status', width: 80,
+      render: (v: string) => <Tag>{itemStatusLabels[v] || v}</Tag>,
+    },
+  ];
+
   return (
     <div>
       {/* Top bar: project selector + stats */}
@@ -308,7 +462,7 @@ const KanbanBoard: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flex: 1 }}>
             <span style={{ color: '#666', fontSize: 13 }}>
               总计: <strong>{stats.total}</strong> |
-              待询价: <strong>{stats.pending}</strong> |
+              寻源中: <strong>{stats.pending}</strong> |
               已下单: <strong>{stats.ordered}</strong> |
               已收货: <strong>{stats.received}</strong> |
               已通过: <strong>{stats.passed}/{stats.total}</strong> ({stats.pct}%)
@@ -345,7 +499,8 @@ const KanbanBoard: React.FC = () => {
           minHeight: 'calc(100vh - 200px)',
         }}>
           {KANBAN_COLUMNS.map((col) => {
-            const items = columnData[col.key] || [];
+            const entries = columnEntries[col.key] || [];
+            const itemCount = getColumnItemCount(col.key);
             return (
               <div
                 key={col.key}
@@ -371,7 +526,7 @@ const KanbanBoard: React.FC = () => {
                 }}>
                   <span style={{ fontWeight: 600, fontSize: 14 }}>{col.label}</span>
                   <Badge
-                    count={items.length}
+                    count={itemCount}
                     style={{ backgroundColor: col.color }}
                     overflowCount={999}
                   />
@@ -379,16 +534,31 @@ const KanbanBoard: React.FC = () => {
 
                 {/* Cards */}
                 <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {items.map((item) => (
-                    <KanbanCard
-                      key={item.id}
-                      item={item}
-                      supplierMap={supplierMap}
-                      onClick={() => setDrawerItem(item)}
-                      actions={renderActions(item)}
-                    />
-                  ))}
-                  {items.length === 0 && (
+                  {entries.map((entry) => {
+                    if (entry.type === 'passive_group') {
+                      return (
+                        <PassiveGroupCard
+                          key={`passive-${col.key}`}
+                          group={entry}
+                          supplierMap={supplierMap}
+                          onClick={() => {
+                            setPassiveDrawer(entry);
+                            setSelectedPassiveIds([]);
+                          }}
+                        />
+                      );
+                    }
+                    return (
+                      <KanbanCard
+                        key={entry.item.id}
+                        item={entry.item}
+                        supplierMap={supplierMap}
+                        onClick={() => setDrawerItem(entry.item)}
+                        actions={renderActions(entry.item)}
+                      />
+                    );
+                  })}
+                  {entries.length === 0 && (
                     <div style={{ color: '#bbb', textAlign: 'center', padding: 24, fontSize: 13 }}>
                       暂无物料
                     </div>
@@ -468,7 +638,81 @@ const KanbanBoard: React.FC = () => {
         )}
       </Drawer>
 
-      {/* Assign Supplier Modal */}
+      {/* Passive group detail drawer */}
+      <Drawer
+        title={`被动元件 (${passiveDrawer?.items.length || 0}颗)`}
+        open={!!passiveDrawer}
+        onClose={() => { setPassiveDrawer(null); setSelectedPassiveIds([]); }}
+        width={720}
+      >
+        {passiveDrawer && (
+          <>
+            <Table
+              dataSource={passiveDrawer.items}
+              columns={passiveTableColumns}
+              rowKey="id"
+              size="small"
+              pagination={false}
+              rowSelection={{
+                selectedRowKeys: selectedPassiveIds,
+                onChange: (keys) => setSelectedPassiveIds(keys as string[]),
+              }}
+            />
+
+            {/* Batch action bar */}
+            {selectedPassiveIds.length > 0 && (
+              <div style={{
+                position: 'sticky',
+                bottom: 0,
+                background: '#fff',
+                borderTop: '1px solid #f0f0f0',
+                padding: '12px 0',
+                marginTop: 16,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+              }}>
+                <Checkbox
+                  checked={selectedPassiveIds.length === passiveDrawer.items.length}
+                  indeterminate={selectedPassiveIds.length > 0 && selectedPassiveIds.length < passiveDrawer.items.length}
+                  onChange={(e) => {
+                    setSelectedPassiveIds(e.target.checked ? passiveDrawer.items.map((i) => i.id) : []);
+                  }}
+                >
+                  全选
+                </Checkbox>
+                <span style={{ color: '#666', fontSize: 13 }}>已选 {selectedPassiveIds.length} 项</span>
+                <div style={{ flex: 1 }} />
+                {passiveDrawer.status === 'pending' && (
+                  <Button
+                    type="primary"
+                    size="small"
+                    onClick={() => setBatchAssignModal(true)}
+                  >
+                    批量分配供应商
+                  </Button>
+                )}
+                {getBatchStatusActions(passiveDrawer).map((action) => (
+                  <Button
+                    key={action.toStatus}
+                    size="small"
+                    type={action.primary ? 'primary' : 'default'}
+                    danger={action.danger}
+                    onClick={() => {
+                      setBatchTargetStatus(action.toStatus);
+                      setBatchStatusModal(true);
+                    }}
+                  >
+                    批量{action.label}
+                  </Button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </Drawer>
+
+      {/* Assign Supplier Modal (single item) */}
       <Modal
         title="分配供应商"
         open={!!assignModalItem}
@@ -508,6 +752,118 @@ const KanbanBoard: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* Batch Assign Supplier Modal */}
+      <Modal
+        title={`批量分配供应商 (${selectedPassiveIds.length}颗)`}
+        open={batchAssignModal}
+        onCancel={() => { setBatchAssignModal(false); batchAssignForm.resetFields(); }}
+        onOk={handleBatchAssignSupplier}
+        confirmLoading={actionLoading}
+        okText="确认分配"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <Form form={batchAssignForm} layout="vertical">
+          <Form.Item
+            name="supplier_id"
+            label="供应商"
+            rules={[{ required: true, message: '请选择供应商' }]}
+          >
+            <Select
+              placeholder="请选择供应商"
+              showSearch
+              optionFilterProp="label"
+              options={supplierList.map((s) => ({
+                value: s.id,
+                label: `${s.code} - ${s.name}`,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item name="unit_price" label="单价 (¥)">
+            <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="请输入单价" />
+          </Form.Item>
+          <Form.Item name="expected_date" label="预计交期">
+            <DatePicker style={{ width: '100%' }} placeholder="请选择预计交期" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Batch Status Change Confirm Modal */}
+      <Modal
+        title="批量状态变更"
+        open={batchStatusModal}
+        onCancel={() => { setBatchStatusModal(false); setBatchTargetStatus(''); }}
+        onOk={handleBatchStatusChange}
+        confirmLoading={actionLoading}
+        okText="确认变更"
+        cancelText="取消"
+      >
+        <p>
+          确定要将选中的 <strong>{selectedPassiveIds.length}</strong> 颗被动元件状态变更为
+          「<strong>{itemStatusLabels[batchTargetStatus] || batchTargetStatus}</strong>」吗？
+        </p>
+      </Modal>
+    </div>
+  );
+};
+
+// Passive group aggregated card
+const PassiveGroupCard: React.FC<{
+  group: PassiveGroup;
+  supplierMap: Record<string, string>;
+  onClick: () => void;
+}> = ({ group, onClick }) => {
+  const total = group.items.length;
+  const assignedCount = group.items.filter((i) => !!i.supplier_id).length;
+  const pct = total > 0 ? Math.round((assignedCount / total) * 100) : 0;
+
+  return (
+    <div
+      onClick={onClick}
+      data-testid="passive-group-card"
+      style={{
+        background: 'linear-gradient(135deg, #e6f7ff 0%, #f0f5ff 100%)',
+        borderRadius: 6,
+        padding: '10px 12px',
+        borderLeft: '4px solid #1890ff',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+        cursor: 'pointer',
+        transition: 'box-shadow 0.2s',
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLDivElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLDivElement).style.boxShadow = '0 1px 3px rgba(0,0,0,0.08)';
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+        <AppstoreOutlined style={{ color: '#1890ff', fontSize: 14 }} />
+        <span style={{ fontWeight: 600, fontSize: 13 }}>被动元件</span>
+        <Tag color="blue" style={{ fontSize: 11, lineHeight: '18px', padding: '0 4px', margin: 0 }}>
+          {total}颗
+        </Tag>
+      </div>
+
+      {/* Category breakdown */}
+      <div style={{ fontSize: 11, color: '#666', marginBottom: 6 }}>
+        {Array.from(new Set(group.items.map((i) => i.category)))
+          .map((cat) => {
+            const count = group.items.filter((i) => i.category === cat).length;
+            return `${cat}(${count})`;
+          })
+          .join(' / ')}
+      </div>
+
+      {/* Progress bar */}
+      <Progress
+        percent={pct}
+        size="small"
+        strokeColor="#1890ff"
+        format={() => `${assignedCount}/${total}`}
+        style={{ margin: 0 }}
+      />
     </div>
   );
 };
@@ -531,13 +887,13 @@ const KanbanCard: React.FC<{
 
     if (daysLeft < 0) {
       borderColor = '#ff4d4f'; // red - overdue
-      countdownText = `🔴 超期${Math.abs(daysLeft)}天`;
+      countdownText = `超期${Math.abs(daysLeft)}天`;
     } else if (daysLeft <= 3) {
       borderColor = '#faad14'; // yellow - urgent
-      countdownText = `⏰ 还剩${daysLeft}天`;
+      countdownText = `还剩${daysLeft}天`;
     } else {
       borderColor = '#52c41a'; // green - on track
-      countdownText = `⏰ 还剩${daysLeft}天`;
+      countdownText = `还剩${daysLeft}天`;
     }
   }
 
