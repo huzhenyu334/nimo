@@ -10,11 +10,19 @@ import {
   Timeline,
   Spin,
   Empty,
+  Button,
+  Popconfirm,
+  Modal,
+  Form,
+  InputNumber,
+  DatePicker,
+  Divider,
+  App,
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { srmApi, SRMProject, PRItem, PurchaseRequest, ActivityLog } from '@/api/srm';
+import { srmApi, SRMProject, PRItem, PurchaseRequest, ActivityLog, Supplier } from '@/api/srm';
 import dayjs from 'dayjs';
 
 // Kanban column definitions
@@ -42,11 +50,38 @@ const itemStatusLabels: Record<string, string> = {
   received: '已收货', inspecting: '检验中', passed: '已通过', failed: '未通过',
 };
 
+// Action definitions per status
+const STATUS_ACTIONS: Record<string, Array<{ label: string; toStatus: string; danger?: boolean; primary?: boolean }>> = {
+  pending: [
+    { label: '发起询价', toStatus: 'sourcing', primary: true },
+  ],
+  sourcing: [
+    { label: '确认下单', toStatus: 'ordered', primary: true },
+  ],
+  ordered: [
+    { label: '标记发货', toStatus: 'shipped', primary: true },
+  ],
+  shipped: [
+    { label: '确认收货', toStatus: 'received', primary: true },
+  ],
+  received: [
+    { label: '发起检验', toStatus: 'inspecting', primary: true },
+  ],
+  inspecting: [
+    { label: '标记通过', toStatus: 'passed', primary: true },
+    { label: '标记不通过', toStatus: 'failed', danger: true },
+  ],
+};
+
 const KanbanBoard: React.FC = () => {
+  const { message } = App.useApp();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const projectId = searchParams.get('project') || '';
   const [drawerItem, setDrawerItem] = useState<KanbanItem | null>(null);
+  const [assignModalItem, setAssignModalItem] = useState<KanbanItem | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [assignForm] = Form.useForm();
 
   // Load SRM projects for selector
   const { data: projectsData, isLoading: projectsLoading } = useQuery({
@@ -79,6 +114,8 @@ const KanbanBoard: React.FC = () => {
     (supplierData?.items || []).forEach((s) => { map[s.id] = s.name; });
     return map;
   }, [supplierData]);
+
+  const supplierList: Supplier[] = useMemo(() => supplierData?.items || [], [supplierData]);
 
   // Flatten all PR items into kanban items
   const allItems: KanbanItem[] = useMemo(() => {
@@ -137,8 +174,110 @@ const KanbanBoard: React.FC = () => {
     setSearchParams({ project: value });
   };
 
+  const refreshKanban = () => {
+    queryClient.invalidateQueries({ queryKey: ['srm-prs-kanban'] });
+    queryClient.invalidateQueries({ queryKey: ['srm-project'] });
+    if (drawerItem) {
+      queryClient.invalidateQueries({ queryKey: ['srm-activities', 'pr_item', drawerItem.id] });
+    }
+  };
+
+  const handleStatusChange = async (item: KanbanItem, toStatus: string) => {
+    setActionLoading(true);
+    try {
+      await srmApi.updatePRItemStatus(item.id, toStatus);
+      message.success('操作成功');
+      setDrawerItem(null);
+      refreshKanban();
+    } catch {
+      message.error('操作失败');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleAssignSupplier = async () => {
+    if (!assignModalItem) return;
+    try {
+      const values = await assignForm.validateFields();
+      setActionLoading(true);
+      await srmApi.assignSupplier(assignModalItem.pr_id, assignModalItem.id, {
+        supplier_id: values.supplier_id,
+        unit_price: values.unit_price,
+        expected_date: values.expected_date ? values.expected_date.format('YYYY-MM-DD') : undefined,
+      });
+      message.success('供应商分配成功');
+      setAssignModalItem(null);
+      assignForm.resetFields();
+      setDrawerItem(null);
+      refreshKanban();
+    } catch {
+      message.error('分配失败');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const projects = projectsData?.items || [];
   const isLoading = projectsLoading || prLoading;
+
+  // Render action buttons for a given item (used in both card and drawer)
+  const renderActions = (item: KanbanItem, size: 'small' | 'middle' = 'small') => {
+    const actions = STATUS_ACTIONS[item.status] || [];
+    const showAssign = item.status === 'pending' && !item.supplier_id;
+    if (actions.length === 0 && !showAssign) return null;
+
+    return (
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {showAssign && (
+          <Button
+            size={size}
+            type="link"
+            style={{ padding: '0 4px', fontSize: size === 'small' ? 12 : 13, height: 'auto' }}
+            onClick={(e) => { e.stopPropagation(); setAssignModalItem(item); }}
+          >
+            分配供应商
+          </Button>
+        )}
+        {actions.map((action) =>
+          action.danger ? (
+            <Popconfirm
+              key={action.toStatus}
+              title="确认操作"
+              description={`确定要${action.label}吗？`}
+              onConfirm={(e) => { e?.stopPropagation(); handleStatusChange(item, action.toStatus); }}
+              onCancel={(e) => e?.stopPropagation()}
+              okText="确定"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+            >
+              <Button
+                size={size}
+                type="link"
+                danger
+                style={{ padding: '0 4px', fontSize: size === 'small' ? 12 : 13, height: 'auto' }}
+                loading={actionLoading}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {action.label}
+              </Button>
+            </Popconfirm>
+          ) : (
+            <Button
+              key={action.toStatus}
+              size={size}
+              type="link"
+              style={{ padding: '0 4px', fontSize: size === 'small' ? 12 : 13, height: 'auto', color: action.primary ? '#1890ff' : undefined }}
+              loading={actionLoading}
+              onClick={(e) => { e.stopPropagation(); handleStatusChange(item, action.toStatus); }}
+            >
+              {action.label}
+            </Button>
+          )
+        )}
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -161,10 +300,7 @@ const KanbanBoard: React.FC = () => {
           />
           <ReloadOutlined
             style={{ cursor: 'pointer', color: '#1890ff' }}
-            onClick={() => {
-              queryClient.invalidateQueries({ queryKey: ['srm-prs-kanban'] });
-              queryClient.invalidateQueries({ queryKey: ['srm-project'] });
-            }}
+            onClick={() => refreshKanban()}
           />
         </div>
 
@@ -249,6 +385,7 @@ const KanbanBoard: React.FC = () => {
                       item={item}
                       supplierMap={supplierMap}
                       onClick={() => setDrawerItem(item)}
+                      actions={renderActions(item)}
                     />
                   ))}
                   {items.length === 0 && (
@@ -299,6 +436,17 @@ const KanbanBoard: React.FC = () => {
               <Descriptions.Item label="备注">{drawerItem.notes || '-'}</Descriptions.Item>
             </Descriptions>
 
+            {/* Action area in drawer */}
+            {renderActions(drawerItem, 'middle') && (
+              <>
+                <Divider style={{ margin: '16px 0 12px' }} />
+                <div style={{ marginBottom: 16 }}>
+                  <h4 style={{ marginBottom: 8 }}>操作</h4>
+                  {renderActions(drawerItem, 'middle')}
+                </div>
+              </>
+            )}
+
             <h4 style={{ marginBottom: 12 }}>操作记录</h4>
             {(activityData?.items || []).length === 0 ? (
               <Empty description="暂无操作记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
@@ -319,6 +467,47 @@ const KanbanBoard: React.FC = () => {
           </>
         )}
       </Drawer>
+
+      {/* Assign Supplier Modal */}
+      <Modal
+        title="分配供应商"
+        open={!!assignModalItem}
+        onCancel={() => { setAssignModalItem(null); assignForm.resetFields(); }}
+        onOk={handleAssignSupplier}
+        confirmLoading={actionLoading}
+        okText="确认分配"
+        cancelText="取消"
+        destroyOnClose
+      >
+        {assignModalItem && (
+          <div style={{ marginBottom: 16, color: '#666', fontSize: 13 }}>
+            物料: <strong>{assignModalItem.material_name}</strong> ({assignModalItem.material_code || '-'})
+          </div>
+        )}
+        <Form form={assignForm} layout="vertical">
+          <Form.Item
+            name="supplier_id"
+            label="供应商"
+            rules={[{ required: true, message: '请选择供应商' }]}
+          >
+            <Select
+              placeholder="请选择供应商"
+              showSearch
+              optionFilterProp="label"
+              options={supplierList.map((s) => ({
+                value: s.id,
+                label: `${s.code} - ${s.name}`,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item name="unit_price" label="单价 (¥)">
+            <InputNumber style={{ width: '100%' }} min={0} precision={2} placeholder="请输入单价" />
+          </Form.Item>
+          <Form.Item name="expected_date" label="预计交期">
+            <DatePicker style={{ width: '100%' }} placeholder="请选择预计交期" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };
@@ -328,7 +517,8 @@ const KanbanCard: React.FC<{
   item: KanbanItem;
   supplierMap: Record<string, string>;
   onClick: () => void;
-}> = ({ item, supplierMap, onClick }) => {
+  actions?: React.ReactNode;
+}> = ({ item, supplierMap, onClick, actions }) => {
   // Calculate urgency based on expected_date or project target date
   const deadline = item.expected_date || item.project_target_date;
   let borderColor = '#e8e8e8'; // gray - no deadline
@@ -409,6 +599,13 @@ const KanbanCard: React.FC<{
           </Tag>
         )}
       </div>
+
+      {/* Action buttons on card */}
+      {actions && (
+        <div style={{ marginTop: 6, borderTop: '1px solid #f0f0f0', paddingTop: 6 }}>
+          {actions}
+        </div>
+      )}
     </div>
   );
 };

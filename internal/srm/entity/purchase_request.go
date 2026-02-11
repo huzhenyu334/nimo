@@ -108,10 +108,24 @@ func (PRItem) TableName() string {
 
 // PR行项状态
 const (
-	PRItemStatusPending   = "pending"
-	PRItemStatusSourcing  = "sourcing"
-	PRItemStatusOrdered   = "ordered"
-	PRItemStatusReceived  = "received"
-	PRItemStatusInspected = "inspected"
-	PRItemStatusCompleted = "completed"
+	PRItemStatusPending    = "pending"
+	PRItemStatusSourcing   = "sourcing"
+	PRItemStatusOrdered    = "ordered"
+	PRItemStatusShipped    = "shipped"
+	PRItemStatusReceived   = "received"
+	PRItemStatusInspecting = "inspecting"
+	PRItemStatusPassed     = "passed"
+	PRItemStatusFailed     = "failed"
+	PRItemStatusInspected  = "inspected"
+	PRItemStatusCompleted  = "completed"
 )
+
+// ValidPRItemTransitions 合法的PR行项状态流转
+var ValidPRItemTransitions = map[string][]string{
+	PRItemStatusPending:    {PRItemStatusSourcing},
+	PRItemStatusSourcing:   {PRItemStatusOrdered},
+	PRItemStatusOrdered:    {PRItemStatusShipped},
+	PRItemStatusShipped:    {PRItemStatusReceived},
+	PRItemStatusReceived:   {PRItemStatusInspecting},
+	PRItemStatusInspecting: {PRItemStatusPassed, PRItemStatusFailed},
+}

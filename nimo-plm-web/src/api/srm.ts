@@ -415,6 +415,11 @@ export const srmApi = {
     return response.data.data;
   },
 
+  updatePRItemStatus: async (itemId: string, status: string): Promise<PRItem> => {
+    const response = await apiClient.put<ApiResponse<PRItem>>(`/srm/pr-items/${itemId}/status`, { status });
+    return response.data.data;
+  },
+
   // --- Purchase Orders ---
   listPOs: async (params?: {
     supplier_id?: string;
