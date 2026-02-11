@@ -12,10 +12,10 @@ import {
   Avatar,
   Checkbox,
   Tree,
-  message,
   Spin,
   Empty,
   Popconfirm,
+  App,
 } from 'antd';
 import {
   SearchOutlined,
@@ -37,6 +37,7 @@ import {
 } from '@/api/roles';
 
 const RoleManagement: React.FC = () => {
+  const { modal, message } = App.useApp();
   const queryClient = useQueryClient();
   const [selectedRoleId, setSelectedRoleId] = useState<string>('');
   const [roleSearch, setRoleSearch] = useState('');
@@ -262,7 +263,7 @@ const RoleManagement: React.FC = () => {
                     onClick: ({ key }) => {
                       if (key === 'edit') openEditRole(role);
                       if (key === 'delete') {
-                        Modal.confirm({
+                        modal.confirm({
                           title: '确认删除',
                           content: `确定要删除角色「${role.name}」吗？`,
                           onOk: () => deleteRoleMut.mutate(role.id),
@@ -428,6 +429,7 @@ const AddMemberModal: React.FC<AddMemberModalProps> = ({
   onCancel,
   confirmLoading,
 }) => {
+  const { message } = App.useApp();
   const [search, setSearch] = useState('');
   const [selectedUsers, setSelectedUsers] = useState<Map<string, DepartmentUser>>(new Map());
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);

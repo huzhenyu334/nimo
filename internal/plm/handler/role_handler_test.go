@@ -180,6 +180,50 @@ func TestRoleDelete(t *testing.T) {
 	}
 }
 
+func TestRoleDeleteWithMembers(t *testing.T) {
+	env, _ := setupRoleTest(t)
+	token := testutil.DefaultTestToken()
+
+	// Create role and user, then add user as member
+	testutil.SeedTestRole(t, env.DB, "role-del-mem-001", "role_del_mem", "删除含成员角色", false)
+	testutil.SeedTestUser(t, env.DB, "user-del-mem-001", "成员用户", "delmem@test.com")
+
+	// Add member
+	addBody := map[string]interface{}{
+		"user_ids": []string{"user-del-mem-001"},
+	}
+	w := testutil.DoRequest(env.Router, http.MethodPost, "/api/v1/roles/role-del-mem-001/members", addBody, token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("add member: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify member exists
+	var memberCount int64
+	env.DB.Model(&entity.UserRole{}).Where("role_id = ?", "role-del-mem-001").Count(&memberCount)
+	if memberCount != 1 {
+		t.Fatalf("expected 1 member before delete, got %d", memberCount)
+	}
+
+	// Delete the role
+	w = testutil.DoRequest(env.Router, http.MethodDelete, "/api/v1/roles/role-del-mem-001", nil, token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete role with members: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify role is deleted
+	var roleCount int64
+	env.DB.Model(&entity.Role{}).Where("id = ?", "role-del-mem-001").Count(&roleCount)
+	if roleCount != 0 {
+		t.Fatal("expected role to be deleted from database")
+	}
+
+	// Verify member association is also cleaned up
+	env.DB.Model(&entity.UserRole{}).Where("role_id = ?", "role-del-mem-001").Count(&memberCount)
+	if memberCount != 0 {
+		t.Fatalf("expected 0 members after role delete, got %d", memberCount)
+	}
+}
+
 func TestRoleDeleteSystemRole(t *testing.T) {
 	env, _ := setupRoleTest(t)
 	token := testutil.DefaultTestToken()
