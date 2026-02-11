@@ -97,7 +97,7 @@ const PurchaseRequests: React.FC = () => {
 
   const { data: supplierData } = useQuery({
     queryKey: ['srm-suppliers-select'],
-    queryFn: () => srmApi.listSuppliers({ page_size: 200, status: 'active' }),
+    queryFn: () => srmApi.listSuppliers({ page_size: 200 }),
   });
 
   // 供应商ID→名称映射

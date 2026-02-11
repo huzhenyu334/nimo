@@ -106,7 +106,7 @@ const KanbanBoard: React.FC = () => {
   // Load supplier map
   const { data: supplierData } = useQuery({
     queryKey: ['srm-suppliers-select'],
-    queryFn: () => srmApi.listSuppliers({ page_size: 200, status: 'active' }),
+    queryFn: () => srmApi.listSuppliers({ page_size: 200 }),
   });
 
   const supplierMap = useMemo(() => {
@@ -204,7 +204,7 @@ const KanbanBoard: React.FC = () => {
       await srmApi.assignSupplier(assignModalItem.pr_id, assignModalItem.id, {
         supplier_id: values.supplier_id,
         unit_price: values.unit_price,
-        expected_date: values.expected_date ? values.expected_date.format('YYYY-MM-DD') : undefined,
+        expected_date: values.expected_date ? values.expected_date.toISOString() : undefined,
       });
       message.success('供应商分配成功');
       setAssignModalItem(null);
