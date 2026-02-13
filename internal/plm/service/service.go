@@ -28,8 +28,14 @@ type Services struct {
 	Automation *AutomationService
 	// V2 新增
 	ProjectBOM *ProjectBOMService
+	// V13 CMF
+	CMF *CMFService
 	// V14 SKU
 	SKU *SKUService
+	// V16 CMF变体
+	CMFVariant *CMFVariantService
+	// V17 语言变体
+	LangVariant *LangVariantService
 }
 
 // NewServices 创建服务集合
@@ -69,9 +75,15 @@ func NewServices(repos *repository.Repositories, rdb *redis.Client, cfg *config.
 		Template:   templateSvc,
 		Automation: nil, // Will be initialized with logger later if needed
 		// V2 新增
-		ProjectBOM: NewProjectBOMService(repos.ProjectBOM, repos.Project, repos.Deliverable, repos.Material),
+		ProjectBOM: NewProjectBOMService(repos.ProjectBOM, repos.Project, repos.Deliverable, repos.Material, repos.PartDrawing),
+		// V13 CMF
+		CMF: NewCMFService(repos.CMF, repos.ProjectBOM, repos.Task),
 		// V14 SKU
-		SKU: NewSKUService(repos.SKU, repos.ProjectBOM),
+		SKU: NewSKUService(repos.SKU, repos.ProjectBOM, repos.CMFVariant),
+		// V16 CMF变体
+		CMFVariant: NewCMFVariantService(repos.CMFVariant, repos.ProjectBOM),
+		// V17 语言变体
+		LangVariant: NewLangVariantService(repos.LangVariant, repos.ProjectBOM),
 	}
 }
 

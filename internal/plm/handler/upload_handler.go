@@ -1,10 +1,15 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -102,4 +107,65 @@ func (h *UploadHandler) Upload(c *gin.Context) {
 	}
 
 	Success(c, uploaded)
+}
+
+// Get3DModel 获取3D模型的STL格式（用于前端Three.js预览）
+// GET /files/:fileId/3d
+func (h *UploadHandler) Get3DModel(c *gin.Context) {
+	fileID := c.Param("fileId")
+	if fileID == "" {
+		BadRequest(c, "缺少fileId参数")
+		return
+	}
+
+	// 递归搜索uploads目录查找匹配fileId前缀的STP/STEP文件
+	uploadsDir := "./uploads"
+	var foundPath string
+	filepath.WalkDir(uploadsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || foundPath != "" {
+			return nil
+		}
+		name := d.Name()
+		if strings.HasPrefix(name, fileID) {
+			lower := strings.ToLower(name)
+			if strings.HasSuffix(lower, ".stp") || strings.HasSuffix(lower, ".step") {
+				foundPath = path
+			}
+		}
+		return nil
+	})
+
+	if foundPath == "" {
+		NotFound(c, "未找到3D模型文件")
+		return
+	}
+
+	// 获取绝对路径
+	absPath, err := filepath.Abs(foundPath)
+	if err != nil {
+		InternalError(c, "解析文件路径失败")
+		return
+	}
+
+	// 调用stp-thumbnail服务转换为STL
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"path":      absPath,
+		"tolerance": 0.1,
+	})
+	resp, err := http.Post("http://127.0.0.1:5001/convert/stl", "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		InternalError(c, "3D转换服务不可用")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		InternalError(c, "3D转换失败: "+string(body))
+		return
+	}
+
+	c.Header("Content-Type", "application/sla")
+	c.Header("Content-Disposition", "inline; filename=\"model.stl\"")
+	io.Copy(c.Writer, resp.Body)
 }

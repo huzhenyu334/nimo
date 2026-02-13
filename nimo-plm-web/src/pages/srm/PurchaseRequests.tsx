@@ -24,9 +24,6 @@ import dayjs from 'dayjs';
 
 const { Search } = Input;
 
-const typeLabels: Record<string, string> = { sample: '打样', production: '量产' };
-const typeColors: Record<string, string> = { sample: 'blue', production: 'green' };
-
 const priorityLabels: Record<string, string> = { low: '低', medium: '中', high: '高', urgent: '紧急' };
 const priorityColors: Record<string, string> = { low: 'default', medium: 'blue', high: 'orange', urgent: 'red' };
 
@@ -51,7 +48,6 @@ const itemStatusColors: Record<string, string> = {
 const PurchaseRequests: React.FC = () => {
   const queryClient = useQueryClient();
   const [searchText, setSearchText] = useState('');
-  const [filterType, setFilterType] = useState<string>();
   const [filterStatus, setFilterStatus] = useState<string>();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -67,11 +63,10 @@ const PurchaseRequests: React.FC = () => {
   const [assignForm] = Form.useForm();
 
   const { data, isLoading } = useQuery({
-    queryKey: ['srm-prs', searchText, filterType, filterStatus, page, pageSize],
+    queryKey: ['srm-prs', searchText, filterStatus, page, pageSize],
     queryFn: () =>
       srmApi.listPRs({
         search: searchText || undefined,
-        type: filterType,
         status: filterStatus,
         page,
         page_size: pageSize,
@@ -190,13 +185,6 @@ const PurchaseRequests: React.FC = () => {
     },
     { title: '标题', dataIndex: 'title', key: 'title', width: 200, ellipsis: true },
     {
-      title: '类型',
-      dataIndex: 'type',
-      key: 'type',
-      width: 80,
-      render: (t: string) => <Tag color={typeColors[t]}>{typeLabels[t] || t}</Tag>,
-    },
-    {
       title: '优先级',
       dataIndex: 'priority',
       key: 'priority',
@@ -314,17 +302,6 @@ const PurchaseRequests: React.FC = () => {
         extra={
           <Space wrap>
             <Select
-              placeholder="类型"
-              allowClear
-              style={{ width: 100 }}
-              options={[
-                { value: 'sample', label: '打样' },
-                { value: 'production', label: '量产' },
-              ]}
-              value={filterType}
-              onChange={(v) => { setFilterType(v); setPage(1); }}
-            />
-            <Select
               placeholder="状态"
               allowClear
               style={{ width: 110 }}
@@ -386,18 +363,13 @@ const PurchaseRequests: React.FC = () => {
         confirmLoading={createMutation.isPending}
         width={520}
       >
-        <Form form={form} layout="vertical" initialValues={{ type: 'sample', priority: 'medium' }}>
+        <Form form={form} layout="vertical" initialValues={{ priority: 'medium' }}>
           <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
             <Input placeholder="采购需求标题" />
           </Form.Item>
-          <Space style={{ width: '100%' }} size="middle">
-            <Form.Item name="type" label="类型" rules={[{ required: true }]}>
-              <Select style={{ width: 140 }} options={[{ value: 'sample', label: '打样' }, { value: 'production', label: '量产' }]} />
-            </Form.Item>
-            <Form.Item name="priority" label="优先级">
-              <Select style={{ width: 140 }} options={Object.entries(priorityLabels).map(([k, v]) => ({ value: k, label: v }))} />
-            </Form.Item>
-          </Space>
+          <Form.Item name="priority" label="优先级">
+            <Select style={{ width: 140 }} options={Object.entries(priorityLabels).map(([k, v]) => ({ value: k, label: v }))} />
+          </Form.Item>
           <Form.Item name="project_id" label="关联项目">
             <Select
               placeholder="选择项目（可选）"
@@ -507,9 +479,6 @@ const PurchaseRequests: React.FC = () => {
             <Descriptions column={2} bordered size="small" style={{ marginBottom: 24 }}>
               <Descriptions.Item label="PR编码">{detail.pr_code}</Descriptions.Item>
               <Descriptions.Item label="标题">{detail.title}</Descriptions.Item>
-              <Descriptions.Item label="类型">
-                <Tag color={typeColors[detail.type]}>{typeLabels[detail.type] || detail.type}</Tag>
-              </Descriptions.Item>
               <Descriptions.Item label="优先级">
                 <Tag color={priorityColors[detail.priority]}>{priorityLabels[detail.priority] || detail.priority}</Tag>
               </Descriptions.Item>

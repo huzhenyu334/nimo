@@ -47,6 +47,10 @@ type Handlers struct {
 	SKU         *SKUHandler
 	// V15 图纸版本管理
 	PartDrawing *PartDrawingHandler
+	// V16 CMF变体
+	CMFVariant  *CMFVariantHandler
+	// V17 语言变体
+	LangVariant *LangVariantHandler
 }
 
 // NewHandlers 创建处理器集合
@@ -76,11 +80,18 @@ func NewHandlers(svc *service.Services, repos *repository.Repositories, cfg *con
 	// V3 工作流
 	if workflowSvc != nil {
 		h.Workflow = NewWorkflowHandler(workflowSvc)
+		h.TaskForm.SetProcurementTrigger(workflowSvc)
 	}
+	// V13 CMF
+	h.CMF = NewCMFHandler(svc.CMF)
 	// V14 SKU
 	h.SKU = NewSKUHandler(svc.SKU)
 	// V15 图纸版本管理
 	h.PartDrawing = NewPartDrawingHandler(repos.PartDrawing, repos.ProjectBOM)
+	// V16 CMF变体
+	h.CMFVariant = NewCMFVariantHandler(svc.CMFVariant)
+	// V17 语言变体
+	h.LangVariant = NewLangVariantHandler(svc.LangVariant)
 	return h
 }
 

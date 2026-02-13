@@ -898,15 +898,51 @@ func (s *ProjectService) ProcessBOMUploadFields(ctx context.Context, form *entit
 				continue
 			}
 			item := ParsedBOMItem{
-				ItemNumber:     toInt(itemMap["item_number"]),
-				Reference:      toStr(itemMap["reference"]),
-				Name:           toStr(itemMap["name"]),
-				Specification:  toStr(itemMap["specification"]),
-				Quantity:       toFloat64(itemMap["quantity"]),
-				Unit:           toStr(itemMap["unit"]),
-				Category:       toStr(itemMap["category"]),
-				Manufacturer:   toStr(itemMap["manufacturer"]),
-				ManufacturerPN: toStr(itemMap["manufacturer_pn"]),
+				ItemNumber:        toInt(itemMap["item_number"]),
+				Reference:         toStr(itemMap["reference"]),
+				Name:              toStr(itemMap["name"]),
+				Specification:     toStr(itemMap["specification"]),
+				Quantity:          toFloat64(itemMap["quantity"]),
+				Unit:              toStr(itemMap["unit"]),
+				Category:          toStr(itemMap["category"]),
+				Manufacturer:      toStr(itemMap["manufacturer"]),
+				ManufacturerPN:    toStr(itemMap["manufacturer_pn"]),
+				MaterialType:      toStr(itemMap["material_type"]),
+				ProcessType:       toStr(itemMap["process_type"]),
+				WeightGrams:       toFloat64(itemMap["weight_grams"]),
+				TargetPrice:       toFloat64(itemMap["target_price"]),
+				ToolingEstimate:   toFloat64(itemMap["tooling_estimate"]),
+				IsAppearancePart:  toBool(itemMap["is_appearance_part"]),
+				AssemblyMethod:    toStr(itemMap["assembly_method"]),
+				ToleranceGrade:    toStr(itemMap["tolerance_grade"]),
+				ThumbnailURL:      toStr(itemMap["thumbnail_url"]),
+				Notes:             toStr(itemMap["notes"]),
+				Drawing2DFileID:   toStr(itemMap["drawing_2d_file_id"]),
+				Drawing2DFileName: toStr(itemMap["drawing_2d_file_name"]),
+				Drawing3DFileID:   toStr(itemMap["drawing_3d_file_id"]),
+				Drawing3DFileName: toStr(itemMap["drawing_3d_file_name"]),
+				// EBOM fields
+				ItemType:            toStr(itemMap["item_type"]),
+				Designator:          toStr(itemMap["designator"]),
+				Package:             toStr(itemMap["package"]),
+				PCBLayers:           toInt(itemMap["pcb_layers"]),
+				PCBThickness:        toStr(itemMap["pcb_thickness"]),
+				PCBMaterial:         toStr(itemMap["pcb_material"]),
+				PCBDimensions:       toStr(itemMap["pcb_dimensions"]),
+				PCBSurfaceFinish:    toStr(itemMap["pcb_surface_finish"]),
+				ServiceType:         toStr(itemMap["service_type"]),
+				ProcessRequirements: toStr(itemMap["process_requirements"]),
+				Attachments:         toStr(itemMap["attachments"]),
+				// PBOM fields
+				DesignFileID:   toStr(itemMap["design_file_id"]),
+				DesignFileName: toStr(itemMap["design_file_name"]),
+				LanguageCode:   toStr(itemMap["language_code"]),
+				// Shared fields
+				Supplier:          toStr(itemMap["supplier"]),
+				UnitPrice:         toFloat64(itemMap["unit_price"]),
+				LeadTimeDays:      toInt(itemMap["lead_time_days"]),
+				ProcurementType:   toStr(itemMap["procurement_type"]),
+				IsCritical:        toBool(itemMap["is_critical"]),
 			}
 			if item.Unit == "" {
 				item.Unit = "pcs"
@@ -1038,6 +1074,17 @@ func toInt(v interface{}) int {
 		return int(i)
 	}
 	return 0
+}
+
+// toBool 安全地将 interface{} 转为 bool
+func toBool(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return false
 }
 
 // processRoleAssignment 根据任务表单中的用户选择字段，自动写入项目角色分配表

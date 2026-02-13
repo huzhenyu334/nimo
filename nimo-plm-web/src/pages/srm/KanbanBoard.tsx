@@ -25,13 +25,13 @@ import { ReloadOutlined, AppstoreOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { srmApi, SRMProject, PRItem, PurchaseRequest, ActivityLog, Supplier, SamplingRequest } from '@/api/srm';
+import { projectApi } from '@/api/projects';
 import { Input } from 'antd';
 import dayjs from 'dayjs';
 
 // Kanban column definitions
 const KANBAN_COLUMNS = [
   { key: 'pending', label: '寻源中', color: '#d9d9d9' },
-  { key: 'sampling', label: '打样中', color: '#eb2f96' },
   { key: 'quoting', label: '报价中', color: '#faad14' },
   { key: 'sourcing', label: '待下单', color: '#13c2c2' },
   { key: 'ordered', label: '已下单', color: '#1890ff' },
@@ -70,6 +70,18 @@ const getCategorySortKey = (category: string): number => {
   return CATEGORY_ORDER[category] ?? 2.5;
 };
 
+// Category filter options for demand classification
+const CATEGORY_FILTERS = [
+  { value: 'all', label: '全部需求' },
+  { value: 'EBOM', label: '电子EBOM' },
+  { value: 'SBOM', label: '结构SBOM' },
+  { value: 'PBOM', label: '包装PBOM' },
+  { value: 'TOOLING', label: '工装治具' },
+  { value: 'AUXILIARY', label: '生产辅料' },
+  { value: 'LICENSE', label: '软件License' },
+];
+const ALL_CATEGORY_VALUES = CATEGORY_FILTERS.filter(c => c.value !== 'all').map(c => c.value);
+
 // Aggregated card representation
 interface PassiveGroup {
   type: 'passive_group';
@@ -80,7 +92,7 @@ interface PassiveGroup {
 type ColumnEntry = { type: 'single'; item: KanbanItem } | PassiveGroup;
 
 const itemStatusLabels: Record<string, string> = {
-  pending: '寻源中', sampling: '打样中', quoting: '报价中', sourcing: '待下单',
+  pending: '寻源中', quoting: '报价中', sourcing: '待下单',
   ordered: '已下单', shipped: '已发货', received: '已收货', inspecting: '检验中',
   passed: '已通过', failed: '未通过',
 };
@@ -88,8 +100,7 @@ const itemStatusLabels: Record<string, string> = {
 // Action definitions per status
 const STATUS_ACTIONS: Record<string, Array<{ label: string; toStatus: string; danger?: boolean; primary?: boolean; special?: string }>> = {
   pending: [
-    { label: '发起打样', toStatus: 'sampling', primary: true, special: 'sampling' },
-    { label: '发起询价', toStatus: 'sourcing' },
+    { label: '发起询价', toStatus: 'quoting', primary: true },
   ],
   quoting: [
     { label: '确认报价', toStatus: 'sourcing', primary: true },
@@ -134,16 +145,25 @@ const KanbanBoard: React.FC = () => {
   const [samplingModalItem, setSamplingModalItem] = useState<KanbanItem | null>(null);
   const [samplingForm] = Form.useForm();
 
+  // Category filter state
+  const [selectedCategories, setSelectedCategories] = useState<string[]>(['all', ...ALL_CATEGORY_VALUES]);
+
   // Load SRM projects for selector
   const { data: projectsData, isLoading: projectsLoading } = useQuery({
     queryKey: ['srm-projects-list'],
-    queryFn: () => srmApi.listProjects({ status: 'active', page_size: 100 }),
+    queryFn: () => srmApi.listProjects({ page_size: 100 }),
   });
 
-  // Load selected project details
+  // Load PLM projects for selector (covers projects without SRM project)
+  const { data: plmProjectsData } = useQuery({
+    queryKey: ['plm-projects-kanban'],
+    queryFn: () => projectApi.list({ page_size: 100 }),
+  });
+
+  // Load selected project details (may fail if projectId is a PLM project ID)
   const { data: project } = useQuery({
     queryKey: ['srm-project', projectId],
-    queryFn: () => srmApi.getProject(projectId),
+    queryFn: () => srmApi.getProject(projectId).catch(() => null),
     enabled: !!projectId,
   });
 
@@ -168,7 +188,7 @@ const KanbanBoard: React.FC = () => {
 
   const supplierList: Supplier[] = useMemo(() => supplierData?.items || [], [supplierData]);
 
-  // Flatten all PR items into kanban items
+  // Flatten all PR items into kanban items, applying category filter
   const allItems: KanbanItem[] = useMemo(() => {
     const prs = prData?.items || [];
     const items: KanbanItem[] = [];
@@ -182,8 +202,28 @@ const KanbanBoard: React.FC = () => {
         });
       });
     });
-    return items;
-  }, [prData, project]);
+
+    // Apply category filter
+    const activeCats = selectedCategories.filter(v => v !== 'all');
+    if (activeCats.length === ALL_CATEGORY_VALUES.length) return items; // all selected, no filtering
+
+    return items.filter((item) => {
+      const bomType = (item.source_bom_type || '').toUpperCase();
+      const matGroup = (item.material_group || '').toLowerCase();
+
+      if (bomType === 'EBOM' && activeCats.includes('EBOM')) return true;
+      if (bomType === 'SBOM' && activeCats.includes('SBOM')) return true;
+      if (bomType === 'PBOM' && activeCats.includes('PBOM')) return true;
+      if (matGroup === 'tooling' && activeCats.includes('TOOLING')) return true;
+      if (matGroup === 'auxiliary' && activeCats.includes('AUXILIARY')) return true;
+      if (matGroup === 'license' && activeCats.includes('LICENSE')) return true;
+
+      // Items with no bom_type and no material_group: show if 'EBOM' is selected (default bucket)
+      if (!bomType && !matGroup && activeCats.includes('EBOM')) return true;
+
+      return false;
+    });
+  }, [prData, project, selectedCategories]);
 
   // Group items by status into columns
   const columnData = useMemo(() => {
@@ -195,6 +235,8 @@ const KanbanBoard: React.FC = () => {
         groups[status].push(item);
       } else if (item.status === 'failed') {
         groups['inspecting'].push(item);
+      } else if (item.status === 'sampling') {
+        groups['quoting'].push(item);
       } else {
         groups['pending'].push(item);
       }
@@ -270,6 +312,27 @@ const KanbanBoard: React.FC = () => {
 
   const handleProjectChange = (value: string) => {
     setSearchParams({ project: value });
+  };
+
+  const handleCategoryChange = (values: string[]) => {
+    const prevHadAll = selectedCategories.includes('all');
+    const nowHasAll = values.includes('all');
+    const subValues = values.filter(v => v !== 'all');
+
+    if (nowHasAll && !prevHadAll) {
+      // User just checked "all" → select everything
+      setSelectedCategories(['all', ...ALL_CATEGORY_VALUES]);
+    } else if (!nowHasAll && prevHadAll) {
+      // User just unchecked "all" → clear everything
+      setSelectedCategories([]);
+    } else {
+      // Individual toggle
+      if (subValues.length === ALL_CATEGORY_VALUES.length) {
+        setSelectedCategories(['all', ...subValues]);
+      } else {
+        setSelectedCategories(subValues);
+      }
+    }
   };
 
   const refreshKanban = () => {
@@ -406,7 +469,30 @@ const KanbanBoard: React.FC = () => {
     }
   };
 
-  const projects = projectsData?.items || [];
+  // Merge SRM projects + PLM projects for selector (deduplicate by PLM project ID)
+  const projectOptions = useMemo(() => {
+    const srmProjects = projectsData?.items || [];
+    const plmProjects = plmProjectsData?.items || [];
+    const options: { value: string; label: string }[] = [];
+    const seen = new Set<string>();
+
+    // SRM projects first (use SRM project ID)
+    srmProjects.forEach((p: SRMProject) => {
+      options.push({ value: p.id, label: `${p.code} - ${p.name}` });
+      seen.add(p.id);
+      if (p.plm_project_id) seen.add(p.plm_project_id);
+    });
+
+    // PLM projects (use PLM project ID, skip if already covered by SRM project)
+    plmProjects.forEach((p: any) => {
+      if (!seen.has(p.id)) {
+        options.push({ value: p.id, label: `${p.code} - ${p.name}` });
+      }
+    });
+
+    return options;
+  }, [projectsData, plmProjectsData]);
+
   const isLoading = projectsLoading || prLoading;
 
   // Render action buttons for a given item (used in both card and drawer)
@@ -515,14 +601,21 @@ const KanbanBoard: React.FC = () => {
             loading={projectsLoading}
             showSearch
             optionFilterProp="label"
-            options={projects.map((p: SRMProject) => ({
-              value: p.id,
-              label: `${p.code} - ${p.name}`,
-            }))}
+            options={projectOptions}
           />
           <ReloadOutlined
             style={{ cursor: 'pointer', color: '#1890ff' }}
             onClick={() => refreshKanban()}
+          />
+          <Select
+            mode="multiple"
+            placeholder="需求分类"
+            style={{ width: 320 }}
+            value={selectedCategories}
+            onChange={handleCategoryChange}
+            maxTagCount={2}
+            maxTagPlaceholder={(omitted) => `+${omitted.length}`}
+            options={CATEGORY_FILTERS}
           />
         </div>
 
@@ -564,7 +657,7 @@ const KanbanBoard: React.FC = () => {
           gap: 12,
           overflowX: 'auto',
           paddingBottom: 16,
-          minHeight: 'calc(100vh - 200px)',
+          height: 'calc(100vh - 200px)',
         }}>
           {KANBAN_COLUMNS.map((col) => {
             const entries = columnEntries[col.key] || [];
@@ -581,6 +674,7 @@ const KanbanBoard: React.FC = () => {
                   padding: 12,
                   display: 'flex',
                   flexDirection: 'column',
+                  minHeight: 0,
                 }}
               >
                 {/* Column header */}
@@ -601,7 +695,7 @@ const KanbanBoard: React.FC = () => {
                 </div>
 
                 {/* Cards */}
-                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
                   {entries.map((entry) => {
                     if (entry.type === 'passive_group') {
                       return (
@@ -1043,6 +1137,19 @@ const PassiveGroupCard: React.FC<{
   );
 };
 
+// BOM type → material category tag config
+const getBomCategoryTag = (item: KanbanItem): { label: string; color: string } | null => {
+  const bomType = (item.source_bom_type || '').toUpperCase();
+  const matGroup = (item.material_group || '').toLowerCase();
+
+  if (bomType === 'EBOM') return { label: '电子类', color: 'blue' };
+  if (bomType === 'SBOM') return { label: '结构类', color: 'green' };
+  if (bomType === 'PBOM') return { label: '包装类', color: 'orange' };
+  if (matGroup === 'tooling' || bomType === 'TOOLING') return { label: '工装治具类', color: 'purple' };
+  if (matGroup === 'auxiliary' || matGroup === 'consumable' || bomType === 'CONSUMABLE') return { label: '辅料类', color: 'default' };
+  return null;
+};
+
 // Individual kanban card
 const KanbanCard: React.FC<{
   item: KanbanItem;
@@ -1095,21 +1202,33 @@ const KanbanCard: React.FC<{
         (e.currentTarget as HTMLDivElement).style.boxShadow = '0 1px 3px rgba(0,0,0,0.08)';
       }}
     >
-      {/* Material name */}
+      {/* Material name + BOM category tag */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-        <span style={{ fontWeight: 600, fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontWeight: 600, fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 4 }}>
           {item.material_name}
         </span>
-        {roundNum > 1 && (
-          <Tag color="purple" style={{ marginLeft: 4, fontSize: 11, lineHeight: '18px', padding: '0 4px' }}>
-            R{roundNum}
-          </Tag>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+          {(() => {
+            const tagInfo = getBomCategoryTag(item);
+            return tagInfo ? (
+              <Tag color={tagInfo.color} style={{ fontSize: 11, lineHeight: '18px', padding: '0 4px', margin: 0 }}>
+                {tagInfo.label}
+              </Tag>
+            ) : null;
+          })()}
+          {roundNum > 1 && (
+            <Tag color="purple" style={{ fontSize: 11, lineHeight: '18px', padding: '0 4px', margin: 0 }}>
+              R{roundNum}
+            </Tag>
+          )}
+        </div>
       </div>
 
       {/* Material code */}
-      <div style={{ fontSize: 12, color: '#999', fontFamily: 'monospace', marginBottom: 6 }}>
-        {item.material_code || '-'}
+      <div style={{ marginBottom: 6 }}>
+        <span style={{ fontSize: 12, color: '#999', fontFamily: 'monospace' }}>
+          {item.material_code || '-'}
+        </span>
       </div>
 
       {/* Supplier */}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Table,
   Input,
@@ -15,9 +15,10 @@ import {
   AutoComplete,
   Tooltip,
 } from 'antd';
-import { DeleteOutlined, PlusOutlined, UploadOutlined, CloseCircleOutlined } from '@ant-design/icons';
+import { DeleteOutlined, PlusOutlined, UploadOutlined, CloseCircleOutlined, EyeOutlined, LoadingOutlined, EyeTwoTone, SearchOutlined } from '@ant-design/icons';
 import { taskFormApi } from '@/api/taskForms';
 import type { ColumnsType } from 'antd/es/table';
+import STLViewer from './STLViewer';
 
 const { Text } = Typography;
 
@@ -84,24 +85,117 @@ const formatFileSize = (bytes: number): string => {
 export type BOMItemRecord = Record<string, any>;
 
 export interface BOMEditableTableProps {
-  bomType: 'EBOM' | 'SBOM';
+  bomType: 'EBOM' | 'SBOM' | 'MBOM';
   items: BOMItemRecord[];
   onChange: (items: BOMItemRecord[]) => void;
   showAddDelete?: boolean;
+  readonly?: boolean;
+  showMaterialCode?: boolean;
+  onItemSave?: (itemId: string, field: string, value: any) => void;
+  onMaterialSearch?: (itemId: string) => void;
+  renderDrawingColumn?: (record: BOMItemRecord, type: '2D' | '3D') => React.ReactNode;
+  actionColumn?: (record: BOMItemRecord) => React.ReactNode;
+  scrollX?: number;
+  scrollY?: number;
+  noPagination?: boolean;
+  rowClassName?: (record: BOMItemRecord) => string;
 }
 
 // ========== Component ==========
 
 const PAGE_SIZE = 10;
 
+// 缩略图组件：异步加载，SVG没生成好时自动轮询重试，hover放大预览
+const ThumbnailCell: React.FC<{ url: string }> = ({ url }) => {
+  const [loaded, setLoaded] = useState(false);
+  const [retries, setRetries] = useState(0);
+  const [imgSrc, setImgSrc] = useState(url);
+  const [hover, setHover] = useState(false);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const maxRetries = 6;
+
+  useEffect(() => {
+    if (loaded || retries >= maxRetries) return;
+    const img = new window.Image();
+    let timer: ReturnType<typeof setTimeout>;
+    img.onload = () => { setLoaded(true); setImgSrc(url + '?t=' + Date.now()); };
+    img.onerror = () => { timer = setTimeout(() => setRetries(r => r + 1), 2000); };
+    img.src = url + '?t=' + Date.now();
+    return () => clearTimeout(timer);
+  }, [url, retries, loaded]);
+
+  if (!loaded && retries < maxRetries) {
+    return (
+      <div style={{ width: 60, height: 45, background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4 }}>
+        <LoadingOutlined style={{ color: '#1677ff', fontSize: 16 }} />
+      </div>
+    );
+  }
+
+  if (!loaded) {
+    return (
+      <div style={{ width: 60, height: 45, background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4 }}>
+        <EyeOutlined style={{ color: '#d9d9d9', fontSize: 16 }} />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onMouseMove={(e) => setMousePos({ x: e.clientX, y: e.clientY })}
+      style={{ position: 'relative', display: 'inline-block' }}
+    >
+      <img
+        src={imgSrc}
+        width={60}
+        height={45}
+        style={{ objectFit: 'contain', cursor: 'pointer', background: '#fff', borderRadius: 2 }}
+      />
+      {hover && (
+        <div style={{
+          position: 'fixed',
+          left: mousePos.x + 16,
+          top: mousePos.y - 120,
+          zIndex: 9999,
+          pointerEvents: 'none',
+          background: '#ffffff',
+          borderRadius: 8,
+          boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+          padding: 8,
+        }}>
+          <img
+            src={imgSrc}
+            width={300}
+            height={225}
+            style={{ objectFit: 'contain', display: 'block' }}
+          />
+        </div>
+      )}
+    </div>
+  );
+};
+
 const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
   bomType,
   items,
   onChange,
   showAddDelete = true,
+  readonly = false,
+  showMaterialCode = false,
+  onItemSave,
+  onMaterialSearch,
+  renderDrawingColumn,
+  actionColumn,
+  scrollX: scrollXProp,
+  scrollY,
+  noPagination = false,
+  rowClassName,
 }) => {
   const [editingCell, setEditingCell] = useState<{ rowIdx: number; field: string } | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [preview3D, setPreview3D] = useState<{ fileId: string; fileName: string } | null>(null);
 
   // Convert page-relative index to global array index
   const toGlobalIdx = (pageIdx: number) =>
@@ -114,8 +208,12 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
       setEditingCell(null);
       return;
     }
-    const newItems = items.map((item, i) => i === gi ? { ...item, [field]: value } : item);
-    onChange(newItems);
+    if (onItemSave && items[gi]?.id) {
+      onItemSave(items[gi].id, field, value);
+    } else {
+      const newItems = items.map((item, i) => i === gi ? { ...item, [field]: value } : item);
+      onChange(newItems);
+    }
     setEditingCell(null);
   };
 
@@ -156,8 +254,27 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
       return (
         <Checkbox
           checked={!!value}
+          disabled={readonly}
           onChange={(e) => handleCellSave(idx, field, e.target.checked)}
         />
+      );
+    }
+
+    // Format display value
+    let displayValue = value;
+    if (type === 'select' && options && value) {
+      displayValue = options.find(o => o.value === value)?.label?.split('（')[0] || value;
+    }
+    if (type === 'number' && (value != null && value !== '') && field === 'target_price') displayValue = `¥${Number(value).toFixed(2)}`;
+    else if (type === 'number' && field === 'tooling_estimate') displayValue = `¥${Number(value || 0).toFixed(2)}`;
+    else if (type === 'number' && (value != null && value !== '') && field === 'unit_price') displayValue = Number(value).toFixed(2);
+
+    // Readonly mode: just show value
+    if (readonly) {
+      return (
+        <div style={{ minHeight: 22, padding: '0 2px' }}>
+          {displayValue ?? <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
+        </div>
       );
     }
 
@@ -202,14 +319,6 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
     }
 
     // Display mode: click to edit
-    let displayValue = value;
-    if (type === 'select' && options && value) {
-      displayValue = options.find(o => o.value === value)?.label?.split('（')[0] || value;
-    }
-    if (type === 'number' && (value != null && value !== '') && field === 'target_price') displayValue = `¥${Number(value).toFixed(2)}`;
-    else if (type === 'number' && field === 'tooling_estimate') displayValue = `¥${Number(value || 0).toFixed(2)}`;
-    else if (type === 'number' && (value != null && value !== '') && field === 'unit_price') displayValue = Number(value).toFixed(2);
-
     return (
       <div
         style={{ cursor: 'pointer', minHeight: 22, padding: '0 2px', borderRadius: 2 }}
@@ -223,6 +332,13 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
 
   // AutoComplete renderer for material_type
   const renderMaterialTypeCell = (value: any, idx: number) => {
+    if (readonly) {
+      return (
+        <div style={{ minHeight: 22, padding: '0 2px' }}>
+          {value ?? <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
+        </div>
+      );
+    }
     const gi = toGlobalIdx(idx);
     const isEditing = editingCell?.rowIdx === gi && editingCell?.field === 'material_type';
     if (isEditing) {
@@ -255,6 +371,14 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
 
   // AutoComplete renderer for tolerance_grade (±mm)
   const renderToleranceCell = (value: any, idx: number) => {
+    const display = formatTolerance(value);
+    if (readonly) {
+      return (
+        <div style={{ minHeight: 22, padding: '0 2px' }}>
+          {display || <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
+        </div>
+      );
+    }
     const gi = toGlobalIdx(idx);
     const isEditing = editingCell?.rowIdx === gi && editingCell?.field === 'tolerance_grade';
     if (isEditing) {
@@ -274,7 +398,6 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
         />
       );
     }
-    const display = formatTolerance(value);
     return (
       <div
         style={{ cursor: 'pointer', minHeight: 22, padding: '0 2px', borderRadius: 2 }}
@@ -286,6 +409,29 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
     );
   };
 
+  // Check if file is a 3D model (STP/STEP)
+  const is3DFile = (name: string) => /\.(stp|step)$/i.test(name);
+
+  // Render file name link: 3D files open preview, others download
+  const renderFileLink = (fileId: string | undefined, fileName: string, style: React.CSSProperties) => {
+    if (fileId && is3DFile(fileName)) {
+      return (
+        <a
+          style={style}
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setPreview3D({ fileId, fileName }); }}
+        >
+          {fileName}
+          <EyeTwoTone style={{ fontSize: 10, marginLeft: 3 }} />
+        </a>
+      );
+    }
+    return (
+      <a href={fileId ? `/uploads/${fileId}/${fileName}` : '#'} target="_blank" rel="noreferrer" style={style}>
+        {fileName}
+      </a>
+    );
+  };
+
   // Drawing file upload cell with filename + size display
   const renderDrawingUploadCell = (record: BOMItemRecord, idx: number, fileIdField: string, fileNameField: string, fileSizeField: string) => {
     const gi = toGlobalIdx(idx);
@@ -293,14 +439,20 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
     const fileSize = record?.[fileSizeField];
     const fileId = record?.[fileIdField];
 
+    if (readonly) {
+      return fileName ? (
+        <Tooltip title={`${fileName}${fileSize ? ' ' + formatFileSize(fileSize) : ''}`}>
+          {renderFileLink(fileId, fileName, { fontSize: 11, maxWidth: 100, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })}
+          {fileSize > 0 && <Text type="secondary" style={{ fontSize: 10, marginLeft: 4 }}>{formatFileSize(fileSize)}</Text>}
+        </Tooltip>
+      ) : <Text type="secondary" style={{ fontSize: 11 }}>-</Text>;
+    }
+
     return (
       <Space size={4} style={{ width: '100%' }}>
         {fileName ? (
           <Tooltip title={`${fileName}${fileSize ? ' ' + formatFileSize(fileSize) : ''}`}>
-            <a href={fileId ? `/uploads/${fileId}/${fileName}` : '#'} target="_blank" rel="noreferrer"
-              style={{ fontSize: 11, maxWidth: 70, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
-              {fileName}
-            </a>
+            {renderFileLink(fileId, fileName, { fontSize: 11, maxWidth: 70, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'middle' })}
             {fileSize > 0 && <Text type="secondary" style={{ fontSize: 10 }}>{formatFileSize(fileSize)}</Text>}
           </Tooltip>
         ) : <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
@@ -311,11 +463,18 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
             console.log('[BOM Upload] started:', file.name, 'gi:', gi, 'field:', fileNameField);
             taskFormApi.uploadFile(file).then((result) => {
               console.log('[BOM Upload] result:', JSON.stringify(result));
-              const newItems = items.map((it, i) => i === gi ? {
-                ...it,
+              const updateFields: Record<string, any> = {
                 [fileIdField]: result.id,
                 [fileNameField]: result.filename,
                 [fileSizeField]: file.size,
+              };
+              // 3D模型上传时，如果返回了缩略图URL，也保存到BOM项
+              if (result.thumbnail_url) {
+                updateFields.thumbnail_url = result.thumbnail_url;
+              }
+              const newItems = items.map((it, i) => i === gi ? {
+                ...it,
+                ...updateFields,
               } : it);
               console.log('[BOM Upload] updated item:', JSON.stringify(newItems[gi]));
               onChange(newItems);
@@ -381,6 +540,15 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
   ];
 
   const sbomCols: ColumnsType<BOMItemRecord> = [
+    { title: '预览', dataIndex: 'thumbnail_url', width: 70, align: 'center',
+      render: (url: string) => url ? (
+        <ThumbnailCell url={url} />
+      ) : (
+        <div style={{ width: 60, height: 45, background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4 }}>
+          <EyeOutlined style={{ color: '#d9d9d9', fontSize: 16 }} />
+        </div>
+      ),
+    },
     { title: '名称', dataIndex: 'name', width: 120,
       render: (v, _, idx) => renderCell(v, idx, 'name') },
     { title: '数量', dataIndex: 'quantity', width: 60, align: 'right',
@@ -391,11 +559,15 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
       render: (v, _, idx) => renderMaterialTypeCell(v, idx) },
     { title: '工艺类型', dataIndex: 'process_type', width: 90,
       render: (v, _, idx) => renderCell(v, idx, 'process_type', 'select', PROCESS_TYPE_OPTIONS) },
-    { title: '2D图纸', dataIndex: 'drawing_2d_file_name', width: 140,
-      render: (_, record, idx) => renderDrawingUploadCell(record, idx, 'drawing_2d_file_id', 'drawing_2d_file_name', 'drawing_2d_file_size'),
+    { title: '2D图纸', dataIndex: 'drawing_2d_file_name', width: renderDrawingColumn ? 150 : 140,
+      render: renderDrawingColumn
+        ? (_, record) => renderDrawingColumn(record, '2D')
+        : (_, record, idx) => renderDrawingUploadCell(record, idx, 'drawing_2d_file_id', 'drawing_2d_file_name', 'drawing_2d_file_size'),
     },
-    { title: '3D模型', dataIndex: 'drawing_3d_file_name', width: 140,
-      render: (_, record, idx) => renderDrawingUploadCell(record, idx, 'drawing_3d_file_id', 'drawing_3d_file_name', 'drawing_3d_file_size'),
+    { title: '3D模型', dataIndex: 'drawing_3d_file_name', width: renderDrawingColumn ? 150 : 140,
+      render: renderDrawingColumn
+        ? (_, record) => renderDrawingColumn(record, '3D')
+        : (_, record, idx) => renderDrawingUploadCell(record, idx, 'drawing_3d_file_id', 'drawing_3d_file_name', 'drawing_3d_file_size'),
     },
     { title: '重量(g)', dataIndex: 'weight_grams', width: 75, align: 'right',
       render: (v, _, idx) => renderCell(v, idx, 'weight_grams', 'number') },
@@ -413,10 +585,34 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
       render: (v, _, idx) => renderCell(v, idx, 'notes') },
   ];
 
-  const typeCols = bomType === 'SBOM' ? sbomCols : ebomCols;
-  const columns: ColumnsType<BOMItemRecord> = [...commonCols, ...typeCols];
+  const materialCodeCol: ColumnsType<BOMItemRecord> = showMaterialCode ? [
+    { title: '物料编码', width: 120,
+      render: (_, record) => {
+        const code = record.material?.code || record.specification;
+        return (
+          <Space size={4}>
+            <Text code style={{ fontSize: 11 }}>{code || '-'}</Text>
+            {!readonly && onMaterialSearch && (
+              <SearchOutlined
+                style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12 }}
+                onClick={() => onMaterialSearch(record.id)}
+              />
+            )}
+          </Space>
+        );
+      },
+    },
+  ] : [];
 
-  if (showAddDelete) {
+  const typeCols = bomType === 'SBOM' ? sbomCols : ebomCols;
+  const columns: ColumnsType<BOMItemRecord> = [...commonCols, ...materialCodeCol, ...typeCols];
+
+  if (actionColumn) {
+    columns.push({
+      title: '操作', width: 80, align: 'center', fixed: 'right',
+      render: (_, record) => actionColumn(record),
+    });
+  } else if (showAddDelete) {
     columns.push({
       title: '', width: 40, align: 'center', fixed: 'right',
       render: (_, _record, idx) => (
@@ -427,7 +623,8 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
     });
   }
 
-  const scrollX = bomType === 'SBOM' ? 1500 : 1100;
+  const defaultScrollX = bomType === 'SBOM' ? 1570 : 1100;
+  const finalScrollX = scrollXProp ?? defaultScrollX;
 
   return (
     <div>
@@ -439,14 +636,15 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
       <Table
         columns={columns}
         dataSource={items}
-        rowKey={(_, idx) => String(idx)}
+        rowKey={(r, idx) => r.id || String(idx)}
         size="small"
-        pagination={items.length > PAGE_SIZE ? {
+        pagination={noPagination ? false : (items.length > PAGE_SIZE ? {
           pageSize: PAGE_SIZE, size: 'small', showTotal: (t: number) => `共 ${t} 条`,
           current: currentPage, onChange: (p) => setCurrentPage(p),
-        } : false}
-        scroll={{ x: scrollX }}
+        } : false)}
+        scroll={{ x: finalScrollX, ...(scrollY ? { y: scrollY } : {}) }}
         style={{ fontSize: 12 }}
+        rowClassName={rowClassName}
         locale={{ emptyText: <Empty description={'暂无物料，点击"添加行"或"导入模板"开始'} image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
       />
       <style>{`
@@ -454,6 +652,14 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
           background: #f0f5ff;
         }
       `}</style>
+      {preview3D && (
+        <STLViewer
+          open
+          fileUrl={`/api/v1/files/${preview3D.fileId}/3d`}
+          fileName={preview3D.fileName}
+          onClose={() => setPreview3D(null)}
+        />
+      )}
     </div>
   );
 };

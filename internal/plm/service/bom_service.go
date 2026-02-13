@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -24,14 +26,16 @@ type ProjectBOMService struct {
 	projectRepo     *repository.ProjectRepository
 	deliverableRepo *repository.DeliverableRepository
 	materialRepo    *repository.MaterialRepository
+	partDrawingRepo *repository.PartDrawingRepository
 }
 
-func NewProjectBOMService(bomRepo *repository.ProjectBOMRepository, projectRepo *repository.ProjectRepository, deliverableRepo *repository.DeliverableRepository, materialRepo *repository.MaterialRepository) *ProjectBOMService {
+func NewProjectBOMService(bomRepo *repository.ProjectBOMRepository, projectRepo *repository.ProjectRepository, deliverableRepo *repository.DeliverableRepository, materialRepo *repository.MaterialRepository, partDrawingRepo *repository.PartDrawingRepository) *ProjectBOMService {
 	return &ProjectBOMService{
 		bomRepo:         bomRepo,
 		projectRepo:     projectRepo,
 		deliverableRepo: deliverableRepo,
 		materialRepo:    materialRepo,
+		partDrawingRepo: partDrawingRepo,
 	}
 }
 
@@ -247,6 +251,7 @@ func (s *ProjectBOMService) AddItem(ctx context.Context, bomID string, input *BO
 		Drawing2DFileName: input.Drawing2DFileName,
 		Drawing3DFileID:   input.Drawing3DFileID,
 		Drawing3DFileName: input.Drawing3DFileName,
+		ThumbnailURL:      input.ThumbnailURL,
 		WeightGrams:       input.WeightGrams,
 		TargetPrice:       input.TargetPrice,
 		ToolingEstimate:   input.ToolingEstimate,
@@ -274,6 +279,20 @@ func (s *ProjectBOMService) AddItem(ctx context.Context, bomID string, input *BO
 		item.ExtendedCost = &extCost
 	}
 
+	// 自动创建物料（如未指定material_id）
+	if item.MaterialID == nil && item.Name != "" {
+		category := item.Category
+		if category == "" {
+			category = defaultCategoryForBOMType(bom.BOMType)
+		}
+		newMat, createErr := s.autoCreateMaterial(ctx, item.Name, item.Specification, category, item.Manufacturer, item.ManufacturerPN)
+		if createErr != nil {
+			fmt.Printf("[WARN] auto-create material failed for %q: %v\n", item.Name, createErr)
+		} else if newMat != nil {
+			item.MaterialID = &newMat.ID
+		}
+	}
+
 	if err := s.bomRepo.CreateItem(ctx, item); err != nil {
 		return nil, fmt.Errorf("create bom item: %w", err)
 	}
@@ -281,6 +300,11 @@ func (s *ProjectBOMService) AddItem(ctx context.Context, bomID string, input *BO
 	// 更新BOM统计
 	s.updateBOMCost(ctx, bomID)
 
+	// 重新查询以加载Material关联
+	created, _ := s.bomRepo.FindItemByID(ctx, item.ID)
+	if created != nil {
+		return created, nil
+	}
 	return item, nil
 }
 
@@ -322,6 +346,16 @@ func (s *ProjectBOMService) BatchAddItems(ctx context.Context, bomID string, ite
 		}
 		if input.MaterialID != nil {
 			item.MaterialID = input.MaterialID
+		} else if item.Name != "" {
+			// 自动创建物料
+			category := item.Category
+			if category == "" {
+				category = defaultCategoryForBOMType(bom.BOMType)
+			}
+			newMat, createErr := s.autoCreateMaterial(ctx, item.Name, item.Specification, category, item.Manufacturer, item.ManufacturerPN)
+			if createErr == nil && newMat != nil {
+				item.MaterialID = &newMat.ID
+			}
 		}
 		entities = append(entities, item)
 	}
@@ -415,6 +449,7 @@ func (s *ProjectBOMService) UpdateItem(ctx context.Context, bomID, itemID string
 	item.Drawing2DFileName = input.Drawing2DFileName
 	item.Drawing3DFileID = input.Drawing3DFileID
 	item.Drawing3DFileName = input.Drawing3DFileName
+	item.ThumbnailURL = input.ThumbnailURL
 	item.WeightGrams = input.WeightGrams
 	item.TargetPrice = input.TargetPrice
 	item.ToolingEstimate = input.ToolingEstimate
@@ -1644,6 +1679,45 @@ func (s *ProjectBOMService) AckRelease(ctx context.Context, releaseID string) (*
 
 // ==================== 自动建料 ====================
 
+// BackfillMaterials 为已有BOM items中material_id为空的行自动创建物料
+func (s *ProjectBOMService) BackfillMaterials(ctx context.Context) {
+	var items []entity.ProjectBOMItem
+	err := s.bomRepo.DB().WithContext(ctx).
+		Where("material_id IS NULL AND name != ''").
+		Find(&items).Error
+	if err != nil || len(items) == 0 {
+		return
+	}
+
+	// 预加载BOM类型映射
+	bomTypes := map[string]string{}
+	var boms []entity.ProjectBOM
+	s.bomRepo.DB().WithContext(ctx).Select("id, bom_type").Find(&boms)
+	for _, b := range boms {
+		bomTypes[b.ID] = b.BOMType
+	}
+
+	count := 0
+	for _, item := range items {
+		category := item.Category
+		if category == "" {
+			category = defaultCategoryForBOMType(bomTypes[item.BOMID])
+		}
+		newMat, createErr := s.autoCreateMaterial(ctx, item.Name, item.Specification, category, item.Manufacturer, item.ManufacturerPN)
+		if createErr != nil {
+			fmt.Printf("[BackfillMaterials] failed for %q: %v\n", item.Name, createErr)
+			continue
+		}
+		if newMat != nil {
+			s.bomRepo.DB().Model(&entity.ProjectBOMItem{}).Where("id = ?", item.ID).Update("material_id", newMat.ID)
+			count++
+		}
+	}
+	if count > 0 {
+		fmt.Printf("[BackfillMaterials] created materials for %d BOM items\n", count)
+	}
+}
+
 // autoCreateMaterial 根据BOM行信息自动创建物料
 func (s *ProjectBOMService) autoCreateMaterial(ctx context.Context, name, specification, category, manufacturer, manufacturerPN string) (*entity.Material, error) {
 	categoryID, categoryCode := mapCategoryToIDAndCode(category)
@@ -1693,6 +1767,22 @@ func mapCategoryToIDAndCode(category string) (string, string) {
 		"mcat_el_bat": "EL-BAT",
 		"mcat_el_pcb": "EL-PCB",
 		"mcat_el_oth": "EL-OTH",
+		// 结构件
+		"mcat_me_hsg": "ME-HSG",
+		"mcat_me_lns": "ME-LNS",
+		"mcat_me_dec": "ME-DEC",
+		"mcat_me_fst": "ME-FST",
+		"mcat_me_gsk": "ME-GSK",
+		"mcat_me_thm": "ME-THM",
+		"mcat_me_spg": "ME-SPG",
+		"mcat_me_flx": "ME-FLX",
+		"mcat_me_oth": "ME-OTH",
+		// 包装件
+		"mcat_pk_box": "PK-BOX",
+		"mcat_pk_ins": "PK-INS",
+		"mcat_pk_lbl": "PK-LBL",
+		"mcat_pk_try": "PK-TRY",
+		"mcat_pk_bag": "PK-BAG",
 	}
 	if code, ok := idToCode[category]; ok {
 		return category, code
@@ -1722,8 +1812,42 @@ func mapCategoryToIDAndCode(category string) (string, string) {
 		return "mcat_el_sen", "EL-SEN"
 	case "测试点":
 		return "mcat_el_oth", "EL-OTH"
+	// 结构件分类
+	case "结构件", "外壳", "壳体":
+		return "mcat_me_hsg", "ME-HSG"
+	case "镜片":
+		return "mcat_me_lns", "ME-LNS"
+	case "装饰件":
+		return "mcat_me_dec", "ME-DEC"
+	case "紧固件":
+		return "mcat_me_fst", "ME-FST"
+	case "密封件":
+		return "mcat_me_gsk", "ME-GSK"
+	case "散热件":
+		return "mcat_me_thm", "ME-THM"
+	// 包装件分类
+	case "包装盒", "外包装盒":
+		return "mcat_pk_box", "PK-BOX"
+	case "说明书":
+		return "mcat_pk_ins", "PK-INS"
+	case "标签", "标签贴纸":
+		return "mcat_pk_lbl", "PK-LBL"
+	case "托盘", "内衬/托盘", "内衬":
+		return "mcat_pk_try", "PK-TRY"
 	default:
 		return "mcat_el_oth", "EL-OTH"
+	}
+}
+
+// defaultCategoryForBOMType 根据BOM类型返回默认物料分类
+func defaultCategoryForBOMType(bomType string) string {
+	switch bomType {
+	case "SBOM":
+		return "结构件"
+	case "PBOM":
+		return "包装盒"
+	default:
+		return ""
 	}
 }
 
@@ -1739,6 +1863,44 @@ type ParsedBOMItem struct {
 	Category       string  `json:"category"`
 	Manufacturer   string  `json:"manufacturer"`
 	ManufacturerPN string  `json:"manufacturer_pn"`
+	// SBOM-specific fields
+	MaterialType      string  `json:"material_type"`
+	ProcessType       string  `json:"process_type"`
+	WeightGrams       float64 `json:"weight_grams"`
+	TargetPrice       float64 `json:"target_price"`
+	ToolingEstimate   float64 `json:"tooling_estimate"`
+	IsAppearancePart  bool    `json:"is_appearance_part"`
+	AssemblyMethod    string  `json:"assembly_method"`
+	ToleranceGrade    string  `json:"tolerance_grade"`
+	ThumbnailURL      string  `json:"thumbnail_url"`
+	Notes             string  `json:"notes"`
+	// Drawing file fields (inline in task form BOM)
+	Drawing2DFileID   string  `json:"drawing_2d_file_id"`
+	Drawing2DFileName string  `json:"drawing_2d_file_name"`
+	Drawing3DFileID   string  `json:"drawing_3d_file_id"`
+	Drawing3DFileName string  `json:"drawing_3d_file_name"`
+	// EBOM-specific fields
+	ItemType            string `json:"item_type"`
+	Designator          string `json:"designator"`
+	Package             string `json:"package"`
+	PCBLayers           int    `json:"pcb_layers"`
+	PCBThickness        string `json:"pcb_thickness"`
+	PCBMaterial         string `json:"pcb_material"`
+	PCBDimensions       string `json:"pcb_dimensions"`
+	PCBSurfaceFinish    string `json:"pcb_surface_finish"`
+	ServiceType         string `json:"service_type"`
+	ProcessRequirements string `json:"process_requirements"`
+	Attachments         string `json:"attachments"`
+	// PBOM-specific fields
+	DesignFileID   string `json:"design_file_id"`
+	DesignFileName string `json:"design_file_name"`
+	LanguageCode   string `json:"language_code"`
+	// Shared fields
+	Supplier        string  `json:"supplier"`
+	UnitPrice       float64 `json:"unit_price"`
+	LeadTimeDays    int     `json:"lead_time_days"`
+	ProcurementType string  `json:"procurement_type"`
+	IsCritical      bool    `json:"is_critical"`
 }
 
 // CreateBOMFromParsedItems 根据已解析的BOM条目创建项目BOM（含自动建料）
@@ -1787,19 +1949,75 @@ func (s *ProjectBOMService) CreateBOMFromParsedItems(ctx context.Context, projec
 		}
 
 		item := entity.ProjectBOMItem{
-			ID:             uuid.New().String()[:32],
-			BOMID:          bom.ID,
-			ItemNumber:     itemNum,
-			Category:       categoryName,
-			Name:           pi.Name,
-			Specification:  pi.Specification,
-			Quantity:       pi.Quantity,
-			Unit:           unit,
-			Reference:      pi.Reference,
-			Manufacturer:   pi.Manufacturer,
-			ManufacturerPN: pi.ManufacturerPN,
-			CreatedAt:      time.Now(),
-			UpdatedAt:      time.Now(),
+			ID:               uuid.New().String()[:32],
+			BOMID:            bom.ID,
+			ItemNumber:       itemNum,
+			Category:         categoryName,
+			Name:             pi.Name,
+			Specification:    pi.Specification,
+			Quantity:         pi.Quantity,
+			Unit:             unit,
+			Reference:        pi.Reference,
+			Manufacturer:     pi.Manufacturer,
+			ManufacturerPN:   pi.ManufacturerPN,
+			MaterialType:     pi.MaterialType,
+			ProcessType:      pi.ProcessType,
+			AssemblyMethod:   pi.AssemblyMethod,
+			ToleranceGrade:   pi.ToleranceGrade,
+			ThumbnailURL:     pi.ThumbnailURL,
+			Notes:            pi.Notes,
+			IsAppearancePart: pi.IsAppearancePart,
+			IsCritical:       pi.IsCritical,
+			Supplier:         pi.Supplier,
+			ProcurementType:  pi.ProcurementType,
+			// EBOM fields
+			ItemType:            pi.ItemType,
+			Designator:          pi.Designator,
+			Package:             pi.Package,
+			PCBThickness:        pi.PCBThickness,
+			PCBMaterial:         pi.PCBMaterial,
+			PCBDimensions:       pi.PCBDimensions,
+			PCBSurfaceFinish:    pi.PCBSurfaceFinish,
+			ServiceType:         pi.ServiceType,
+			ProcessRequirements: pi.ProcessRequirements,
+			Attachments:         pi.Attachments,
+			// PBOM fields
+			DesignFileID:     pi.DesignFileID,
+			DesignFileName:   pi.DesignFileName,
+			LanguageCode:     pi.LanguageCode,
+			CreatedAt:        time.Now(),
+			UpdatedAt:        time.Now(),
+		}
+
+		// Set pointer fields (always set — zero is a valid value from form data)
+		wg := pi.WeightGrams
+		item.WeightGrams = &wg
+		tp := pi.TargetPrice
+		item.TargetPrice = &tp
+		te := pi.ToolingEstimate
+		item.ToolingEstimate = &te
+		up := pi.UnitPrice
+		item.UnitPrice = &up
+		if pi.LeadTimeDays > 0 {
+			ld := pi.LeadTimeDays
+			item.LeadTimeDays = &ld
+		}
+		if pi.Drawing2DFileID != "" {
+			id := pi.Drawing2DFileID
+			item.Drawing2DFileID = &id
+			item.Drawing2DFileName = pi.Drawing2DFileName
+		}
+		if pi.Drawing3DFileID != "" {
+			id := pi.Drawing3DFileID
+			item.Drawing3DFileID = &id
+			item.Drawing3DFileName = pi.Drawing3DFileName
+		}
+		if pi.PCBLayers > 0 {
+			pl := pi.PCBLayers
+			item.PCBLayers = &pl
+		}
+		if item.ProcurementType == "" {
+			item.ProcurementType = "buy"
 		}
 
 		// 尝试匹配已有物料，未找到则自动创建
@@ -1831,7 +2049,67 @@ func (s *ProjectBOMService) CreateBOMFromParsedItems(ctx context.Context, projec
 		s.updateBOMCost(ctx, bom.ID)
 	}
 
+	// 4. 为有图纸数据的项创建 PartDrawing 记录
+	if s.partDrawingRepo != nil {
+		for i, pi := range items {
+			itemID := entities[i].ID
+			if pi.Drawing2DFileID != "" {
+				fileURL := findUploadedFileURL(pi.Drawing2DFileID, pi.Drawing2DFileName)
+				_ = s.partDrawingRepo.Create(ctx, &entity.PartDrawing{
+					ID:          uuid.New().String()[:32],
+					BOMItemID:   itemID,
+					DrawingType: "2D",
+					Version:     "v1",
+					FileID:      pi.Drawing2DFileID,
+					FileName:    pi.Drawing2DFileName,
+					FileURL:     fileURL,
+					UploadedBy:  userID,
+					CreatedAt:   time.Now(),
+				})
+			}
+			if pi.Drawing3DFileID != "" {
+				fileURL := findUploadedFileURL(pi.Drawing3DFileID, pi.Drawing3DFileName)
+				_ = s.partDrawingRepo.Create(ctx, &entity.PartDrawing{
+					ID:          uuid.New().String()[:32],
+					BOMItemID:   itemID,
+					DrawingType: "3D",
+					Version:     "v1",
+					FileID:      pi.Drawing3DFileID,
+					FileName:    pi.Drawing3DFileName,
+					FileURL:     fileURL,
+					UploadedBy:  userID,
+					CreatedAt:   time.Now(),
+				})
+			}
+		}
+	}
+
 	return bom.ID, nil
+}
+
+// findUploadedFileURL 根据文件ID和文件名在uploads目录中查找实际的文件URL
+func findUploadedFileURL(fileID, fileName string) string {
+	savedName := fmt.Sprintf("%s_%s", fileID, fileName)
+	matches, _ := filepath.Glob(fmt.Sprintf("./uploads/*/*/%s", savedName))
+	if len(matches) > 0 {
+		// 返回相对URL路径，去掉开头的 "."
+		return strings.TrimPrefix(matches[0], ".")
+	}
+	// 如果找不到文件，用当前年月构造URL
+	now := time.Now()
+	return fmt.Sprintf("/uploads/%d/%02d/%s", now.Year(), int(now.Month()), savedName)
+}
+
+// findUploadedFileSize 获取已上传文件的大小
+func findUploadedFileSize(fileID, fileName string) int64 {
+	savedName := fmt.Sprintf("%s_%s", fileID, fileName)
+	matches, _ := filepath.Glob(fmt.Sprintf("./uploads/*/*/%s", savedName))
+	if len(matches) > 0 {
+		if fi, err := os.Stat(matches[0]); err == nil {
+			return fi.Size()
+		}
+	}
+	return 0
 }
 
 // ---- Phase 2/3/4 DTOs ----
@@ -1923,6 +2201,7 @@ type BOMItemInput struct {
 	Drawing2DFileName string   `json:"drawing_2d_file_name"`
 	Drawing3DFileID   *string  `json:"drawing_3d_file_id"`
 	Drawing3DFileName string   `json:"drawing_3d_file_name"`
+	ThumbnailURL      string   `json:"thumbnail_url"`
 	WeightGrams       *float64 `json:"weight_grams"`
 	TargetPrice       *float64 `json:"target_price"`
 	ToolingEstimate   *float64 `json:"tooling_estimate"`

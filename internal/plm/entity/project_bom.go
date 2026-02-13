@@ -86,6 +86,7 @@ type ProjectBOMItem struct {
 	Drawing3DFileID  *string  `json:"drawing_3d_file_id,omitempty" gorm:"column:drawing3d_file_id;size:32"`     // 3D模型文件ID
 	// Deprecated: use PartDrawing table instead
 	Drawing3DFileName string  `json:"drawing_3d_file_name,omitempty" gorm:"column:drawing3d_file_name;size:256"`  // 3D文件名
+	ThumbnailURL      string  `json:"thumbnail_url,omitempty" gorm:"size:512"` // STP缩略图URL
 	WeightGrams      *float64 `json:"weight_grams,omitempty" gorm:"type:numeric(10,2)"` // 重量(克)
 	TargetPrice      *float64 `json:"target_price,omitempty" gorm:"type:numeric(15,4)"` // 目标单价
 	ToolingEstimate  *float64 `json:"tooling_estimate,omitempty" gorm:"type:numeric(15,2)"` // 模具费预估
@@ -94,15 +95,42 @@ type ProjectBOMItem struct {
 	AssemblyMethod   string   `json:"assembly_method,omitempty" gorm:"size:32"`        // 装配方式：卡扣, 螺丝, 胶合, 超声波焊接, 热熔
 	ToleranceGrade   string   `json:"tolerance_grade,omitempty" gorm:"size:32"`        // 公差等级：普通/精密/超精密
 	IsVariant        bool     `json:"is_variant" gorm:"default:false"`                // 标记该件在SKU间可能不同
+	SamplingReady    bool     `json:"sampling_ready" gorm:"default:false"`             // 是否就绪可进入SRM打样
+
+	// EBOM专用字段
+	ItemType            string   `json:"item_type,omitempty" gorm:"size:20;default:component"`      // component | pcb | service | material
+	Designator          string   `json:"designator,omitempty" gorm:"size:500"`                       // 元器件位号 R1,R2,R3
+	Package             string   `json:"package,omitempty" gorm:"column:package;size:50"`             // 封装 0402/QFN48
+	PCBLayers           *int     `json:"pcb_layers,omitempty" gorm:"column:pcb_layers"`               // PCB层数
+	PCBThickness        string   `json:"pcb_thickness,omitempty" gorm:"size:20"`                      // 板厚
+	PCBMaterial         string   `json:"pcb_material,omitempty" gorm:"size:50"`                       // 板材 FR4
+	PCBDimensions       string   `json:"pcb_dimensions,omitempty" gorm:"size:50"`                     // 尺寸 50x30mm
+	PCBSurfaceFinish    string   `json:"pcb_surface_finish,omitempty" gorm:"size:50"`                 // 表面工艺 沉金/喷锡
+	ServiceType         string   `json:"service_type,omitempty" gorm:"size:50"`                       // 服务类型
+	ProcessRequirements string   `json:"process_requirements,omitempty" gorm:"type:text"`             // 加工工艺要求
+	Attachments         string   `json:"attachments,omitempty" gorm:"type:jsonb;default:'[]'"`        // 附件 [{file_id,file_name,file_type,url}]
+
+	// PBOM包装BOM专用字段
+	PrintProcess     string `json:"print_process,omitempty" gorm:"size:50"`          // 印刷工艺：四色/专色/黑白
+	SurfaceFinishPkg string `json:"surface_finish_pkg,omitempty" gorm:"size:50"`     // 表面处理：覆膜亮/覆膜哑/UV
+	DesignFileID     string `json:"design_file_id,omitempty" gorm:"size:100"`        // 设计稿文件ID
+	DesignFileName   string `json:"design_file_name,omitempty" gorm:"size:200"`      // 设计稿文件名
+	DieCutFileID     string `json:"die_cut_file_id,omitempty" gorm:"size:100"`       // 刀模图文件ID
+	DieCutFileName   string `json:"die_cut_file_name,omitempty" gorm:"size:200"`     // 刀模图文件名
+	IsMultilang      bool   `json:"is_multilang" gorm:"default:false"`               // 是否多语言件
+	PackingQty       *int   `json:"packing_qty,omitempty"`                           // 装箱数量(几台/箱)
+	LanguageCode     string `json:"language_code,omitempty" gorm:"size:20"`          // 语言版本：通用/中国/美国/日本等
 
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 
 	// Relations
-	Material   *Material        `json:"material,omitempty" gorm:"foreignKey:MaterialID"`
-	ParentItem *ProjectBOMItem  `json:"parent_item,omitempty" gorm:"foreignKey:ParentItemID"`
-	Children   []ProjectBOMItem `json:"children,omitempty" gorm:"foreignKey:ParentItemID"`
-	Drawings   []PartDrawing    `json:"drawings,omitempty" gorm:"foreignKey:BOMItemID"`
+	Material     *Material              `json:"material,omitempty" gorm:"foreignKey:MaterialID"`
+	ParentItem   *ProjectBOMItem        `json:"parent_item,omitempty" gorm:"foreignKey:ParentItemID"`
+	Children     []ProjectBOMItem       `json:"children,omitempty" gorm:"foreignKey:ParentItemID"`
+	Drawings     []PartDrawing          `json:"drawings,omitempty" gorm:"foreignKey:BOMItemID"`
+	CMFVariants  []BOMItemCMFVariant    `json:"cmf_variants,omitempty" gorm:"foreignKey:BOMItemID"`
+	LangVariants []BOMItemLangVariant   `json:"lang_variants,omitempty" gorm:"foreignKey:BOMItemID"`
 }
 
 func (ProjectBOMItem) TableName() string {

@@ -244,33 +244,31 @@ func TestSamplingMultipleRounds(t *testing.T) {
 	}
 }
 
-// TestPRItemStatusTransitions tests the new sampling/quoting status transitions
+// TestPRItemStatusTransitions tests the PR item status transitions
 func TestPRItemStatusTransitions(t *testing.T) {
-	// Test that ValidPRItemTransitions includes the new states
 	transitions := entity.ValidPRItemTransitions
 
-	// pending → sampling
+	// pending → quoting (发起询价)
 	pendingTargets := transitions["pending"]
+	hasQuoting := false
+	for _, s := range pendingTargets {
+		if s == "quoting" {
+			hasQuoting = true
+		}
+	}
+	if !hasQuoting {
+		t.Fatal("expected pending → quoting transition to be valid")
+	}
+
+	// sampling should NOT be a separate transition target from pending
 	hasSampling := false
 	for _, s := range pendingTargets {
 		if s == "sampling" {
 			hasSampling = true
 		}
 	}
-	if !hasSampling {
-		t.Fatal("expected pending → sampling transition to be valid")
-	}
-
-	// sampling → quoting
-	samplingTargets := transitions["sampling"]
-	hasQuoting := false
-	for _, s := range samplingTargets {
-		if s == "quoting" {
-			hasQuoting = true
-		}
-	}
-	if !hasQuoting {
-		t.Fatal("expected sampling → quoting transition to be valid")
+	if hasSampling {
+		t.Fatal("expected pending → sampling transition to be removed")
 	}
 
 	// quoting → sourcing

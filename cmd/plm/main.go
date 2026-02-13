@@ -82,17 +82,20 @@ func main() {
 
 	// AutoMigrate for CMF tables
 	if err := db.AutoMigrate(
-		&entity.CMFSpec{},
-		&entity.CMFItem{},
+		&entity.CMFDesign{},
+		&entity.CMFDrawing{},
 	); err != nil {
 		zapLogger.Warn("AutoMigrate CMF tables warning", zap.Error(err))
 	}
+	// Drop old CMF placeholder tables if they exist
+	db.Exec("DROP TABLE IF EXISTS cmf_items")
+	db.Exec("DROP TABLE IF EXISTS cmf_specs")
 
 	// AutoMigrate for SKU tables
 	if err := db.AutoMigrate(
 		&entity.ProductSKU{},
 		&entity.SKUCMFConfig{},
-		&entity.SKUBOMOverride{},
+		&entity.SKUBOMItem{},
 	); err != nil {
 		zapLogger.Warn("AutoMigrate SKU tables warning", zap.Error(err))
 	}
@@ -101,8 +104,23 @@ func main() {
 	if err := db.AutoMigrate(&entity.PartDrawing{}); err != nil {
 		zapLogger.Warn("AutoMigrate PartDrawing table warning", zap.Error(err))
 	}
+	// V16: CMF变体表
+	if err := db.AutoMigrate(&entity.BOMItemCMFVariant{}); err != nil {
+		zapLogger.Warn("AutoMigrate BOMItemCMFVariant table warning", zap.Error(err))
+	}
+	// V16: sampling_ready字段
+	db.Exec("ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS sampling_ready BOOLEAN DEFAULT false")
+
 	// V14: ProjectBOMItem增加is_variant字段
 	db.Exec("ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS is_variant BOOLEAN DEFAULT false")
+
+	// V17: 语言变体表
+	if err := db.AutoMigrate(&entity.BOMItemLangVariant{}); err != nil {
+		zapLogger.Warn("AutoMigrate BOMItemLangVariant table warning", zap.Error(err))
+	}
+
+	// V16: STP缩略图URL字段
+	db.Exec("ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS thumbnail_url VARCHAR(512)")
 
 	// 清理旧的唯一索引（EmployeeNo 允许为空，不再需要唯一约束）
 	// 清理所有可能的 employee_no 唯一约束/索引
@@ -403,6 +421,55 @@ func main() {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_bom_releases_status ON bom_releases(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_bom_releases_bom ON bom_releases(bom_id)`,
+
+		// CMF变体新字段（AutoMigrate因FK级联问题可能跳过）
+		"ALTER TABLE bom_item_cmf_variants ADD COLUMN IF NOT EXISTS process_drawing_type VARCHAR(50)",
+		"ALTER TABLE bom_item_cmf_variants ADD COLUMN IF NOT EXISTS process_drawings JSONB DEFAULT '[]'",
+
+		// V17: PBOM字段 on project_bom_items
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS print_process VARCHAR(50)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS surface_finish_pkg VARCHAR(50)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS design_file_id VARCHAR(100)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS design_file_name VARCHAR(200)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS die_cut_file_id VARCHAR(100)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS die_cut_file_name VARCHAR(200)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS is_multilang BOOLEAN DEFAULT false",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS packing_qty INT",
+
+		// V17: 语言变体表 (兜底，AutoMigrate因FK可能跳过)
+		`CREATE TABLE IF NOT EXISTS bom_item_lang_variants (
+			id VARCHAR(32) PRIMARY KEY,
+			bom_item_id VARCHAR(32) NOT NULL REFERENCES project_bom_items(id) ON DELETE CASCADE,
+			variant_index INT NOT NULL DEFAULT 1,
+			material_code VARCHAR(50),
+			language_code VARCHAR(10) NOT NULL,
+			language_name VARCHAR(50) NOT NULL,
+			design_file_id VARCHAR(100),
+			design_file_name VARCHAR(200),
+			design_file_url VARCHAR(500),
+			notes TEXT,
+			created_at TIMESTAMP DEFAULT NOW(),
+			updated_at TIMESTAMP DEFAULT NOW(),
+			UNIQUE(bom_item_id, variant_index)
+		)`,
+
+		// EBOM专用字段 — GORM AutoMigrate may skip these on FK tables
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(20) DEFAULT 'component'",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS designator VARCHAR(500)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS package VARCHAR(50)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS pcb_layers INT",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS pcb_thickness VARCHAR(20)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS pcb_material VARCHAR(50)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS pcb_dimensions VARCHAR(50)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS pcb_surface_finish VARCHAR(50)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS service_type VARCHAR(50)",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS process_requirements TEXT",
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS attachments JSONB DEFAULT '[]'",
+		// PBOM language_code field
+		"ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS language_code VARCHAR(20)",
+		// Update bom_type CHECK constraint to include PBOM and MBOM
+		"ALTER TABLE project_boms DROP CONSTRAINT IF EXISTS ck_bom_type",
+		"ALTER TABLE project_boms ADD CONSTRAINT ck_bom_type CHECK (bom_type IN ('EBOM','SBOM','PBOM','MBOM','OBOM','FWBOM'))",
 	}
 	for _, sql := range migrationSQL {
 		if err := db.Exec(sql).Error; err != nil {
@@ -505,9 +572,12 @@ func main() {
 	routingSvc := service.NewRoutingService(db)
 	handlers.Routing = handler.NewRoutingHandler(routingSvc)
 	workflowSvc.SetRoutingService(routingSvc)
+	workflowSvc.SetTaskFormRepo(repos.TaskForm)
 
-	// V13: CMF控件
-	handlers.CMF = handler.NewCMFHandler(repos.CMF, repos.ProjectBOM, repos.Task)
+	// Backfill: 为已有BOM items自动创建缺失的物料
+	services.ProjectBOM.BackfillMaterials(context.Background())
+
+	// V13: CMF控件 (now initialized in NewHandlers via service)
 
 	// === SRM模块初始化 ===
 	// AutoMigrate SRM实体
@@ -622,6 +692,8 @@ func main() {
 
 	// PLM→SRM集成：BOM创建后自动生成打样采购需求
 	services.Project.SetSRMProcurementService(srmProcurementSvc)
+	// 工作流→SRM集成：采购控件自动创建PR
+	workflowSvc.SetSRMProcurementService(srmProcurementSvc)
 
 	// 设置Gin模式
 	if cfg.Server.Mode == "release" {
@@ -1007,15 +1079,13 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				// Phase 3: EBOM→MBOM转换
 				projects.POST("/:id/boms/:bomId/convert-to-mbom", h.ProjectBOM.ConvertToMBOM)
 
-				// V13: CMF控件
-				projects.GET("/:id/cmf-specs", h.CMF.ListSpecsByProject)
-				projects.GET("/:id/tasks/:taskId/cmf-specs", h.CMF.ListSpecsByTask)
-				projects.POST("/:id/tasks/:taskId/cmf-specs", h.CMF.CreateSpec)
-				projects.GET("/:id/tasks/:taskId/cmf-source", h.CMF.ResolveSource)
-				projects.GET("/:id/cmf-specs/:specId", h.CMF.GetSpec)
-				projects.PUT("/:id/cmf-specs/:specId", h.CMF.UpdateSpec)
-				projects.DELETE("/:id/cmf-specs/:specId", h.CMF.DeleteSpec)
-				projects.GET("/:id/bom-appearance-parts", h.CMF.ListAppearanceParts)
+				// V13: CMF编制
+				projects.GET("/:id/tasks/:taskId/cmf/appearance-parts", h.CMF.GetAppearanceParts)
+				projects.GET("/:id/tasks/:taskId/cmf/designs", h.CMF.ListDesigns)
+				projects.POST("/:id/tasks/:taskId/cmf/designs", h.CMF.CreateDesign)
+				projects.PUT("/:id/tasks/:taskId/cmf/designs/:designId", h.CMF.UpdateDesign)
+				projects.DELETE("/:id/tasks/:taskId/cmf/designs/:designId", h.CMF.DeleteDesign)
+				projects.GET("/:id/cmf/designs", h.CMF.ListDesignsByProject)
 
 				// V15: 图纸版本管理
 				projects.GET("/:id/bom-items/:itemId/drawings", h.PartDrawing.ListDrawings)
@@ -1031,11 +1101,24 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				projects.DELETE("/:id/skus/:skuId", h.SKU.DeleteSKU)
 				projects.GET("/:id/skus/:skuId/cmf", h.SKU.GetCMFConfigs)
 				projects.PUT("/:id/skus/:skuId/cmf", h.SKU.BatchSaveCMFConfigs)
-				projects.GET("/:id/skus/:skuId/bom-overrides", h.SKU.GetBOMOverrides)
-				projects.POST("/:id/skus/:skuId/bom-overrides", h.SKU.CreateBOMOverride)
-				projects.PUT("/:id/skus/:skuId/bom-overrides/:overrideId", h.SKU.UpdateBOMOverride)
-				projects.DELETE("/:id/skus/:skuId/bom-overrides/:overrideId", h.SKU.DeleteBOMOverride)
+				projects.GET("/:id/skus/:skuId/bom-items", h.SKU.GetBOMItems)
+				projects.PUT("/:id/skus/:skuId/bom-items", h.SKU.BatchSaveBOMItems)
 				projects.GET("/:id/skus/:skuId/full-bom", h.SKU.GetFullBOM)
+
+				// V16: CMF变体管理
+				projects.GET("/:id/bom-items/:itemId/cmf-variants", h.CMFVariant.ListVariants)
+				projects.POST("/:id/bom-items/:itemId/cmf-variants", h.CMFVariant.CreateVariant)
+				projects.PUT("/:id/cmf-variants/:variantId", h.CMFVariant.UpdateVariant)
+				projects.DELETE("/:id/cmf-variants/:variantId", h.CMFVariant.DeleteVariant)
+				projects.GET("/:id/appearance-parts", h.CMFVariant.GetAppearanceParts)
+				projects.GET("/:id/srm/items", h.CMFVariant.GetSRMItems)
+
+				// V17: 语言变体
+				projects.GET("/:id/bom-items/:itemId/lang-variants", h.LangVariant.ListVariants)
+				projects.POST("/:id/bom-items/:itemId/lang-variants", h.LangVariant.CreateVariant)
+				projects.PUT("/:id/lang-variants/:variantId", h.LangVariant.UpdateVariant)
+				projects.DELETE("/:id/lang-variants/:variantId", h.LangVariant.DeleteVariant)
+				projects.GET("/:id/multilang-parts", h.LangVariant.GetMultilangParts)
 
 				// V2: 交付物管理
 				projects.GET("/:id/deliverables", h.Deliverable.ListByProject)
@@ -1064,6 +1147,11 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 
 			// 文件上传
 			authorized.POST("/upload", h.Upload.Upload)
+			authorized.GET("/files/:fileId/3d", h.Upload.Get3DModel)
+
+			// CMF图纸管理
+			authorized.POST("/cmf-designs/:designId/drawings", h.CMF.AddDrawing)
+			authorized.DELETE("/cmf-designs/:designId/drawings/:drawingId", h.CMF.RemoveDrawing)
 
 			// ECN管理
 			ecns := authorized.Group("/ecns")

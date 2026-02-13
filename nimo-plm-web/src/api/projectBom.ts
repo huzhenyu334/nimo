@@ -75,13 +75,52 @@ export interface ProjectBOMItem {
   tooling_estimate?: number;
   cost_notes?: string;
   is_appearance_part?: boolean;
+  is_variant?: boolean;
   assembly_method?: string;
   tolerance_grade?: string;
+  // EBOM专用字段
+  item_type?: string;  // component | pcb | service | material
+  designator?: string;
+  package?: string;
+  pcb_layers?: number;
+  pcb_thickness?: string;
+  pcb_material?: string;
+  pcb_dimensions?: string;
+  pcb_surface_finish?: string;
+  service_type?: string;
+  process_requirements?: string;
+  attachments?: string;  // JSON string: [{file_id,file_name,file_type,url}]
+  // PBOM包装BOM专用字段
+  print_process?: string;
+  surface_finish_pkg?: string;
+  design_file_id?: string;
+  design_file_name?: string;
+  die_cut_file_id?: string;
+  die_cut_file_name?: string;
+  is_multilang?: boolean;
+  packing_qty?: number;
+  language_code?: string;
   created_at: string;
   updated_at: string;
   // Relations
   material?: { id: string; name: string; code: string; specification?: string };
   children?: ProjectBOMItem[];
+  lang_variants?: LangVariant[];
+}
+
+export interface LangVariant {
+  id: string;
+  bom_item_id: string;
+  variant_index: number;
+  material_code?: string;
+  language_code: string;
+  language_name: string;
+  design_file_id?: string;
+  design_file_name?: string;
+  design_file_url?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ProjectBOMDetail extends ProjectBOM {
@@ -136,6 +175,28 @@ export interface BOMItemRequest {
   is_appearance_part?: boolean;
   assembly_method?: string;
   tolerance_grade?: string;
+  // EBOM专用字段
+  item_type?: string;
+  designator?: string;
+  package?: string;
+  pcb_layers?: number;
+  pcb_thickness?: string;
+  pcb_material?: string;
+  pcb_dimensions?: string;
+  pcb_surface_finish?: string;
+  service_type?: string;
+  process_requirements?: string;
+  attachments?: string;
+  // PBOM专用字段
+  print_process?: string;
+  surface_finish_pkg?: string;
+  design_file_id?: string;
+  design_file_name?: string;
+  die_cut_file_id?: string;
+  die_cut_file_name?: string;
+  is_multilang?: boolean;
+  packing_qty?: number;
+  language_code?: string;
 }
 
 export const projectBomApi = {

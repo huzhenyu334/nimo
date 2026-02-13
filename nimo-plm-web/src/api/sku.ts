@@ -14,7 +14,7 @@ export interface ProductSKU {
   created_at: string;
   updated_at: string;
   cmf_configs?: SKUCMFConfig[];
-  bom_overrides?: SKUBOMOverride[];
+  bom_items?: SKUBOMItem[];
 }
 
 export interface SKUCMFConfig {
@@ -38,24 +38,32 @@ export interface SKUCMFConfig {
   };
 }
 
-export interface SKUBOMOverride {
+export interface SKUBOMItem {
   id: string;
   sku_id: string;
-  action: 'replace' | 'add' | 'remove';
-  base_item_id?: string;
-  override_name?: string;
-  override_specification?: string;
-  override_quantity: number;
-  override_unit?: string;
-  override_material_type?: string;
-  override_process_type?: string;
+  bom_item_id: string;
+  cmf_variant_id?: string;
+  quantity: number;
   notes?: string;
   created_at: string;
   updated_at: string;
-  base_item?: {
+  bom_item?: {
     id: string;
     name: string;
     item_number: number;
+    specification?: string;
+    material_type?: string;
+  };
+  cmf_variant?: {
+    id: string;
+    variant_index: number;
+    material_code: string;
+    color_hex: string;
+    material: string;
+    finish: string;
+    texture: string;
+    coating: string;
+    pantone_code: string;
   };
 }
 
@@ -69,10 +77,27 @@ export interface FullBOMItem {
   category?: string;
   material_type?: string;
   process_type?: string;
+  is_appearance_part?: boolean;
   color?: string;
   color_code?: string;
+  color_hex?: string;
+  material_code?: string;
+  finish?: string;
+  texture?: string;
+  coating?: string;
   surface_treatment?: string;
-  source: 'base' | 'replaced' | 'added';
+  cmf_variant_id?: string;
+  cmf_variant?: {
+    id: string;
+    variant_index: number;
+    material_code: string;
+    color_hex: string;
+    material: string;
+    finish: string;
+    texture: string;
+    coating: string;
+    pantone_code: string;
+  };
 }
 
 // ========== API ==========
@@ -84,7 +109,13 @@ export const skuApi = {
     return res.data.data?.items || [];
   },
 
-  createSKU: async (projectId: string, data: { name: string; code?: string; description?: string; sort_order?: number }) => {
+  createSKU: async (projectId: string, data: {
+    name: string;
+    code?: string;
+    description?: string;
+    sort_order?: number;
+    bom_items?: Array<{ bom_item_id: string; cmf_variant_id?: string; quantity?: number }>;
+  }) => {
     const res = await apiClient.post(`/projects/${projectId}/skus`, data);
     return res.data.data;
   },
@@ -97,6 +128,22 @@ export const skuApi = {
   deleteSKU: async (projectId: string, skuId: string) => {
     const res = await apiClient.delete(`/projects/${projectId}/skus/${skuId}`);
     return res.data;
+  },
+
+  // BOM Items (checkbox selection from SBOM)
+  getBOMItems: async (projectId: string, skuId: string): Promise<SKUBOMItem[]> => {
+    const res = await apiClient.get(`/projects/${projectId}/skus/${skuId}/bom-items`);
+    return res.data.data?.items || [];
+  },
+
+  saveBOMItems: async (projectId: string, skuId: string, items: Array<{
+    bom_item_id: string;
+    cmf_variant_id?: string;
+    quantity?: number;
+    notes?: string;
+  }>) => {
+    const res = await apiClient.put(`/projects/${projectId}/skus/${skuId}/bom-items`, items);
+    return res.data.data?.items || [];
   },
 
   // CMF Config
@@ -117,48 +164,7 @@ export const skuApi = {
     return res.data.data?.items || [];
   },
 
-  // BOM Overrides
-  getBOMOverrides: async (projectId: string, skuId: string): Promise<SKUBOMOverride[]> => {
-    const res = await apiClient.get(`/projects/${projectId}/skus/${skuId}/bom-overrides`);
-    return res.data.data?.items || [];
-  },
-
-  createBOMOverride: async (projectId: string, skuId: string, data: {
-    action: string;
-    base_item_id?: string;
-    override_name?: string;
-    override_specification?: string;
-    override_quantity?: number;
-    override_unit?: string;
-    override_material_type?: string;
-    override_process_type?: string;
-    notes?: string;
-  }) => {
-    const res = await apiClient.post(`/projects/${projectId}/skus/${skuId}/bom-overrides`, data);
-    return res.data.data;
-  },
-
-  updateBOMOverride: async (projectId: string, skuId: string, overrideId: string, data: {
-    action: string;
-    base_item_id?: string;
-    override_name?: string;
-    override_specification?: string;
-    override_quantity?: number;
-    override_unit?: string;
-    override_material_type?: string;
-    override_process_type?: string;
-    notes?: string;
-  }) => {
-    const res = await apiClient.put(`/projects/${projectId}/skus/${skuId}/bom-overrides/${overrideId}`, data);
-    return res.data.data;
-  },
-
-  deleteBOMOverride: async (projectId: string, skuId: string, overrideId: string) => {
-    const res = await apiClient.delete(`/projects/${projectId}/skus/${skuId}/bom-overrides/${overrideId}`);
-    return res.data;
-  },
-
-  // Full BOM (merged)
+  // Full BOM (merged: selected SBOM items + CMF)
   getFullBOM: async (projectId: string, skuId: string): Promise<FullBOMItem[]> => {
     const res = await apiClient.get(`/projects/${projectId}/skus/${skuId}/full-bom`);
     return res.data.data?.items || [];

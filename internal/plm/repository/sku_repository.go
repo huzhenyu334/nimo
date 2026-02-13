@@ -30,8 +30,9 @@ func (r *SKURepository) FindByID(ctx context.Context, id string) (*entity.Produc
 	err := r.db.WithContext(ctx).
 		Preload("CMFConfigs").
 		Preload("CMFConfigs.BOMItem").
-		Preload("BOMOverrides").
-		Preload("BOMOverrides.BaseItem").
+		Preload("BOMItems").
+		Preload("BOMItems.BOMItem").
+		Preload("BOMItems.CMFVariant").
 		First(&sku, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -53,9 +54,8 @@ func (r *SKURepository) Update(ctx context.Context, sku *entity.ProductSKU) erro
 }
 
 func (r *SKURepository) Delete(ctx context.Context, id string) error {
-	// Delete related CMF configs and BOM overrides first
 	r.db.WithContext(ctx).Where("sku_id = ?", id).Delete(&entity.SKUCMFConfig{})
-	r.db.WithContext(ctx).Where("sku_id = ?", id).Delete(&entity.SKUBOMOverride{})
+	r.db.WithContext(ctx).Where("sku_id = ?", id).Delete(&entity.SKUBOMItem{})
 	return r.db.WithContext(ctx).Delete(&entity.ProductSKU{}, "id = ?", id).Error
 }
 
@@ -72,12 +72,10 @@ func (r *SKURepository) ListCMFConfigs(ctx context.Context, skuID string) ([]ent
 
 func (r *SKURepository) BatchSaveCMFConfigs(ctx context.Context, skuID string, configs []entity.SKUCMFConfig) error {
 	tx := r.db.WithContext(ctx).Begin()
-	// Delete existing configs for this SKU
 	if err := tx.Where("sku_id = ?", skuID).Delete(&entity.SKUCMFConfig{}).Error; err != nil {
 		tx.Rollback()
 		return err
 	}
-	// Insert new configs
 	if len(configs) > 0 {
 		if err := tx.Create(&configs).Error; err != nil {
 			tx.Rollback()
@@ -87,36 +85,37 @@ func (r *SKURepository) BatchSaveCMFConfigs(ctx context.Context, skuID string, c
 	return tx.Commit().Error
 }
 
-// ========== SKUBOMOverride ==========
+// ========== SKUBOMItem（SKU零件勾选） ==========
 
-func (r *SKURepository) ListBOMOverrides(ctx context.Context, skuID string) ([]entity.SKUBOMOverride, error) {
-	var overrides []entity.SKUBOMOverride
+func (r *SKURepository) ListBOMItems(ctx context.Context, skuID string) ([]entity.SKUBOMItem, error) {
+	var items []entity.SKUBOMItem
 	err := r.db.WithContext(ctx).
-		Preload("BaseItem").
+		Preload("BOMItem").
 		Where("sku_id = ?", skuID).
-		Find(&overrides).Error
-	return overrides, err
+		Find(&items).Error
+	return items, err
 }
 
-func (r *SKURepository) CreateBOMOverride(ctx context.Context, override *entity.SKUBOMOverride) error {
-	return r.db.WithContext(ctx).Create(override).Error
-}
-
-func (r *SKURepository) UpdateBOMOverride(ctx context.Context, override *entity.SKUBOMOverride) error {
-	return r.db.WithContext(ctx).Save(override).Error
-}
-
-func (r *SKURepository) FindBOMOverrideByID(ctx context.Context, id string) (*entity.SKUBOMOverride, error) {
-	var override entity.SKUBOMOverride
-	err := r.db.WithContext(ctx).
-		Preload("BaseItem").
-		First(&override, "id = ?", id).Error
-	if err != nil {
-		return nil, err
+// BatchSaveBOMItems 批量保存SKU的BOM零件勾选（先删后插）
+func (r *SKURepository) BatchSaveBOMItems(ctx context.Context, skuID string, items []entity.SKUBOMItem) error {
+	tx := r.db.WithContext(ctx).Begin()
+	if err := tx.Where("sku_id = ?", skuID).Delete(&entity.SKUBOMItem{}).Error; err != nil {
+		tx.Rollback()
+		return err
 	}
-	return &override, nil
+	if len(items) > 0 {
+		if err := tx.Create(&items).Error; err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit().Error
 }
 
-func (r *SKURepository) DeleteBOMOverride(ctx context.Context, id string) error {
-	return r.db.WithContext(ctx).Delete(&entity.SKUBOMOverride{}, "id = ?", id).Error
+func (r *SKURepository) CreateBOMItem(ctx context.Context, item *entity.SKUBOMItem) error {
+	return r.db.WithContext(ctx).Create(item).Error
+}
+
+func (r *SKURepository) DeleteBOMItem(ctx context.Context, id string) error {
+	return r.db.WithContext(ctx).Delete(&entity.SKUBOMItem{}, "id = ?", id).Error
 }

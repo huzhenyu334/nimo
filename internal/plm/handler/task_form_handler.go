@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"time"
 
 	"github.com/bitfantasy/nimo/internal/plm/entity"
@@ -10,10 +12,16 @@ import (
 	"github.com/google/uuid"
 )
 
+// procurementTrigger 采购控件触发器接口
+type procurementTrigger interface {
+	TriggerProcurementControl(ctx context.Context, taskID string)
+}
+
 // TaskFormHandler 任务表单处理器
 type TaskFormHandler struct {
-	formRepo    *repository.TaskFormRepository
-	projectRepo *repository.ProjectRepository
+	formRepo            *repository.TaskFormRepository
+	projectRepo         *repository.ProjectRepository
+	procurementTrigger  procurementTrigger
 }
 
 // NewTaskFormHandler 创建任务表单处理器
@@ -22,6 +30,11 @@ func NewTaskFormHandler(formRepo *repository.TaskFormRepository, projectRepo *re
 		formRepo:    formRepo,
 		projectRepo: projectRepo,
 	}
+}
+
+// SetProcurementTrigger 注入采购控件触发器
+func (h *TaskFormHandler) SetProcurementTrigger(trigger procurementTrigger) {
+	h.procurementTrigger = trigger
 }
 
 // GetTaskForm 获取任务表单定义
@@ -283,10 +296,39 @@ func (h *TaskFormHandler) GetFormSubmission(c *gin.Context) {
 		InternalError(c, "查询表单提交失败: "+err.Error())
 		return
 	}
+
+	// 懒加载：如果没有submission且表单有procurement_control字段，触发采购数据拉取
+	if submission == nil && h.procurementTrigger != nil {
+		formDef, _ := h.formRepo.FindByTaskID(c.Request.Context(), taskID)
+		if formDef != nil && h.hasProcurementControlField(formDef) {
+			log.Printf("[TaskForm] 懒加载触发采购控件 task=%s", taskID)
+			h.procurementTrigger.TriggerProcurementControl(c.Request.Context(), taskID)
+			// 重新读取
+			submission, _ = h.formRepo.FindLatestSubmission(c.Request.Context(), taskID)
+		}
+	}
+
 	if submission == nil {
 		Success(c, nil)
 		return
 	}
 
 	Success(c, submission)
+}
+
+// hasProcurementControlField 检查表单定义是否包含 procurement_control 类型字段
+func (h *TaskFormHandler) hasProcurementControlField(formDef *entity.TaskForm) bool {
+	type fieldDef struct {
+		Type string `json:"type"`
+	}
+	var fields []fieldDef
+	if err := json.Unmarshal(formDef.Fields, &fields); err != nil {
+		return false
+	}
+	for _, f := range fields {
+		if f.Type == "procurement_control" {
+			return true
+		}
+	}
+	return false
 }

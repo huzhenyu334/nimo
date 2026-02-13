@@ -26,11 +26,10 @@ import {
   Timeline,
   Avatar,
   Popconfirm,
-  InputNumber,
   Checkbox,
   Upload,
   Divider,
-  AutoComplete,
+  Radio,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -67,12 +66,17 @@ import { approvalApi } from '@/api/approval';
 import { taskFormApi, ParsedBOMItem } from '@/api/taskForms';
 import { userApi } from '@/api/users';
 import { srmApi } from '@/api/srm';
-import { skuApi, ProductSKU, SKUCMFConfig, SKUBOMOverride } from '@/api/sku';
+import { skuApi, ProductSKU, FullBOMItem } from '@/api/sku';
+import { cmfVariantApi, type AppearancePartWithCMF, type CMFVariant } from '@/api/cmfVariant';
 import { partDrawingApi, PartDrawing } from '@/api/partDrawing';
 import UserSelect from '@/components/UserSelect';
-import CMFPanel from '@/components/CMFPanel';
+import CMFVariantEditor from '@/components/CMFVariantEditor';
+import BOMEditableTable, { type BOMItemRecord } from '@/components/BOMEditableTable';
+import EBOMEditableTable from '@/components/EBOMEditableTable';
+import PBOMEditableTable from '@/components/PBOMEditableTable';
 import { ROLE_CODES, taskRoleApi, TaskRole } from '@/constants/roles';
 import type { ColumnsType } from 'antd/es/table';
+import ProcurementControl from '@/components/ProcurementControl';
 import dayjs from 'dayjs';
 
 const { Title, Text, Paragraph } = Typography;
@@ -530,17 +534,8 @@ const BOM_TYPE_CONFIG: Record<string, { label: string }> = {
   EBOM: { label: '电子BOM' },
   SBOM: { label: '结构BOM' },
   MBOM: { label: '制造BOM' },
+  PBOM: { label: '包装BOM' },
 };
-
-const CATEGORY_OPTIONS = [
-  '电子元器件', '结构件', '光学器件', '电池', '线缆/FPC', '包装材料', '标签/外观件', '其他',
-];
-
-const PROCUREMENT_OPTIONS = [
-  { label: 'Buy（外购）', value: 'buy' },
-  { label: 'Make（自制）', value: 'make' },
-  { label: 'Phantom（虚拟件）', value: 'phantom' },
-];
 
 // Material Search Modal
 const MaterialSearchModal: React.FC<{
@@ -600,7 +595,6 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectComment, setRejectComment] = useState('');
   const [materialModalOpen, setMaterialModalOpen] = useState(false);
-  const [editingCell, setEditingCell] = useState<{ rowId: string; field: string } | null>(null);
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [compareModalOpen, setCompareModalOpen] = useState(false);
   const [compareBom1, setCompareBom1] = useState<string | undefined>(undefined);
@@ -648,7 +642,7 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
     }
   }, [bomList, selectedBomId]);
 
-  const isEditable = bomDetail?.status === 'draft' || bomDetail?.status === 'rejected';
+  const isEditable = false; // BOM管理选项卡始终为查看模式
 
   // Mutations
   const createMutation = useMutation({
@@ -847,16 +841,16 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
     setEditingRowId(null);
   };
 
-  // Inline cell save
-  const handleCellSave = (record: ProjectBOMItem, field: string, value: any) => {
-    setEditingCell(null);
+  // BOM cell save via shared component
+  const handleItemSave = (itemId: string, field: string, value: any) => {
+    const record = items.find(i => i.id === itemId);
+    if (!record) return;
     const data: any = {
       name: record.name,
       quantity: record.quantity,
       unit: record.unit,
     };
     data[field] = value;
-    // Auto-compute extended_cost for quantity/unit_price changes
     if (field === 'quantity' || field === 'unit_price') {
       const qty = field === 'quantity' ? value : record.quantity;
       const price = field === 'unit_price' ? value : record.unit_price;
@@ -864,92 +858,60 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
         data.extended_cost = qty * price;
       }
     }
-    updateItemMutation.mutate({ itemId: record.id, data });
+    updateItemMutation.mutate({ itemId, data });
   };
 
-  // Editable cell renderer
-  const renderEditableCell = (value: any, record: ProjectBOMItem, field: string, type: 'text' | 'number' | 'select' = 'text', options?: { label: string; value: string }[]) => {
-    if (!isEditable) return value ?? '-';
-    const isEditing = editingCell?.rowId === record.id && editingCell?.field === field;
-
-    if (isEditing) {
-      if (type === 'number') {
-        return (
-          <InputNumber
-            size="small"
-            autoFocus
-            defaultValue={value}
-            style={{ width: '100%' }}
-            onBlur={(e) => handleCellSave(record, field, parseFloat((e.target as HTMLInputElement).value) || 0)}
-            onPressEnter={(e) => handleCellSave(record, field, parseFloat((e.target as HTMLInputElement).value) || 0)}
-          />
-        );
-      }
-      if (type === 'select' && options) {
-        return (
-          <Select
-            size="small"
-            autoFocus
-            defaultValue={value}
-            defaultOpen
-            style={{ width: '100%' }}
-            options={options}
-            onChange={(v) => handleCellSave(record, field, v)}
-            onBlur={() => setEditingCell(null)}
-          />
-        );
-      }
-      return (
-        <Input
-          size="small"
-          autoFocus
-          defaultValue={value}
-          onBlur={(e) => handleCellSave(record, field, e.target.value)}
-          onPressEnter={(e) => handleCellSave(record, field, (e.target as HTMLInputElement).value)}
-        />
-      );
-    }
-
+  // Drawing column renderer using PartDrawing version system, fallback to inline fields
+  const renderDrawingCol = (record: BOMItemRecord, type: '2D' | '3D') => {
+    const latest = getLatestDrawing(record.id, type);
+    const count = getDrawingCount(record.id, type);
+    // Fallback: show inline drawing fields from BOM item when no PartDrawing record exists
+    const inlineFileName = type === '3D' ? record.drawing_3d_file_name : record.drawing_2d_file_name;
     return (
-      <div
-        style={{ cursor: 'pointer', minHeight: 22, padding: '0 2px', borderRadius: 2 }}
-        className="editable-cell"
-        onClick={() => setEditingCell({ rowId: record.id, field })}
-      >
-        {value ?? <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
-      </div>
+      <Space size={4}>
+        {latest ? (
+          <Tooltip title={latest.file_name}>
+            <a href={latest.file_url} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>
+              {latest.version} {latest.file_name.length > 8 ? latest.file_name.slice(0, 8) + '...' : latest.file_name}
+            </a>
+          </Tooltip>
+        ) : inlineFileName ? (
+          <Tooltip title={inlineFileName}>
+            <Text style={{ fontSize: 11 }}>
+              {inlineFileName.length > 12 ? inlineFileName.slice(0, 12) + '...' : inlineFileName}
+            </Text>
+          </Tooltip>
+        ) : <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
+        {isEditable && (
+          <UploadOutlined
+            style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12 }}
+            onClick={() => { setDrawingUploadItemId(record.id); setDrawingUploadType(type); setDrawingUploadModalOpen(true); }}
+          />
+        )}
+        {count > 0 && (
+          <Tooltip title="查看历史版本">
+            <HistoryOutlined
+              style={{ color: '#8c8c8c', cursor: 'pointer', fontSize: 12 }}
+              onClick={() => { setDrawingHistoryItemId(record.id); setDrawingHistoryType(type); setDrawingHistoryOpen(true); }}
+            />
+          </Tooltip>
+        )}
+      </Space>
     );
   };
 
-  // SBOM下拉选项常量
-  const PROCESS_TYPE_OPTIONS = [
-    { label: '注塑', value: '注塑' }, { label: 'CNC', value: 'CNC' },
-    { label: '冲压', value: '冲压' }, { label: '模切', value: '模切' },
-    { label: '3D打印', value: '3D打印' }, { label: '激光切割', value: '激光切割' },
-    { label: 'SMT', value: 'SMT' }, { label: '手工', value: '手工' },
-  ];
-  const ASSEMBLY_METHOD_OPTIONS = [
-    { label: '卡扣', value: '卡扣' }, { label: '螺丝', value: '螺丝' },
-    { label: '胶合', value: '胶合' }, { label: '超声波焊接', value: '超声波焊接' },
-    { label: '热熔', value: '热熔' }, { label: '激光焊接', value: '激光焊接' },
-  ];
-  const MATERIAL_TYPE_PRESETS = [
-    '钛合金', '铝合金6061', '铝合金7075', '不锈钢304', '不锈钢316L',
-    'PC', 'ABS', 'ABS+PC', 'PA66', 'PA66+GF30', 'PMMA', 'POM', 'TPU',
-    '硅胶', 'PEEK', '碳纤维', '玻璃', '蓝宝石', '镁合金', '锌合金', '铜合金', 'TR90', 'Ultem',
-  ];
-  const TOLERANCE_PRESETS = [
-    { label: '普通 ±0.05mm', value: '0.05' },
-    { label: '精密 ±0.03mm', value: '0.03' },
-    { label: '超精密 ±0.005mm', value: '0.005' },
-  ];
-  const formatToleranceDisplay = (v: any): string => {
-    if (v == null || v === '') return '';
-    const num = parseFloat(String(v));
-    if (!isNaN(num)) return `±${num}mm`;
-    const map: Record<string, string> = { '普通': '±0.05mm', '精密': '±0.03mm', '超精密': '±0.005mm' };
-    return map[v] || String(v);
-  };
+  // Action column for BOM table
+  const renderBOMActionCol = isEditable ? (record: BOMItemRecord) => (
+    <Space size={4}>
+      <Tooltip title="从物料库选择">
+        <Button size="small" type="text" icon={<SearchOutlined />}
+          onClick={() => { setEditingRowId(record.id); setMaterialModalOpen(true); }} />
+      </Tooltip>
+      <Popconfirm title="确认删除此行？" onConfirm={() => deleteItemMutation.mutate(record.id)}>
+        <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+      </Popconfirm>
+    </Space>
+  ) : undefined;
 
   // 新版图纸上传：创建PartDrawing版本记录
   const handleDrawingVersionUpload = async (file: File) => {
@@ -987,229 +949,7 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
     return itemDrawings[type]?.length || 0;
   };
 
-  // Dynamic table columns based on BOM type
-  const getColumns = (bomType: string, editable: boolean): ColumnsType<ProjectBOMItem> => {
-    // 共用列
-    const commonCols: ColumnsType<ProjectBOMItem> = [
-      { title: '序号', dataIndex: 'item_number', width: 55, fixed: 'left',
-        render: (_, __, idx) => idx + 1 },
-      { title: '物料编码', width: 120,
-        render: (_, record) => {
-          const code = record.material?.code;
-          return (
-            <Space size={4}>
-              <Text code style={{ fontSize: 11 }}>{code || '-'}</Text>
-              {editable && (
-                <SearchOutlined
-                  style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12 }}
-                  onClick={() => { setEditingRowId(record.id); setMaterialModalOpen(true); }}
-                />
-              )}
-            </Space>
-          );
-        },
-      },
-      { title: '物料名称', dataIndex: 'name', width: 140,
-        render: (v, record) => renderEditableCell(v, record, 'name') },
-      ...(bomType !== 'SBOM' ? [{
-        title: '规格描述', dataIndex: 'specification', width: 150, ellipsis: true,
-        render: (v: any, record: ProjectBOMItem) => renderEditableCell(v, record, 'specification'),
-      } as any] : []),
-      { title: '分类', dataIndex: 'category', width: 100,
-        render: (v, record) => renderEditableCell(v, record, 'category', 'select',
-          CATEGORY_OPTIONS.map(c => ({ label: c, value: c }))) },
-      { title: '数量', dataIndex: 'quantity', width: 70, align: 'right',
-        render: (v, record) => renderEditableCell(v, record, 'quantity', 'number') },
-      { title: '单位', dataIndex: 'unit', width: 55,
-        render: (v, record) => renderEditableCell(v, record, 'unit') },
-    ];
-
-    // EBOM特有列
-    const ebomCols: ColumnsType<ProjectBOMItem> = [
-      { title: '单价(¥)', dataIndex: 'unit_price', width: 90, align: 'right',
-        render: (v, record) => renderEditableCell(v != null ? v.toFixed(2) : null, record, 'unit_price', 'number') },
-      { title: '小计(¥)', dataIndex: 'extended_cost', width: 90, align: 'right',
-        render: (v: number | null, record) => {
-          const cost = v ?? (record.quantity && record.unit_price ? record.quantity * record.unit_price : null);
-          return cost != null ? <Text strong style={{ color: '#cf1322' }}>¥{cost.toFixed(2)}</Text> : '-';
-        },
-      },
-      { title: '制造商', dataIndex: 'manufacturer', width: 110, ellipsis: true,
-        render: (v, record) => renderEditableCell(v, record, 'manufacturer') },
-      { title: '制造商料号', dataIndex: 'manufacturer_pn', width: 110, ellipsis: true,
-        render: (v, record) => renderEditableCell(v, record, 'manufacturer_pn') },
-      { title: '供应商', dataIndex: 'supplier', width: 110, ellipsis: true,
-        render: (v, record) => renderEditableCell(v, record, 'supplier') },
-      { title: '交期(天)', dataIndex: 'lead_time_days', width: 75, align: 'right',
-        render: (v, record) => renderEditableCell(v, record, 'lead_time_days', 'number') },
-      { title: '采购类型', dataIndex: 'procurement_type', width: 100,
-        render: (v, record) => renderEditableCell(
-          PROCUREMENT_OPTIONS.find(o => o.value === v)?.label?.split('（')[0] || v,
-          record, 'procurement_type', 'select', PROCUREMENT_OPTIONS) },
-      { title: '关键件', dataIndex: 'is_critical', width: 65, align: 'center',
-        render: (v: boolean, record) => editable ? (
-          <Checkbox checked={v} onChange={(e) => handleCellSave(record, 'is_critical', e.target.checked)} />
-        ) : (v ? <Tag color="red">是</Tag> : '-'),
-      },
-    ];
-
-    // SBOM特有列
-    const sbomCols: ColumnsType<ProjectBOMItem> = [
-      { title: '材质', dataIndex: 'material_type', width: 110,
-        render: (v, record) => {
-          const isEd = editable && editingCell?.rowId === record.id && editingCell?.field === 'material_type';
-          if (isEd) {
-            return (
-              <AutoComplete
-                size="small" autoFocus defaultValue={v} defaultOpen style={{ width: '100%' }}
-                options={MATERIAL_TYPE_PRESETS.map(m => ({ value: m }))}
-                filterOption={(input, option) => (option?.value as string)?.toLowerCase().includes(input.toLowerCase())}
-                onSelect={(val) => handleCellSave(record, 'material_type', val)}
-                onBlur={(e) => handleCellSave(record, 'material_type', (e.target as HTMLInputElement).value)}
-              />
-            );
-          }
-          return editable ? (
-            <div style={{ cursor: 'pointer', minHeight: 22, padding: '0 2px', borderRadius: 2 }} className="editable-cell"
-              onClick={() => setEditingCell({ rowId: record.id, field: 'material_type' })}>
-              {v ?? <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
-            </div>
-          ) : (v || '-');
-        },
-      },
-      { title: '工艺', dataIndex: 'process_type', width: 90,
-        render: (v, record) => renderEditableCell(v, record, 'process_type', 'select', PROCESS_TYPE_OPTIONS) },
-      { title: '2D图纸', width: 150,
-        render: (_, record) => {
-          const latest = getLatestDrawing(record.id, '2D');
-          const count = getDrawingCount(record.id, '2D');
-          return (
-            <Space size={4}>
-              {latest ? (
-                <Tooltip title={latest.file_name}>
-                  <a href={latest.file_url} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>
-                    {latest.version} {latest.file_name.length > 8 ? latest.file_name.slice(0, 8) + '...' : latest.file_name}
-                  </a>
-                </Tooltip>
-              ) : <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
-              {editable && (
-                <UploadOutlined
-                  style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12 }}
-                  onClick={() => { setDrawingUploadItemId(record.id); setDrawingUploadType('2D'); setDrawingUploadModalOpen(true); }}
-                />
-              )}
-              {count > 0 && (
-                <Tooltip title="查看历史版本">
-                  <HistoryOutlined
-                    style={{ color: '#8c8c8c', cursor: 'pointer', fontSize: 12 }}
-                    onClick={() => { setDrawingHistoryItemId(record.id); setDrawingHistoryType('2D'); setDrawingHistoryOpen(true); }}
-                  />
-                </Tooltip>
-              )}
-            </Space>
-          );
-        },
-      },
-      { title: '3D模型', width: 150,
-        render: (_, record) => {
-          const latest = getLatestDrawing(record.id, '3D');
-          const count = getDrawingCount(record.id, '3D');
-          return (
-            <Space size={4}>
-              {latest ? (
-                <Tooltip title={latest.file_name}>
-                  <a href={latest.file_url} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>
-                    {latest.version} {latest.file_name.length > 8 ? latest.file_name.slice(0, 8) + '...' : latest.file_name}
-                  </a>
-                </Tooltip>
-              ) : <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
-              {editable && (
-                <UploadOutlined
-                  style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12 }}
-                  onClick={() => { setDrawingUploadItemId(record.id); setDrawingUploadType('3D'); setDrawingUploadModalOpen(true); }}
-                />
-              )}
-              {count > 0 && (
-                <Tooltip title="查看历史版本">
-                  <HistoryOutlined
-                    style={{ color: '#8c8c8c', cursor: 'pointer', fontSize: 12 }}
-                    onClick={() => { setDrawingHistoryItemId(record.id); setDrawingHistoryType('3D'); setDrawingHistoryOpen(true); }}
-                  />
-                </Tooltip>
-              )}
-            </Space>
-          );
-        },
-      },
-      { title: '重量g', dataIndex: 'weight_grams', width: 75, align: 'right',
-        render: (v, record) => renderEditableCell(v, record, 'weight_grams', 'number') },
-      { title: '目标价', dataIndex: 'target_price', width: 90, align: 'right',
-        render: (v, record) => renderEditableCell(v != null ? `¥${v.toFixed(2)}` : null, record, 'target_price', 'number') },
-      { title: '模具费', dataIndex: 'tooling_estimate', width: 90, align: 'right',
-        render: (v, record) => renderEditableCell(v != null ? `¥${v.toFixed(2)}` : null, record, 'tooling_estimate', 'number') },
-      { title: '成本备注', dataIndex: 'cost_notes', width: 120, ellipsis: true,
-        render: (v, record) => renderEditableCell(v, record, 'cost_notes') },
-      { title: '外观件', dataIndex: 'is_appearance_part', width: 65, align: 'center',
-        render: (v: boolean, record) => editable ? (
-          <Checkbox checked={v} onChange={(e) => handleCellSave(record, 'is_appearance_part', e.target.checked)} />
-        ) : (v ? <Tag color="blue">是</Tag> : '-'),
-      },
-      { title: '装配方式', dataIndex: 'assembly_method', width: 100,
-        render: (v, record) => renderEditableCell(v, record, 'assembly_method', 'select', ASSEMBLY_METHOD_OPTIONS) },
-      { title: '公差', dataIndex: 'tolerance_grade', width: 95,
-        render: (v, record) => {
-          const isEd = editable && editingCell?.rowId === record.id && editingCell?.field === 'tolerance_grade';
-          if (isEd) {
-            return (
-              <AutoComplete
-                size="small" autoFocus defaultValue={v != null ? String(v) : ''} defaultOpen style={{ width: '100%' }}
-                options={TOLERANCE_PRESETS}
-                onSelect={(val) => handleCellSave(record, 'tolerance_grade', val)}
-                onBlur={(e) => handleCellSave(record, 'tolerance_grade', (e.target as HTMLInputElement).value)}
-              />
-            );
-          }
-          const display = formatToleranceDisplay(v);
-          return editable ? (
-            <div style={{ cursor: 'pointer', minHeight: 22, padding: '0 2px', borderRadius: 2 }} className="editable-cell"
-              onClick={() => setEditingCell({ rowId: record.id, field: 'tolerance_grade' })}>
-              {display || <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
-            </div>
-          ) : (display || '-');
-        },
-      },
-    ];
-
-    const typeCols = bomType === 'SBOM' ? sbomCols : ebomCols;
-    const noteCol: ColumnsType<ProjectBOMItem> = [
-      { title: '备注', dataIndex: 'notes', width: 120, ellipsis: true,
-        render: (v, record) => renderEditableCell(v, record, 'notes') },
-    ];
-
-    const cols = [...commonCols, ...typeCols, ...noteCol];
-
-    if (editable) {
-      cols.push({
-        title: '操作', width: 80, fixed: 'right', align: 'center',
-        render: (_, record) => (
-          <Space size={4}>
-            <Tooltip title="从物料库选择">
-              <Button size="small" type="text" icon={<SearchOutlined />}
-                onClick={() => { setEditingRowId(record.id); setMaterialModalOpen(true); }} />
-            </Tooltip>
-            <Popconfirm title="确认删除此行？" onConfirm={() => deleteItemMutation.mutate(record.id)}>
-              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-            </Popconfirm>
-          </Space>
-        ),
-      });
-    }
-
-    return cols;
-  };
-
   const bomType = bomDetail?.bom_type || 'EBOM';
-  const columns = getColumns(bomType, isEditable);
 
   // Stats
   const items = bomDetail?.items || [];
@@ -1397,28 +1137,38 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
       {/* Editable Table */}
       {bomDetail && (
         <>
-          <style>{`
-            .bom-table .editable-cell:hover {
-              background: #f5f5f5;
-            }
-            .bom-table .critical-row {
-              background: #fff1f0 !important;
-            }
-            .bom-table .critical-row:hover > td {
-              background: #ffccc7 !important;
-            }
-          `}</style>
-          <Table
-            className="bom-table"
-            columns={columns}
-            dataSource={items}
-            rowKey="id"
-            size="small"
-            pagination={false}
-            scroll={{ x: isSBOM ? 2300 : 1800, y: 450 }}
-            locale={{ emptyText: '暂无物料行项，点击下方添加' }}
-            rowClassName={(record) => record.is_critical ? 'critical-row' : ''}
-          />
+          {bomType === 'EBOM' ? (
+            <EBOMEditableTable
+              items={items}
+              onChange={() => {}}
+              mode={isEditable ? 'edit' : 'view'}
+              onItemSave={handleItemSave}
+            />
+          ) : bomType === 'PBOM' ? (
+            <PBOMEditableTable
+              items={items}
+              onChange={() => {}}
+              mode={isEditable ? 'edit' : 'view'}
+              onItemSave={handleItemSave}
+            />
+          ) : (
+            <BOMEditableTable
+              bomType={bomType as 'EBOM' | 'SBOM'}
+              items={items}
+              onChange={() => {}}
+              showAddDelete={false}
+              readonly={!isEditable}
+              showMaterialCode
+              onItemSave={handleItemSave}
+              onMaterialSearch={(itemId) => { setEditingRowId(itemId); setMaterialModalOpen(true); }}
+              renderDrawingColumn={isSBOM ? renderDrawingCol : undefined}
+              actionColumn={renderBOMActionCol}
+              scrollX={isSBOM ? 2300 : 1800}
+              scrollY={450}
+              noPagination
+              rowClassName={(record) => record.is_critical ? 'critical-row' : ''}
+            />
+          )}
 
           {/* Bottom: add row button + stats */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, padding: '8px 0', borderTop: '1px solid #f0f0f0' }}>
@@ -1473,6 +1223,7 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
             <Select options={[
               { label: 'EBOM - 电子BOM', value: 'EBOM' },
               { label: 'SBOM - 结构BOM', value: 'SBOM' },
+              { label: 'PBOM - 包装BOM', value: 'PBOM' },
               { label: 'MBOM - 制造BOM', value: 'MBOM' },
             ]} />
           </Form.Item>
@@ -1979,6 +1730,43 @@ const FormSubmissionDisplay: React.FC<{ projectId: string; taskId: string }> = (
             return (
               <Descriptions.Item key={field.key} label={field.label} span={2}>
                 <BOMSubmissionDisplay data={value} />
+              </Descriptions.Item>
+            );
+          }
+          // tooling_list / consumable_list: readonly table
+          if ((field.type === 'tooling_list' || field.type === 'consumable_list') && value && typeof value === 'object' && value.items) {
+            const listTitle = field.type === 'tooling_list' ? '治具清单' : '组装辅料清单';
+            const listItems = (value.items || []) as Array<{ name: string; unit: string; quantity: number; unit_price: number }>;
+            return (
+              <Descriptions.Item key={field.key} label={field.label} span={2}>
+                <div>
+                  <Tag color="blue">{value.item_count || listItems.length} 项</Tag>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{listTitle}</Text>
+                  {listItems.length > 0 && (
+                    <Table
+                      size="small"
+                      dataSource={listItems}
+                      rowKey={(_, idx) => String(idx)}
+                      pagination={false}
+                      style={{ marginTop: 8 }}
+                      columns={[
+                        { title: '序号', width: 55, align: 'center' as const, render: (_, __, idx) => idx + 1 },
+                        { title: '名称', dataIndex: 'name', width: 200 },
+                        { title: '单位', dataIndex: 'unit', width: 80 },
+                        { title: '数量', dataIndex: 'quantity', width: 100, align: 'right' as const },
+                        { title: '单价', dataIndex: 'unit_price', width: 100, align: 'right' as const },
+                      ]}
+                    />
+                  )}
+                </div>
+              </Descriptions.Item>
+            );
+          }
+          // procurement_control: show PR info
+          if (field.type === 'procurement_control' && value && typeof value === 'object') {
+            return (
+              <Descriptions.Item key={field.key} label={field.label} span={2}>
+                <ProcurementControl value={value} />
               </Descriptions.Item>
             );
           }
@@ -2502,12 +2290,26 @@ const RoleAssignmentTab: React.FC<{ projectId: string }> = ({ projectId }) => {
 
 // ============ SKU Management Tab ============
 
+// 色块组件
+const ColorSwatch: React.FC<{ hex?: string; size?: number }> = ({ hex, size = 14 }) => {
+  if (!hex) return null;
+  return (
+    <span style={{
+      display: 'inline-block', width: size, height: size, borderRadius: 3,
+      backgroundColor: hex, border: '1px solid #d9d9d9', verticalAlign: 'middle',
+    }} />
+  );
+};
+
 const SKUTab: React.FC<{ projectId: string }> = ({ projectId }) => {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedSKU, setSelectedSKU] = useState<ProductSKU | null>(null);
-  const [subTab, setSubTab] = useState<'cmf' | 'overrides'>('cmf');
   const [form] = Form.useForm();
+
+  // 创建弹窗：非外观件勾选状态 + 外观件CMF变体选择
+  const [checkedNonAppearance, setCheckedNonAppearance] = useState<Set<string>>(new Set());
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>({}); // bomItemId -> variantId
 
   // List SKUs
   const { data: skus = [], isLoading } = useQuery<ProductSKU[]>({
@@ -2515,7 +2317,7 @@ const SKUTab: React.FC<{ projectId: string }> = ({ projectId }) => {
     queryFn: () => skuApi.listSKUs(projectId),
   });
 
-  // Get SBOM items for CMF config
+  // Get SBOM items for create modal
   const { data: bomItems = [] } = useQuery({
     queryKey: ['project-sbom-items', projectId],
     queryFn: async () => {
@@ -2524,26 +2326,39 @@ const SKUTab: React.FC<{ projectId: string }> = ({ projectId }) => {
       const detail = await projectBomApi.get(projectId, boms[0].id);
       return detail.items || [];
     },
+    enabled: createOpen,
+  });
+
+  // Get appearance parts + CMF variants for create modal
+  const { data: appearanceParts = [] } = useQuery<AppearancePartWithCMF[]>({
+    queryKey: ['appearance-parts', projectId],
+    queryFn: () => cmfVariantApi.getAppearanceParts(projectId),
+    enabled: createOpen,
+  });
+
+  // Get full BOM for detail view
+  const { data: fullBom = [], isLoading: fullBomLoading } = useQuery<FullBOMItem[]>({
+    queryKey: ['sku-full-bom', projectId, selectedSKU?.id],
+    queryFn: () => skuApi.getFullBOM(projectId, selectedSKU!.id),
     enabled: !!selectedSKU,
   });
 
-  // CMF configs for selected SKU
-  const { data: cmfConfigs = [] } = useQuery<SKUCMFConfig[]>({
-    queryKey: ['sku-cmf', projectId, selectedSKU?.id],
-    queryFn: () => skuApi.getCMFConfigs(projectId, selectedSKU!.id),
-    enabled: !!selectedSKU,
-  });
+  // Split BOM items into non-appearance and appearance
+  const nonAppearanceItems = useMemo(() =>
+    bomItems.filter((item: ProjectBOMItem) => !item.is_appearance_part && !item.is_variant),
+  [bomItems]);
 
-  // BOM overrides for selected SKU
-  const { data: bomOverrides = [] } = useQuery<SKUBOMOverride[]>({
-    queryKey: ['sku-overrides', projectId, selectedSKU?.id],
-    queryFn: () => skuApi.getBOMOverrides(projectId, selectedSKU!.id),
-    enabled: !!selectedSKU,
-  });
+  // Initialize non-appearance checkboxes when modal opens
+  useEffect(() => {
+    if (createOpen && nonAppearanceItems.length > 0) {
+      setCheckedNonAppearance(new Set(nonAppearanceItems.map((i: ProjectBOMItem) => i.id)));
+      setSelectedVariants({});
+    }
+  }, [createOpen, nonAppearanceItems]);
 
   // Create SKU mutation
   const createMutation = useMutation({
-    mutationFn: (data: { name: string; code?: string; description?: string }) =>
+    mutationFn: (data: { name: string; bom_items: Array<{ bom_item_id: string; cmf_variant_id?: string }> }) =>
       skuApi.createSKU(projectId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-skus', projectId] });
@@ -2564,287 +2379,193 @@ const SKUTab: React.FC<{ projectId: string }> = ({ projectId }) => {
     },
   });
 
-  // Save CMF configs
-  const saveCMFMutation = useMutation({
-    mutationFn: (configs: Array<{ bom_item_id: string; color: string; color_code: string; surface_treatment: string }>) =>
-      skuApi.saveCMFConfigs(projectId, selectedSKU!.id, configs),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['sku-cmf', projectId, selectedSKU?.id] });
-      message.success('CMF配置已保存');
-    },
-    onError: () => message.error('保存失败'),
-  });
+  // Handle create submit
+  const handleCreateSubmit = (values: { name: string }) => {
+    const bomItemsToSave: Array<{ bom_item_id: string; cmf_variant_id?: string }> = [];
 
-  // Add BOM override
-  const addOverrideMutation = useMutation({
-    mutationFn: (data: { action: string; base_item_id?: string; override_name?: string; override_specification?: string; override_quantity?: number; override_unit?: string; notes?: string }) =>
-      skuApi.createBOMOverride(projectId, selectedSKU!.id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['sku-overrides', projectId, selectedSKU?.id] });
-      message.success('已添加');
-    },
-  });
-
-  // Delete BOM override
-  const deleteOverrideMutation = useMutation({
-    mutationFn: (overrideId: string) =>
-      skuApi.deleteBOMOverride(projectId, selectedSKU!.id, overrideId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['sku-overrides', projectId, selectedSKU?.id] });
-      message.success('已删除');
-    },
-  });
-
-  // CMF editor state
-  const [cmfEdits, setCmfEdits] = useState<Record<string, { color: string; color_code: string; surface_treatment: string }>>({});
-
-  // Initialize CMF edits when configs load
-  React.useEffect(() => {
-    if (cmfConfigs.length > 0) {
-      const map: Record<string, { color: string; color_code: string; surface_treatment: string }> = {};
-      for (const c of cmfConfigs) {
-        map[c.bom_item_id] = { color: c.color, color_code: c.color_code, surface_treatment: c.surface_treatment };
-      }
-      setCmfEdits(map);
+    // Add checked non-appearance items
+    for (const id of checkedNonAppearance) {
+      bomItemsToSave.push({ bom_item_id: id });
     }
-  }, [cmfConfigs]);
 
-  const handleCMFChange = (bomItemId: string, field: string, value: string) => {
-    setCmfEdits(prev => ({
-      ...prev,
-      [bomItemId]: { ...prev[bomItemId] || { color: '', color_code: '', surface_treatment: '' }, [field]: value },
-    }));
+    // Add appearance items with selected CMF variant
+    for (const [bomItemId, variantId] of Object.entries(selectedVariants)) {
+      if (variantId) {
+        bomItemsToSave.push({ bom_item_id: bomItemId, cmf_variant_id: variantId });
+      }
+    }
+
+    createMutation.mutate({ name: values.name, bom_items: bomItemsToSave });
   };
 
-  const handleSaveCMF = () => {
-    const configs = Object.entries(cmfEdits)
-      .filter(([_, v]) => v.color || v.color_code || v.surface_treatment)
-      .map(([bomItemId, v]) => ({
-        bom_item_id: bomItemId,
-        color: v.color || '',
-        color_code: v.color_code || '',
-        surface_treatment: v.surface_treatment || '',
-      }));
-    saveCMFMutation.mutate(configs);
-  };
+  // ========== SKU Detail View ==========
+  if (selectedSKU) {
+    const detailColumns = [
+      { title: '序号', dataIndex: 'item_number', width: 60, align: 'center' as const },
+      { title: '零件名称', dataIndex: 'name', width: 160 },
+      { title: '材质', dataIndex: 'material_type', width: 100 },
+      { title: '数量', dataIndex: 'quantity', width: 70, align: 'right' as const },
+      { title: '单位', dataIndex: 'unit', width: 60 },
+      {
+        title: 'CMF信息',
+        width: 280,
+        render: (_: any, record: FullBOMItem) => {
+          if (!record.is_appearance_part || !record.cmf_variant) return '-';
+          const v = record.cmf_variant;
+          return (
+            <Space size={6}>
+              <ColorSwatch hex={v.color_hex} />
+              {v.material_code && <Tag style={{ fontSize: 11 }}>{v.material_code}</Tag>}
+              {v.finish && <Text style={{ fontSize: 12 }}>{v.finish}</Text>}
+              {v.texture && <Text style={{ fontSize: 12 }}>{v.texture}</Text>}
+            </Space>
+          );
+        },
+      },
+    ];
 
-  // Override form
-  const [overrideForm] = Form.useForm();
-  const [overrideModalOpen, setOverrideModalOpen] = useState(false);
-
-  // SKU list view
-  if (!selectedSKU) {
     return (
       <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-          <Text strong style={{ fontSize: 15 }}>配色方案 / SKU</Text>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-            新建SKU
-          </Button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+          <Button size="small" onClick={() => setSelectedSKU(null)}>&lt; 返回</Button>
+          <Text strong style={{ fontSize: 15 }}>{selectedSKU.name}</Text>
+          {selectedSKU.code && <Tag>{selectedSKU.code}</Tag>}
         </div>
 
-        {isLoading ? <Spin /> : skus.length === 0 ? (
-          <Empty description={'暂无SKU，点击"新建SKU"开始'} />
+        {fullBomLoading ? <Spin /> : fullBom.length === 0 ? (
+          <Empty description="该SKU暂无BOM零件" />
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
-            {skus.map(sku => (
-              <Card
-                key={sku.id}
-                size="small"
-                hoverable
-                onClick={() => setSelectedSKU(sku)}
-                styles={{ body: { padding: '12px 16px' } }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <Text strong>{sku.name}</Text>
-                    {sku.code && <Tag style={{ marginLeft: 8 }}>{sku.code}</Tag>}
-                  </div>
-                  <Tag color={sku.status === 'active' ? 'green' : 'default'}>{sku.status === 'active' ? '启用' : '停用'}</Tag>
-                </div>
-                {sku.description && <Text type="secondary" style={{ fontSize: 12, marginTop: 4, display: 'block' }}>{sku.description}</Text>}
-                <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
-                  <Popconfirm title="确认删除此SKU？" onConfirm={(e) => { e?.stopPropagation(); deleteMutation.mutate(sku.id); }}>
-                    <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
-                  </Popconfirm>
-                </div>
-              </Card>
-            ))}
-          </div>
+          <Table
+            columns={detailColumns}
+            dataSource={fullBom}
+            rowKey="id"
+            size="small"
+            pagination={false}
+            scroll={{ x: 700 }}
+          />
         )}
-
-        {/* Create SKU Modal */}
-        <Modal
-          title="新建SKU"
-          open={createOpen}
-          onCancel={() => { setCreateOpen(false); form.resetFields(); }}
-          onOk={() => form.submit()}
-          confirmLoading={createMutation.isPending}
-        >
-          <Form form={form} layout="vertical" onFinish={(values) => createMutation.mutate(values)}>
-            <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入SKU名称' }]}>
-              <Input placeholder="如：星空黑、冰川白" />
-            </Form.Item>
-            <Form.Item name="code" label="编码">
-              <Input placeholder="SKU编码（可选）" />
-            </Form.Item>
-            <Form.Item name="description" label="描述">
-              <Input.TextArea rows={2} placeholder="描述（可选）" />
-            </Form.Item>
-          </Form>
-        </Modal>
       </div>
     );
   }
 
-  // SKU detail view
-  const cmfColumns = [
-    { title: '序号', dataIndex: 'item_number', width: 60, align: 'center' as const },
-    { title: '零件名称', dataIndex: 'name', width: 140 },
-    { title: '规格', dataIndex: 'specification', width: 150, ellipsis: true },
-    { title: '材质', dataIndex: 'material_type', width: 100 },
-    { title: '颜色', width: 130,
-      render: (_: any, record: ProjectBOMItem) => (
-        <Input size="small" value={cmfEdits[record.id]?.color || ''} placeholder="颜色"
-          onChange={(e) => handleCMFChange(record.id, 'color', e.target.value)} />
-      ),
-    },
-    { title: '色号', width: 110,
-      render: (_: any, record: ProjectBOMItem) => (
-        <Input size="small" value={cmfEdits[record.id]?.color_code || ''} placeholder="Pantone等"
-          onChange={(e) => handleCMFChange(record.id, 'color_code', e.target.value)} />
-      ),
-    },
-    { title: '表面处理', width: 140,
-      render: (_: any, record: ProjectBOMItem) => (
-        <Input size="small" value={cmfEdits[record.id]?.surface_treatment || ''} placeholder="阳极氧化等"
-          onChange={(e) => handleCMFChange(record.id, 'surface_treatment', e.target.value)} />
-      ),
-    },
-  ];
-
-  const overrideColumns = [
-    { title: '操作类型', dataIndex: 'action', width: 90,
-      render: (v: string) => (
-        <Tag color={v === 'replace' ? 'orange' : v === 'add' ? 'green' : 'red'}>
-          {v === 'replace' ? '替换' : v === 'add' ? '新增' : '移除'}
-        </Tag>
-      ),
-    },
-    { title: '基础件', dataIndex: ['base_item', 'name'], width: 140, render: (v: string) => v || '-' },
-    { title: '替代件名称', dataIndex: 'override_name', width: 140, render: (v: string) => v || '-' },
-    { title: '规格', dataIndex: 'override_specification', width: 150, ellipsis: true },
-    { title: '数量', dataIndex: 'override_quantity', width: 70, align: 'right' as const },
-    { title: '备注', dataIndex: 'notes', width: 120, ellipsis: true },
-    { title: '操作', width: 60, align: 'center' as const,
-      render: (_: any, record: SKUBOMOverride) => (
-        <Popconfirm title="确认删除？" onConfirm={() => deleteOverrideMutation.mutate(record.id)}>
-          <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
-      ),
-    },
-  ];
-
+  // ========== SKU List View ==========
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-        <Button size="small" onClick={() => setSelectedSKU(null)}>&lt; 返回</Button>
-        <Text strong style={{ fontSize: 15 }}>{selectedSKU.name}</Text>
-        {selectedSKU.code && <Tag>{selectedSKU.code}</Tag>}
-        <Tag color={selectedSKU.status === 'active' ? 'green' : 'default'}>{selectedSKU.status === 'active' ? '启用' : '停用'}</Tag>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+        <Text strong style={{ fontSize: 15 }}>配色方案 / SKU</Text>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+          新建SKU
+        </Button>
       </div>
 
-      <Tabs activeKey={subTab} onChange={(k) => setSubTab(k as 'cmf' | 'overrides')} items={[
-        {
-          key: 'cmf',
-          label: 'CMF配色',
-          children: (
-            <div>
-              {bomItems.length === 0 ? (
-                <Empty description="该项目暂无结构BOM，请先创建SBOM" />
-              ) : (
-                <>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-                    <Button type="primary" size="small" onClick={handleSaveCMF} loading={saveCMFMutation.isPending}>
-                      保存CMF配置
-                    </Button>
-                  </div>
-                  <Table
-                    columns={cmfColumns}
-                    dataSource={bomItems}
-                    rowKey="id"
-                    size="small"
-                    pagination={false}
-                    scroll={{ x: 900 }}
-                  />
-                </>
-              )}
-            </div>
-          ),
-        },
-        {
-          key: 'overrides',
-          label: 'BOM差异',
-          children: (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-                <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => setOverrideModalOpen(true)}>
-                  添加差异
-                </Button>
+      {isLoading ? <Spin /> : skus.length === 0 ? (
+        <Empty description={'暂无SKU，点击"新建SKU"开始'} />
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+          {skus.map(sku => (
+            <Card
+              key={sku.id}
+              size="small"
+              hoverable
+              onClick={() => setSelectedSKU(sku)}
+              styles={{ body: { padding: '12px 16px' } }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <Text strong>{sku.name}</Text>
+                  {sku.code && <Tag style={{ marginLeft: 8 }}>{sku.code}</Tag>}
+                </div>
+                <Tag color={sku.status === 'active' ? 'green' : 'default'}>{sku.status === 'active' ? '启用' : '停用'}</Tag>
               </div>
-              <Table
-                columns={overrideColumns}
-                dataSource={bomOverrides}
-                rowKey="id"
-                size="small"
-                pagination={false}
-                scroll={{ x: 800 }}
-                locale={{ emptyText: <Empty description="无BOM差异，与基础BOM相同" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-              />
+              {sku.description && <Text type="secondary" style={{ fontSize: 12, marginTop: 4, display: 'block' }}>{sku.description}</Text>}
+              <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
+                <Popconfirm title="确认删除此SKU？" onConfirm={(e) => { e?.stopPropagation(); deleteMutation.mutate(sku.id); }}>
+                  <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
+                </Popconfirm>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
 
-              {/* Add Override Modal */}
-              <Modal
-                title="添加BOM差异"
-                open={overrideModalOpen}
-                onCancel={() => { setOverrideModalOpen(false); overrideForm.resetFields(); }}
-                onOk={() => overrideForm.submit()}
-                confirmLoading={addOverrideMutation.isPending}
-              >
-                <Form form={overrideForm} layout="vertical" onFinish={(values) => {
-                  addOverrideMutation.mutate(values);
-                  setOverrideModalOpen(false);
-                  overrideForm.resetFields();
-                }}>
-                  <Form.Item name="action" label="操作类型" rules={[{ required: true }]}>
-                    <Select options={[
-                      { value: 'replace', label: '替换 - 用其他件替换基础件' },
-                      { value: 'add', label: '新增 - 该SKU额外需要的件' },
-                      { value: 'remove', label: '移除 - 该SKU不需要的基础件' },
-                    ]} />
-                  </Form.Item>
-                  <Form.Item name="base_item_id" label="基础件（替换/移除时选择）">
-                    <Select allowClear placeholder="选择基础BOM中的零件" options={
-                      bomItems.map((item: ProjectBOMItem) => ({ value: item.id, label: `${item.item_number}. ${item.name}` }))
-                    } />
-                  </Form.Item>
-                  <Form.Item name="override_name" label="替代件/新增件名称">
-                    <Input placeholder="零件名称" />
-                  </Form.Item>
-                  <Form.Item name="override_specification" label="规格描述">
-                    <Input placeholder="规格" />
-                  </Form.Item>
-                  <Form.Item name="override_quantity" label="数量" initialValue={1}>
-                    <InputNumber min={0} style={{ width: '100%' }} />
-                  </Form.Item>
-                  <Form.Item name="notes" label="备注">
-                    <Input.TextArea rows={2} />
-                  </Form.Item>
-                </Form>
-              </Modal>
+      {/* Create SKU Modal */}
+      <Modal
+        title="新建SKU"
+        open={createOpen}
+        onCancel={() => { setCreateOpen(false); form.resetFields(); }}
+        onOk={() => form.submit()}
+        confirmLoading={createMutation.isPending}
+        width={700}
+      >
+        <Form form={form} layout="vertical" onFinish={handleCreateSubmit}>
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入SKU名称' }]}>
+            <Input placeholder="如：星空黑、冰川白" />
+          </Form.Item>
+        </Form>
+
+        {/* 非外观件列表 */}
+        {nonAppearanceItems.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <Text strong style={{ fontSize: 13, marginBottom: 8, display: 'block' }}>非外观件（通用零件）</Text>
+            <div style={{ maxHeight: 200, overflow: 'auto', border: '1px solid #f0f0f0', borderRadius: 6, padding: 8 }}>
+              {nonAppearanceItems.map((item: ProjectBOMItem) => (
+                <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+                  <Checkbox
+                    checked={checkedNonAppearance.has(item.id)}
+                    onChange={(e) => {
+                      const next = new Set(checkedNonAppearance);
+                      if (e.target.checked) next.add(item.id); else next.delete(item.id);
+                      setCheckedNonAppearance(next);
+                    }}
+                  />
+                  <Text style={{ fontSize: 13 }}>#{item.item_number} {item.name}</Text>
+                  {item.material_type && <Tag style={{ fontSize: 11 }}>{item.material_type}</Tag>}
+                </div>
+              ))}
             </div>
-          ),
-        },
-      ]} />
+          </div>
+        )}
+
+        {/* 外观件 + CMF变体选择 */}
+        {appearanceParts.length > 0 && (
+          <div>
+            <Text strong style={{ fontSize: 13, marginBottom: 8, display: 'block' }}>外观件（选择CMF方案）</Text>
+            <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: 8 }}>
+              {appearanceParts.map((part) => {
+                const item = part.bom_item;
+                const variants = part.cmf_variants || [];
+                return (
+                  <div key={item.id} style={{ marginBottom: 12 }}>
+                    <Text strong style={{ fontSize: 13 }}>#{item.item_number} {item.name}</Text>
+                    {item.material_type && <Tag style={{ fontSize: 11, marginLeft: 6 }}>{item.material_type}</Tag>}
+                    {variants.length === 0 ? (
+                      <div style={{ padding: '4px 0', color: '#999', fontSize: 12 }}>暂无CMF方案</div>
+                    ) : (
+                      <Radio.Group
+                        value={selectedVariants[item.id] || ''}
+                        onChange={(e) => setSelectedVariants(prev => ({ ...prev, [item.id]: e.target.value }))}
+                        style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}
+                      >
+                        {variants.map((v: CMFVariant) => (
+                          <Radio key={v.id} value={v.id} style={{ fontSize: 12 }}>
+                            <Space size={6}>
+                              <Tag color="processing" style={{ margin: 0, fontSize: 11 }}>V{v.variant_index}</Tag>
+                              {v.material_code && <Text style={{ fontSize: 11, color: '#8c8c8c' }}>{v.material_code}</Text>}
+                              <ColorSwatch hex={v.color_hex} />
+                              {v.finish && <Text style={{ fontSize: 11 }}>{v.finish}</Text>}
+                              {v.texture && <Text style={{ fontSize: 11 }}>{v.texture}</Text>}
+                            </Space>
+                          </Radio>
+                        ))}
+                      </Radio.Group>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };
@@ -2992,7 +2713,7 @@ const ProjectDetail: React.FC = () => {
             {
               key: 'cmf',
               label: 'CMF配色',
-              children: <CMFPanel projectId={project.id} />,
+              children: <CMFVariantEditor projectId={project.id} mode="view" />,
             },
             {
               key: 'documents',

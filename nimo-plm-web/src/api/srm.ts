@@ -82,6 +82,8 @@ export interface PRItem {
   material_name: string;
   specification: string;
   category: string;
+  source_bom_type?: string;
+  material_group?: string;
   quantity: number;
   unit: string;
   status: string;

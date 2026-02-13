@@ -11,12 +11,13 @@ import (
 )
 
 type SKUService struct {
-	skuRepo *repository.SKURepository
-	bomRepo *repository.ProjectBOMRepository
+	skuRepo     *repository.SKURepository
+	bomRepo     *repository.ProjectBOMRepository
+	variantRepo *repository.CMFVariantRepository
 }
 
-func NewSKUService(skuRepo *repository.SKURepository, bomRepo *repository.ProjectBOMRepository) *SKUService {
-	return &SKUService{skuRepo: skuRepo, bomRepo: bomRepo}
+func NewSKUService(skuRepo *repository.SKURepository, bomRepo *repository.ProjectBOMRepository, variantRepo *repository.CMFVariantRepository) *SKUService {
+	return &SKUService{skuRepo: skuRepo, bomRepo: bomRepo, variantRepo: variantRepo}
 }
 
 // ========== SKU CRUD ==========
@@ -45,6 +46,12 @@ func (s *SKUService) CreateSKU(ctx context.Context, projectID string, input *Cre
 	if err := s.skuRepo.Create(ctx, sku); err != nil {
 		return nil, fmt.Errorf("创建SKU失败: %w", err)
 	}
+
+	// 如果传入了BOM items，一步保存
+	if len(input.BOMItems) > 0 {
+		s.BatchSaveBOMItems(ctx, sku.ID, input.BOMItems)
+	}
+
 	return sku, nil
 }
 
@@ -108,69 +115,53 @@ func (s *SKUService) BatchSaveCMFConfigs(ctx context.Context, skuID string, inpu
 	return s.skuRepo.ListCMFConfigs(ctx, skuID)
 }
 
-// ========== BOM Override ==========
+// ========== SKU BOM Items（从SBOM勾选零件） ==========
 
-func (s *SKUService) GetBOMOverrides(ctx context.Context, skuID string) ([]entity.SKUBOMOverride, error) {
-	return s.skuRepo.ListBOMOverrides(ctx, skuID)
+func (s *SKUService) GetBOMItems(ctx context.Context, skuID string) ([]entity.SKUBOMItem, error) {
+	return s.skuRepo.ListBOMItems(ctx, skuID)
 }
 
-func (s *SKUService) CreateBOMOverride(ctx context.Context, skuID string, input *BOMOverrideInput) (*entity.SKUBOMOverride, error) {
-	override := &entity.SKUBOMOverride{
-		ID:                    uuid.New().String()[:32],
-		SKUID:                 skuID,
-		Action:                input.Action,
-		BaseItemID:            input.BaseItemID,
-		OverrideName:          input.OverrideName,
-		OverrideSpecification: input.OverrideSpecification,
-		OverrideQuantity:      input.OverrideQuantity,
-		OverrideUnit:          input.OverrideUnit,
-		OverrideMaterialType:  input.OverrideMaterialType,
-		OverrideProcessType:   input.OverrideProcessType,
-		Notes:                 input.Notes,
-		CreatedAt:             time.Now(),
-		UpdatedAt:             time.Now(),
+// BatchSaveBOMItems 批量保存SKU勾选的BOM零件（传入bom_item_id列表）
+func (s *SKUService) BatchSaveBOMItems(ctx context.Context, skuID string, inputs []SKUBOMItemInput) ([]entity.SKUBOMItem, error) {
+	items := make([]entity.SKUBOMItem, len(inputs))
+	now := time.Now()
+	for i, inp := range inputs {
+		item := entity.SKUBOMItem{
+			ID:        uuid.New().String()[:32],
+			SKUID:     skuID,
+			BOMItemID: inp.BOMItemID,
+			Quantity:  inp.Quantity,
+			Notes:     inp.Notes,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if inp.CMFVariantID != "" {
+			vid := inp.CMFVariantID
+			item.CMFVariantID = &vid
+		}
+		items[i] = item
 	}
-	if err := s.skuRepo.CreateBOMOverride(ctx, override); err != nil {
-		return nil, fmt.Errorf("创建BOM差异失败: %w", err)
+	if err := s.skuRepo.BatchSaveBOMItems(ctx, skuID, items); err != nil {
+		return nil, fmt.Errorf("保存SKU BOM勾选失败: %w", err)
 	}
-	return override, nil
+	return s.skuRepo.ListBOMItems(ctx, skuID)
 }
 
-func (s *SKUService) UpdateBOMOverride(ctx context.Context, id string, input *BOMOverrideInput) (*entity.SKUBOMOverride, error) {
-	override, err := s.skuRepo.FindBOMOverrideByID(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("BOM差异不存在: %w", err)
-	}
-	override.Action = input.Action
-	override.BaseItemID = input.BaseItemID
-	override.OverrideName = input.OverrideName
-	override.OverrideSpecification = input.OverrideSpecification
-	override.OverrideQuantity = input.OverrideQuantity
-	override.OverrideUnit = input.OverrideUnit
-	override.OverrideMaterialType = input.OverrideMaterialType
-	override.OverrideProcessType = input.OverrideProcessType
-	override.Notes = input.Notes
-	override.UpdatedAt = time.Now()
-	if err := s.skuRepo.UpdateBOMOverride(ctx, override); err != nil {
-		return nil, fmt.Errorf("更新BOM差异失败: %w", err)
-	}
-	return override, nil
-}
-
-func (s *SKUService) DeleteBOMOverride(ctx context.Context, id string) error {
-	return s.skuRepo.DeleteBOMOverride(ctx, id)
-}
-
-// ========== Full BOM (base + overrides merged) ==========
+// ========== Full BOM (SBOM中该SKU勾选的零件 + CMF) ==========
 
 func (s *SKUService) GetFullBOM(ctx context.Context, skuID string, projectID string) ([]map[string]interface{}, error) {
-	// Get the SKU
 	sku, err := s.skuRepo.FindByID(ctx, skuID)
 	if err != nil {
 		return nil, fmt.Errorf("SKU不存在: %w", err)
 	}
 
-	// Get the SBOM for the project
+	// Build selected BOM item IDs
+	selectedIDs := make(map[string]entity.SKUBOMItem)
+	for _, item := range sku.BOMItems {
+		selectedIDs[item.BOMItemID] = item
+	}
+
+	// Get the SBOM
 	boms, err := s.bomRepo.ListByProject(ctx, projectID, "SBOM", "")
 	if err != nil {
 		return nil, fmt.Errorf("获取SBOM失败: %w", err)
@@ -179,36 +170,9 @@ func (s *SKUService) GetFullBOM(ctx context.Context, skuID string, projectID str
 		return []map[string]interface{}{}, nil
 	}
 
-	// Get the latest SBOM
 	bom, err := s.bomRepo.FindByID(ctx, boms[0].ID)
 	if err != nil {
 		return nil, fmt.Errorf("获取SBOM详情失败: %w", err)
-	}
-
-	// Build base item map
-	baseItems := make(map[string]entity.ProjectBOMItem)
-	for _, item := range bom.Items {
-		baseItems[item.ID] = item
-	}
-
-	// Apply overrides
-	removedIDs := make(map[string]bool)
-	replacedIDs := make(map[string]entity.SKUBOMOverride)
-	var addedItems []entity.SKUBOMOverride
-
-	for _, o := range sku.BOMOverrides {
-		switch o.Action {
-		case "remove":
-			if o.BaseItemID != nil {
-				removedIDs[*o.BaseItemID] = true
-			}
-		case "replace":
-			if o.BaseItemID != nil {
-				replacedIDs[*o.BaseItemID] = o
-			}
-		case "add":
-			addedItems = append(addedItems, o)
-		}
 	}
 
 	// Build CMF map
@@ -217,57 +181,50 @@ func (s *SKUService) GetFullBOM(ctx context.Context, skuID string, projectID str
 		cmfMap[c.BOMItemID] = c
 	}
 
+	// Filter: only items selected by this SKU
 	var result []map[string]interface{}
 	for _, item := range bom.Items {
-		if removedIDs[item.ID] {
+		skuItem, selected := selectedIDs[item.ID]
+		if !selected {
 			continue
 		}
-		entry := map[string]interface{}{
-			"id":            item.ID,
-			"item_number":   item.ItemNumber,
-			"name":          item.Name,
-			"specification": item.Specification,
-			"quantity":      item.Quantity,
-			"unit":          item.Unit,
-			"category":      item.Category,
-			"material_type": item.MaterialType,
-			"process_type":  item.ProcessType,
-			"source":        "base",
+
+		qty := item.Quantity
+		if skuItem.Quantity > 0 {
+			qty = skuItem.Quantity
 		}
 
-		// Apply CMF
-		if cmf, ok := cmfMap[item.ID]; ok {
+		entry := map[string]interface{}{
+			"id":                item.ID,
+			"item_number":       item.ItemNumber,
+			"name":              item.Name,
+			"specification":     item.Specification,
+			"quantity":          qty,
+			"unit":              item.Unit,
+			"category":          item.Category,
+			"material_type":     item.MaterialType,
+			"process_type":      item.ProcessType,
+			"is_appearance_part": item.IsAppearancePart,
+		}
+
+		// 如果关联了CMF变体，查询完整CMF数据
+		if skuItem.CMFVariantID != nil && *skuItem.CMFVariantID != "" {
+			entry["cmf_variant_id"] = *skuItem.CMFVariantID
+			if variant, err := s.variantRepo.FindByID(ctx, *skuItem.CMFVariantID); err == nil {
+				entry["cmf_variant"] = variant
+				entry["color_hex"] = variant.ColorHex
+				entry["material_code"] = variant.MaterialCode
+				entry["finish"] = variant.Finish
+				entry["texture"] = variant.Texture
+				entry["coating"] = variant.Coating
+			}
+		} else if cmf, ok := cmfMap[item.ID]; ok {
 			entry["color"] = cmf.Color
 			entry["color_code"] = cmf.ColorCode
 			entry["surface_treatment"] = cmf.SurfaceTreatment
 		}
 
-		// Apply replacement
-		if repl, ok := replacedIDs[item.ID]; ok {
-			entry["name"] = repl.OverrideName
-			entry["specification"] = repl.OverrideSpecification
-			entry["quantity"] = repl.OverrideQuantity
-			entry["unit"] = repl.OverrideUnit
-			entry["material_type"] = repl.OverrideMaterialType
-			entry["process_type"] = repl.OverrideProcessType
-			entry["source"] = "replaced"
-		}
-
 		result = append(result, entry)
-	}
-
-	// Add new items
-	for _, added := range addedItems {
-		result = append(result, map[string]interface{}{
-			"id":            added.ID,
-			"name":          added.OverrideName,
-			"specification": added.OverrideSpecification,
-			"quantity":      added.OverrideQuantity,
-			"unit":          added.OverrideUnit,
-			"material_type": added.OverrideMaterialType,
-			"process_type":  added.OverrideProcessType,
-			"source":        "added",
-		})
 	}
 
 	return result, nil
@@ -276,10 +233,11 @@ func (s *SKUService) GetFullBOM(ctx context.Context, skuID string, projectID str
 // ========== Input DTOs ==========
 
 type CreateSKUInput struct {
-	Name        string `json:"name" binding:"required"`
-	Code        string `json:"code"`
-	Description string `json:"description"`
-	SortOrder   int    `json:"sort_order"`
+	Name        string            `json:"name" binding:"required"`
+	Code        string            `json:"code"`
+	Description string            `json:"description"`
+	SortOrder   int               `json:"sort_order"`
+	BOMItems    []SKUBOMItemInput `json:"bom_items"`
 }
 
 type UpdateSKUInput struct {
@@ -299,14 +257,9 @@ type CMFConfigInput struct {
 	Notes            string `json:"notes"`
 }
 
-type BOMOverrideInput struct {
-	Action                string  `json:"action" binding:"required"`
-	BaseItemID            *string `json:"base_item_id"`
-	OverrideName          string  `json:"override_name"`
-	OverrideSpecification string  `json:"override_specification"`
-	OverrideQuantity      float64 `json:"override_quantity"`
-	OverrideUnit          string  `json:"override_unit"`
-	OverrideMaterialType  string  `json:"override_material_type"`
-	OverrideProcessType   string  `json:"override_process_type"`
-	Notes                 string  `json:"notes"`
+type SKUBOMItemInput struct {
+	BOMItemID    string  `json:"bom_item_id" binding:"required"`
+	CMFVariantID string  `json:"cmf_variant_id"`
+	Quantity     float64 `json:"quantity"` // 0=使用SBOM默认数量
+	Notes        string  `json:"notes"`
 }

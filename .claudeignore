@@ -1,0 +1,31 @@
+# Node modules (445MB!)
+node_modules/
+nimo-plm-web/node_modules/
+
+# Build artifacts
+bin/
+web/plm/
+nimo-plm-web/dist/
+
+# Old/deprecated directories (not active code)
+nimo-plm/
+nimo-erp-plm/
+nimo-prd/
+
+# Large binary files
+uploads/
+*.log
+*.jsonl
+
+# Go module cache (544MB)
+go/pkg/mod/
+
+# Git
+.git/
+
+# STP thumbnail env
+stp-thumbnail/__pycache__/
+micromamba/
+
+# Claude Code own data
+.claude-code-reports/

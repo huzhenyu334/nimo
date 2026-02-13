@@ -80,7 +80,7 @@ func (r *ProjectBOMRepository) CreateItem(ctx context.Context, item *entity.Proj
 // FindItemByID 根据ID查找BOM行项
 func (r *ProjectBOMRepository) FindItemByID(ctx context.Context, id string) (*entity.ProjectBOMItem, error) {
 	var item entity.ProjectBOMItem
-	err := r.db.WithContext(ctx).First(&item, "id = ?", id).Error
+	err := r.db.WithContext(ctx).Preload("Material").First(&item, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -90,6 +90,11 @@ func (r *ProjectBOMRepository) FindItemByID(ctx context.Context, id string) (*en
 // UpdateItem 更新BOM行项
 func (r *ProjectBOMRepository) UpdateItem(ctx context.Context, item *entity.ProjectBOMItem) error {
 	return r.db.WithContext(ctx).Save(item).Error
+}
+
+// UpdateItemField 更新BOM行项的单个字段
+func (r *ProjectBOMRepository) UpdateItemField(ctx context.Context, itemID string, field string, value interface{}) error {
+	return r.db.WithContext(ctx).Model(&entity.ProjectBOMItem{}).Where("id = ?", itemID).Update(field, value).Error
 }
 
 // DeleteItem 删除BOM行项
@@ -107,6 +112,31 @@ func (r *ProjectBOMRepository) CountItems(ctx context.Context, bomID string) (in
 	var count int64
 	err := r.db.WithContext(ctx).Model(&entity.ProjectBOMItem{}).Where("bom_id = ?", bomID).Count(&count).Error
 	return count, err
+}
+
+// GetMaxItemNumber 获取BOM的最大item_number
+func (r *ProjectBOMRepository) GetMaxItemNumber(ctx context.Context, bomID string) (int, error) {
+	var maxNum *int
+	err := r.db.WithContext(ctx).Model(&entity.ProjectBOMItem{}).Where("bom_id = ?", bomID).Select("MAX(item_number)").Scan(&maxNum).Error
+	if err != nil {
+		return 0, err
+	}
+	if maxNum == nil {
+		return 0, nil
+	}
+	return *maxNum, nil
+}
+
+// FindDerivedItemByVariant 查找CMF变体对应的衍生零件
+func (r *ProjectBOMRepository) FindDerivedItemByVariant(ctx context.Context, parentItemID, variantID string) (*entity.ProjectBOMItem, error) {
+	var item entity.ProjectBOMItem
+	err := r.db.WithContext(ctx).
+		Where("parent_item_id = ? AND notes LIKE ?", parentItemID, "%cmf_variant_id:"+variantID+"%").
+		First(&item).Error
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
 }
 
 // BatchCreateItems 批量创建BOM行项

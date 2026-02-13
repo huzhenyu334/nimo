@@ -40,6 +40,10 @@ type Repositories struct {
 	SKU             *SKURepository
 	// V15 图纸版本管理
 	PartDrawing     *PartDrawingRepository
+	// V16 CMF变体
+	CMFVariant      *CMFVariantRepository
+	// V17 语言变体
+	LangVariant     *LangVariantRepository
 }
 
 // NewRepositories 创建仓库集合
@@ -72,5 +76,9 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		SKU:             NewSKURepository(db),
 		// V15 图纸版本管理
 		PartDrawing:     NewPartDrawingRepository(db),
+		// V16 CMF变体
+		CMFVariant:      NewCMFVariantRepository(db),
+		// V17 语言变体
+		LangVariant:     NewLangVariantRepository(db),
 	}
 }

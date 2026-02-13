@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/bitfantasy/nimo/internal/plm/repository"
 	"github.com/bitfantasy/nimo/internal/shared/engine"
 	"github.com/bitfantasy/nimo/internal/shared/feishu"
+	srmsvc "github.com/bitfantasy/nimo/internal/srm/service"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -23,12 +25,14 @@ type RoleAssignment struct {
 
 // WorkflowService 工作流服务 —— 连接状态机引擎和飞书集成
 type WorkflowService struct {
-	db             *gorm.DB
-	engine         *engine.Engine
-	feishuClient   *feishu.FeishuClient
-	projectRepo    *repository.ProjectRepository
-	taskRepo       *repository.TaskRepository
-	routingService *RoutingService
+	db                  *gorm.DB
+	engine              *engine.Engine
+	feishuClient        *feishu.FeishuClient
+	projectRepo         *repository.ProjectRepository
+	taskRepo            *repository.TaskRepository
+	routingService      *RoutingService
+	taskFormRepo        *repository.TaskFormRepository
+	srmProcurementSvc   *srmsvc.ProcurementService
 }
 
 // NewWorkflowService 创建工作流服务
@@ -45,6 +49,16 @@ func NewWorkflowService(db *gorm.DB, eng *engine.Engine, fc *feishu.FeishuClient
 // SetRoutingService 注入路由服务
 func (s *WorkflowService) SetRoutingService(rs *RoutingService) {
 	s.routingService = rs
+}
+
+// SetTaskFormRepo 注入任务表单仓库
+func (s *WorkflowService) SetTaskFormRepo(repo *repository.TaskFormRepository) {
+	s.taskFormRepo = repo
+}
+
+// SetSRMProcurementService 注入SRM采购服务
+func (s *WorkflowService) SetSRMProcurementService(svc *srmsvc.ProcurementService) {
+	s.srmProcurementSvc = svc
 }
 
 // AssignTask 指派任务
@@ -136,6 +150,9 @@ func (s *WorkflowService) StartTask(ctx context.Context, projectID, taskID, oper
 
 	// 记录操作日志
 	s.logAction(ctx, projectID, taskID, entity.TaskActionStart, entity.TaskStatusPending, entity.TaskStatusInProgress, operatorID, nil, "")
+
+	// Hook: 检测 procurement_control 字段，自动创建采购需求
+	go s.handleProcurementControl(context.Background(), task, operatorID)
 
 	return nil
 }
@@ -509,7 +526,239 @@ func (s *WorkflowService) checkAndStartDependentTasks(ctx context.Context, proje
 				"completed_dep_task": completedTaskID,
 			}, "依赖任务完成，自动启动")
 			log.Printf("[WorkflowService] 自动启动任务 task=%s (依赖任务 %s 完成)", task.ID, completedTaskID)
+
+			// Hook: 自动启动时也触发采购控件
+			go s.handleProcurementControl(context.Background(), &task, "system")
 		}
+	}
+}
+
+// =============================================================================
+// 采购控件处理
+// =============================================================================
+
+// TriggerProcurementControl 公开方法：按需触发采购控件数据拉取
+func (s *WorkflowService) TriggerProcurementControl(ctx context.Context, taskID string) {
+	if s.taskFormRepo == nil || s.srmProcurementSvc == nil {
+		return
+	}
+	task, err := s.taskRepo.FindByID(ctx, taskID)
+	if err != nil || task == nil {
+		return
+	}
+	s.handleProcurementControl(ctx, task, "system")
+}
+
+// handleProcurementControl 处理采购控件：从源任务提取物料清单，创建SRM采购需求
+func (s *WorkflowService) handleProcurementControl(ctx context.Context, task *entity.Task, operatorID string) {
+	if s.taskFormRepo == nil || s.srmProcurementSvc == nil {
+		return
+	}
+
+	// 1. 获取当前任务的表单定义
+	formDef, err := s.taskFormRepo.FindByTaskID(ctx, task.ID)
+	if err != nil || formDef == nil {
+		return
+	}
+
+	// 2. 解析字段定义，找到 procurement_control 类型的字段
+	type formFieldDef struct {
+		Key             string   `json:"key"`
+		Type            string   `json:"type"`
+		SourceTaskCode  string   `json:"source_task_code"`
+		SourceFieldKeys []string `json:"source_field_keys"`
+	}
+	var fields []formFieldDef
+	if err := json.Unmarshal(formDef.Fields, &fields); err != nil {
+		log.Printf("[WorkflowService] 解析表单字段失败: %v", err)
+		return
+	}
+
+	for _, field := range fields {
+		if field.Type != "procurement_control" || field.SourceTaskCode == "" || len(field.SourceFieldKeys) == 0 {
+			continue
+		}
+
+		// 3. 通过 source_task_code 找到源任务
+		var sourceTask entity.Task
+		if err := s.db.WithContext(ctx).
+			Where("project_id = ? AND code = ?", task.ProjectID, field.SourceTaskCode).
+			First(&sourceTask).Error; err != nil {
+			log.Printf("[WorkflowService] 找不到源任务 (project=%s code=%s): %v", task.ProjectID, field.SourceTaskCode, err)
+			s.saveProcurementResult(ctx, task, formDef, field.Key, nil, fmt.Sprintf("找不到源任务: %s", field.SourceTaskCode))
+			continue
+		}
+
+		// 4. 获取源任务的表单提交
+		submission, err := s.taskFormRepo.FindLatestSubmission(ctx, sourceTask.ID)
+		if err != nil || submission == nil {
+			log.Printf("[WorkflowService] 源任务无提交数据 (task=%s): %v", sourceTask.ID, err)
+			s.saveProcurementResult(ctx, task, formDef, field.Key, nil, "源任务无提交数据")
+			continue
+		}
+
+		// 5. 获取源任务的表单定义（用于读取字段label）
+		sourceFormDef, _ := s.taskFormRepo.FindByTaskID(ctx, sourceTask.ID)
+		var sourceFields []formFieldDef
+		if sourceFormDef != nil {
+			json.Unmarshal(sourceFormDef.Fields, &sourceFields)
+		}
+		sourceFieldLabelMap := map[string]string{}
+		sourceFieldTypeMap := map[string]string{}
+		for _, sf := range sourceFields {
+			sourceFieldLabelMap[sf.Key] = sf.Key // default to key
+			sourceFieldTypeMap[sf.Key] = sf.Type
+		}
+		// also try to get label from full field definitions
+		type fullFieldDef struct {
+			Key   string `json:"key"`
+			Label string `json:"label"`
+			Type  string `json:"type"`
+		}
+		var fullFields []fullFieldDef
+		if sourceFormDef != nil {
+			json.Unmarshal(sourceFormDef.Fields, &fullFields)
+		}
+		for _, ff := range fullFields {
+			if ff.Label != "" {
+				sourceFieldLabelMap[ff.Key] = ff.Label
+			}
+			if ff.Type != "" {
+				sourceFieldTypeMap[ff.Key] = ff.Type
+			}
+		}
+
+		// 6. 从 submission.data 按 source_field_keys 提取物料列表
+		submData := map[string]interface{}(submission.Data)
+		var prItems []srmsvc.CreatePRItem
+		var sources []map[string]interface{}
+
+		for _, fk := range field.SourceFieldKeys {
+			raw, ok := submData[fk]
+			if !ok {
+				continue
+			}
+			rawMap, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			itemsRaw, ok := rawMap["items"]
+			if !ok {
+				continue
+			}
+			itemsList, ok := itemsRaw.([]interface{})
+			if !ok {
+				continue
+			}
+
+			fieldType := sourceFieldTypeMap[fk]
+			for _, itemRaw := range itemsList {
+				item, ok := itemRaw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				name, _ := item["name"].(string)
+				spec, _ := item["specification"].(string)
+				unit, _ := item["unit"].(string)
+				qty := 0.0
+				if q, ok := item["quantity"].(float64); ok {
+					qty = q
+				}
+
+				notes := ""
+				switch fieldType {
+				case "tooling_list":
+					notes = "治具"
+				case "consumable_list":
+					notes = "辅料"
+				}
+
+				if name != "" && qty > 0 {
+					prItems = append(prItems, srmsvc.CreatePRItem{
+						MaterialName:  name,
+						Specification: spec,
+						Quantity:      qty,
+						Unit:          unit,
+						Notes:         notes,
+					})
+				}
+			}
+
+			sources = append(sources, map[string]interface{}{
+				"task_code":   field.SourceTaskCode,
+				"field_key":   fk,
+				"field_label": sourceFieldLabelMap[fk],
+				"item_count":  len(itemsList),
+			})
+		}
+
+		if len(prItems) == 0 {
+			log.Printf("[WorkflowService] 无可采购物料 (task=%s)", task.ID)
+			s.saveProcurementResult(ctx, task, formDef, field.Key, sources, "无可采购物料")
+			continue
+		}
+
+		// 7. 调用 SRM CreatePR
+		projectID := task.ProjectID
+		pr, err := s.srmProcurementSvc.CreatePR(ctx, operatorID, &srmsvc.CreatePRRequest{
+			Title:     "采购需求 - " + task.Title,
+			Type:      "npi_procurement",
+			ProjectID: &projectID,
+			Items:     prItems,
+		})
+		if err != nil {
+			log.Printf("[WorkflowService] 创建PR失败 (task=%s): %v", task.ID, err)
+			s.saveProcurementResult(ctx, task, formDef, field.Key, sources, fmt.Sprintf("创建PR失败: %v", err))
+			continue
+		}
+
+		// 8. 保存结果到当前任务的 form submission
+		resultData := map[string]interface{}{
+			"sources":   sources,
+			"pr_id":     pr.ID,
+			"pr_code":   pr.PRCode,
+			"pr_status": "created",
+			"error":     nil,
+		}
+		s.saveProcurementSubmission(ctx, task, formDef, field.Key, resultData)
+		log.Printf("[WorkflowService] 采购控件创建PR成功 task=%s pr=%s", task.ID, pr.PRCode)
+	}
+}
+
+// saveProcurementResult 保存采购控件的错误或空结果
+func (s *WorkflowService) saveProcurementResult(ctx context.Context, task *entity.Task, formDef *entity.TaskForm, fieldKey string, sources []map[string]interface{}, errMsg string) {
+	resultData := map[string]interface{}{
+		"sources":   sources,
+		"pr_id":     nil,
+		"pr_code":   nil,
+		"pr_status": nil,
+		"error":     errMsg,
+	}
+	s.saveProcurementSubmission(ctx, task, formDef, fieldKey, resultData)
+}
+
+// saveProcurementSubmission 保存采购控件数据到表单提交
+func (s *WorkflowService) saveProcurementSubmission(ctx context.Context, task *entity.Task, formDef *entity.TaskForm, fieldKey string, data map[string]interface{}) {
+	// 先查已有提交
+	existing, _ := s.taskFormRepo.FindLatestSubmission(ctx, task.ID)
+	if existing != nil {
+		// 合并到已有提交的data中
+		existingData := map[string]interface{}(existing.Data)
+		existingData[fieldKey] = data
+		existing.Data = entity.JSONB(existingData)
+		s.db.WithContext(ctx).Save(existing)
+	} else {
+		// 创建新提交
+		submission := &entity.TaskFormSubmission{
+			ID:          uuid.New().String()[:32],
+			FormID:      formDef.ID,
+			TaskID:      task.ID,
+			Data:        entity.JSONB{fieldKey: data},
+			SubmittedBy: "system",
+			SubmittedAt: time.Now(),
+			Version:     0,
+		}
+		s.taskFormRepo.CreateSubmission(ctx, submission)
 	}
 }
 

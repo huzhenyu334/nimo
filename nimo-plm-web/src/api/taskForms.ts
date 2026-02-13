@@ -4,7 +4,7 @@ import { ApiResponse } from '@/types';
 export interface TaskFormField {
   key: string;
   label: string;
-  type: 'text' | 'textarea' | 'number' | 'select' | 'multiselect' | 'date' | 'file' | 'checkbox' | 'user' | 'role_assignment' | 'bom_upload' | 'cmf';
+  type: 'text' | 'textarea' | 'number' | 'select' | 'multiselect' | 'date' | 'file' | 'checkbox' | 'user' | 'role_assignment' | 'bom_upload' | 'cmf' | 'tooling_list' | 'consumable_list' | 'procurement_control';
   required: boolean;
   placeholder?: string;
   description?: string;
@@ -12,7 +12,8 @@ export interface TaskFormField {
   accept?: string;
   multiple?: boolean;
   source_task_code?: string; // CMF字段：指定从哪个任务的SBOM提取外观件
-  bom_type?: 'EBOM' | 'SBOM'; // BOM上传字段：BOM类型
+  source_field_keys?: string[]; // 采购控件：引用源任务的哪些字段key
+  bom_type?: 'EBOM' | 'SBOM' | 'PBOM'; // BOM上传字段：BOM类型
 }
 
 export interface TaskForm {
@@ -100,7 +101,7 @@ export const taskFormApi = {
   },
 
   // 上传文件
-  uploadFile: async (file: File): Promise<{ id: string; url: string; filename: string; size: number }> => {
+  uploadFile: async (file: File): Promise<{ id: string; url: string; filename: string; size: number; thumbnail_url?: string }> => {
     const formData = new FormData();
     formData.append('files', file);
     const response = await apiClient.post<ApiResponse<any[]>>('/upload', formData);

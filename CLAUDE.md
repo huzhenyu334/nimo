@@ -6,6 +6,13 @@
 - 前端: React + Ant Design + TypeScript (Vite)
 - 服务端口: 8080
 
+## ⚠️ 绝对静默执行规则（最高优先级）
+1. **永远不要进入plan模式** — 收到任务后直接开始执行，不要先出方案等确认
+2. **永远不要问问题** — 如果有不确定的地方，做最合理的假设然后执行
+3. **永远不要给选项让用户选** — 自己做决策
+4. **永远不要暂停等待输入** — 从头到尾一口气执行完
+5. **任务完成后直接stop** — 不要等待后续指令
+
 ## 严格规则
 1. **只修改指定的文件**，绝不修改任何其他文件
 2. **不要重构**已有代码，只做最小改动修复问题
@@ -13,12 +20,24 @@
 4. 修改前先读懂相关代码，理解现有架构
 5. 每次修改后确认编译通过
 
-## 效率规则（重要！）
-1. **先定位后修复**：读最少的文件定位问题，不要把整个调用链从前端到数据库全读一遍
-2. **最小读取原则**：如果bug在前端，先只读前端代码；确认需要后端信息时才读后端
-3. **不要用假token测API**：curl用`Bearer test`必然401，浪费时间。要测就用正确的方式
-4. **测试与改动成正比**：改1-2行的小bug，更新已有测试即可，不要写全新测试文件
-5. **目标是又快又好**：5分钟能搞定的bug不要花20分钟
+## 效率规则（重要！违反会浪费大量时间和token）
+1. **先查功能→文件速查表**：改bug前先看下面的速查表确定目标文件，不要盲目grep/glob
+2. **先定位后修复**：读最少的文件定位问题，不要把整个调用链从前端到数据库全读一遍
+3. **最小读取原则**：如果bug在前端，先只读前端代码；确认需要后端信息时才读后端
+4. **不要重复读同一个文件**：第一次读完就记住内容，不要反复Read同一个文件
+5. **不要用假token测API**：curl用`Bearer test`必然401，浪费时间。要测就用正确的方式
+6. **测试与改动成正比**：改1-2行的小bug，更新已有测试即可，不要写全新测试文件
+7. **目标是又快又好**：5分钟能搞定的bug不要花20分钟
+8. **大文件用行号范围读取**：超过500行的文件，用offset+limit只读需要的部分
+
+## 前端改动必须写UI测试（强制规则）
+每次修改或新增前端功能，必须同时在 e2e/ 目录下新增或更新对应的Playwright UI测试：
+1. **新功能** → 写新的 .spec.ts 文件，用浏览器打开页面验证UI元素存在、可交互
+2. **改bug** → 在现有测试中追加回归断言，确保bug不复现
+3. **改布局/样式** → 添加布局断言（元素可见、位置正确、不超出视口）
+4. 测试必须通过真正的浏览器渲染（不是纯API测试）
+5. 使用已有的测试登录helper（storageState）
+6. 改完代码后先跑 `npx playwright test` 全量测试，全部通过才能部署
 
 ## 部署步骤（修完代码后执行）
 ```bash
@@ -60,6 +79,32 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/
 | 来料检验 | pages/srm/Inspections.tsx | api/srm.ts | srm/handler/inspection_handler.go | srm/service/inspection_service.go |
 | 询价(RFQ) | - | api/srm.ts | srm/handler/rfq_handler.go | srm/service/rfq_service.go |
 | SRM项目 | pages/srm/Projects.tsx | api/srm.ts | srm/handler/project_handler.go | srm/service/project_service.go |
+
+### 项目详情页组件（pages/ProjectDetail/ 目录）
+| 组件 | 文件 | 行数范围 | 用途 |
+|------|------|---------|------|
+| ProjectDetail | ProjectDetail.tsx | 主组件 | Tab切换路由 |
+| OverviewTab | OverviewTab.tsx | - | 项目概览 |
+| GanttChart | GanttChart.tsx | - | 甘特图 |
+| BOMTab | BOMTab.tsx | - | BOM管理(EBOM/SBOM) |
+| SKUTab | SKUTab.tsx | - | SKU配色管理 |
+| DocumentsTab | DocumentsTab.tsx | - | 文档管理 |
+| DeliverablesTab | DeliverablesTab.tsx | - | 交付物管理 |
+| ECNTab | ECNTab.tsx | - | ECN变更管理 |
+| RoleAssignmentTab | RoleAssignmentTab.tsx | - | 角色分配 |
+| TaskActions | TaskActions.tsx | - | 任务操作(确认/驳回) |
+| FormSubmissionDisplay | FormSubmissionDisplay.tsx | - | 表单提交显示 |
+| MaterialSearchModal | MaterialSearchModal.tsx | - | 物料搜索弹窗 |
+| PhaseProgressBar | PhaseProgressBar.tsx | - | 阶段进度条 |
+
+### SKU相关
+| 文件 | 用途 |
+|------|------|
+| api/sku.ts | SKU API调用 |
+| handler/sku_handler.go | SKU HTTP处理 |
+| service/sku_service.go | SKU业务逻辑 |
+| repository/sku_repository.go | SKU数据访问 |
+| entity/sku.go | SKU实体(ProductSKU/SKUCMFConfig/SKUBOMItem) |
 
 ### 前端通用
 | 文件 | 用途 |

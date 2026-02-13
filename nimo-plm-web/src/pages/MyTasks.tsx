@@ -41,6 +41,11 @@ import { userApi, User } from '@/api/users';
 import { workflowApi } from '@/api/workflow';
 import { taskRoleApi, TaskRole } from '@/constants/roles';
 import BOMEditableTable, { type BOMItemRecord } from '@/components/BOMEditableTable';
+import EBOMEditableTable from '@/components/EBOMEditableTable';
+import PBOMEditableTable from '@/components/PBOMEditableTable';
+import CMFEditControl from '@/components/CMFEditControl';
+import { ToolingListControl, ConsumableListControl } from '@/components/ItemListControl';
+import ProcurementControl from '@/components/ProcurementControl';
 
 const { Text, Title } = Typography;
 
@@ -155,7 +160,7 @@ const RoleAssignmentField: React.FC<{
 const BOMUploadField: React.FC<{
   value?: { filename: string; items: BOMItemRecord[]; item_count: number };
   onChange?: (value: { filename: string; items: BOMItemRecord[]; item_count: number } | undefined) => void;
-  bomType?: 'EBOM' | 'SBOM';
+  bomType?: 'EBOM' | 'SBOM' | 'PBOM';
   onSaveDraft?: () => void;
 }> = ({ value, onChange, bomType = 'EBOM', onSaveDraft }) => {
   const [parsing, setParsing] = useState(false);
@@ -208,56 +213,34 @@ const BOMUploadField: React.FC<{
         </Space>
       </div>
       {error && <Alert message={error} type="error" showIcon style={{ marginBottom: 8 }} closable onClose={() => setError(null)} />}
-      <BOMEditableTable
-        bomType={bomType}
-        items={items}
-        onChange={(newItems) => emitChange(newItems)}
-      />
+      {bomType === 'EBOM' ? (
+        <EBOMEditableTable
+          items={items}
+          onChange={(newItems) => emitChange(newItems)}
+          mode="edit"
+        />
+      ) : bomType === 'PBOM' ? (
+        <PBOMEditableTable
+          items={items}
+          onChange={(newItems) => emitChange(newItems)}
+          mode="edit"
+        />
+      ) : (
+        <BOMEditableTable
+          bomType={bomType}
+          items={items}
+          onChange={(newItems) => emitChange(newItems)}
+        />
+      )}
     </div>
   );
 };
 
-// ========== BOM Data Display (read-only) ==========
+// ========== BOM Data Display (read-only, reuses BOMEditableTable) ==========
 
-const BOMDataDisplay: React.FC<{ data: { filename: string; items: BOMItemRecord[]; item_count: number }; bomType?: 'EBOM' | 'SBOM' }> = ({ data, bomType = 'EBOM' }) => {
+const BOMDataDisplay: React.FC<{ data: { filename: string; items: BOMItemRecord[]; item_count: number }; bomType?: 'EBOM' | 'SBOM' | 'PBOM' }> = ({ data, bomType = 'EBOM' }) => {
   const [expanded, setExpanded] = useState(false);
-
-  const categoryStats = useMemo(() => {
-    if (!data?.items?.length) return [];
-    const map: Record<string, number> = {};
-    for (const item of data.items) {
-      const cat = item.category || '未分类';
-      map[cat] = (map[cat] || 0) + 1;
-    }
-    return Object.entries(map).sort((a, b) => b[1] - a[1]);
-  }, [data?.items]);
-
-  const ebomColumns = [
-    { title: '序号', dataIndex: 'item_number', width: 50, align: 'center' as const },
-    { title: '位号', dataIndex: 'reference', width: 80, ellipsis: true },
-    { title: '名称', dataIndex: 'name', width: 100, ellipsis: true },
-    { title: '规格', dataIndex: 'specification', width: 120, ellipsis: true },
-    { title: '数量', dataIndex: 'quantity', width: 50, align: 'center' as const },
-    { title: '单位', dataIndex: 'unit', width: 45, align: 'center' as const },
-    { title: '类别', dataIndex: 'category', width: 70, ellipsis: true },
-    { title: '制造商', dataIndex: 'manufacturer', width: 90, ellipsis: true },
-  ];
-
-  const sbomColumns = [
-    { title: '序号', dataIndex: 'item_number', width: 50, align: 'center' as const },
-    { title: '名称', dataIndex: 'name', width: 100, ellipsis: true },
-    { title: '规格', dataIndex: 'specification', width: 120, ellipsis: true },
-    { title: '数量', dataIndex: 'quantity', width: 50, align: 'center' as const },
-    { title: '单位', dataIndex: 'unit', width: 45, align: 'center' as const },
-    { title: '材质', dataIndex: 'material_type', width: 80, ellipsis: true },
-    { title: '工艺类型', dataIndex: 'process_type', width: 80, ellipsis: true },
-    { title: '图纸编号', dataIndex: 'drawing_no', width: 90, ellipsis: true },
-    { title: '重量(g)', dataIndex: 'weight_grams', width: 70, align: 'right' as const },
-    { title: '目标价', dataIndex: 'target_price', width: 80, align: 'right' as const,
-      render: (v: number) => v != null ? `¥${Number(v).toFixed(2)}` : '-' },
-  ];
-
-  const columns = bomType === 'SBOM' ? sbomColumns : ebomColumns;
+  const bomLabel = bomType === 'SBOM' ? '结构BOM' : bomType === 'PBOM' ? '包装BOM' : '电子BOM';
 
   return (
     <div>
@@ -265,28 +248,34 @@ const BOMDataDisplay: React.FC<{ data: { filename: string; items: BOMItemRecord[
         <FileExcelOutlined style={{ color: '#52c41a' }} />
         <span style={{ fontSize: 13 }}>{data.filename}</span>
         <Tag color="blue">{data.item_count} 项物料</Tag>
-        <Tag>{bomType === 'SBOM' ? '结构BOM' : '电子BOM'}</Tag>
+        <Tag>{bomLabel}</Tag>
         <Button type="link" size="small" onClick={() => setExpanded(!expanded)} style={{ padding: 0 }}>
           {expanded ? '收起' : '展开明细'}
         </Button>
       </Space>
       {expanded && (
         <div style={{ marginTop: 8 }}>
-          {categoryStats.length > 0 && (
-            <div style={{ marginBottom: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-              {categoryStats.map(([cat, count]) => (
-                <Tag key={cat} style={{ fontSize: 11 }}>{cat}: {count}</Tag>
-              ))}
-            </div>
+          {bomType === 'EBOM' ? (
+            <EBOMEditableTable
+              items={data.items || []}
+              onChange={() => {}}
+              mode="view"
+            />
+          ) : bomType === 'PBOM' ? (
+            <PBOMEditableTable
+              items={data.items || []}
+              onChange={() => {}}
+              mode="view"
+            />
+          ) : (
+            <BOMEditableTable
+              bomType={bomType}
+              items={data.items || []}
+              onChange={() => {}}
+              showAddDelete={false}
+              readonly
+            />
           )}
-          <Table
-            columns={columns}
-            dataSource={data.items}
-            rowKey="item_number"
-            size="small"
-            pagination={data.items.length > 10 ? { pageSize: 10, size: 'small' } : false}
-            scroll={{ x: bomType === 'SBOM' ? 800 : 600 }}
-          />
         </div>
       )}
     </div>
@@ -336,6 +325,31 @@ const FormDataDisplay: React.FC<{ projectId: string; taskId: string }> = ({ proj
             return (
               <Descriptions.Item key={field.key} label={field.label}>
                 <BOMDataDisplay data={value} bomType={field.bom_type || 'EBOM'} />
+              </Descriptions.Item>
+            );
+          }
+          // cmf: render CMF control in readonly mode
+          if (field.type === 'cmf') {
+            return (
+              <Descriptions.Item key={field.key} label={field.label}>
+                <CMFEditControl projectId={projectId} taskId={taskId} readonly />
+              </Descriptions.Item>
+            );
+          }
+          // tooling_list / consumable_list: readonly table
+          if ((field.type === 'tooling_list' || field.type === 'consumable_list') && value && typeof value === 'object' && value.items) {
+            const ListControl = field.type === 'tooling_list' ? ToolingListControl : ConsumableListControl;
+            return (
+              <Descriptions.Item key={field.key} label={field.label}>
+                <ListControl value={value} readonly />
+              </Descriptions.Item>
+            );
+          }
+          // procurement_control: readonly PR info
+          if (field.type === 'procurement_control' && value && typeof value === 'object') {
+            return (
+              <Descriptions.Item key={field.key} label={field.label}>
+                <ProcurementControl value={value} />
               </Descriptions.Item>
             );
           }
@@ -399,10 +413,27 @@ const TaskDetailView: React.FC<{
     Promise.all([
       taskFormApi.getForm(task.project_id, task.id),
       task.status === 'in_progress' ? taskFormApi.getDraft(task.id) : Promise.resolve(null),
-    ]).then(([f, draft]) => {
+    ]).then(async ([f, draft]) => {
       setTaskForm(f);
       if (draft?.data && f?.fields?.length) {
         form.setFieldsValue(draft.data);
+      }
+      // For procurement_control fields, fetch submission data (triggers lazy-load on backend)
+      if (f?.fields?.some((fd: any) => fd.type === 'procurement_control')) {
+        try {
+          const sub = await taskFormApi.getSubmission(task.project_id, task.id);
+          if (sub?.data) {
+            const procFields: Record<string, any> = {};
+            for (const fd of f.fields) {
+              if (fd.type === 'procurement_control' && sub.data[fd.key]) {
+                procFields[fd.key] = sub.data[fd.key];
+              }
+            }
+            if (Object.keys(procFields).length > 0) {
+              form.setFieldsValue(procFields);
+            }
+          }
+        } catch { /* ignore */ }
       }
     }).catch(() => setTaskForm(null))
       .finally(() => setFormLoading(false));
@@ -546,6 +577,10 @@ const TaskDetailView: React.FC<{
       );
       case 'role_assignment': return <RoleAssignmentField allUsers={allUsers} projectId={task.project_id} />;
       case 'bom_upload': return <BOMUploadField bomType={field.bom_type || 'EBOM'} onSaveDraft={saveDraftDebounced} />;
+      case 'cmf': return <CMFEditControl projectId={task.project_id} taskId={task.id} />;
+      case 'tooling_list': return <ToolingListControl onSaveDraft={saveDraftDebounced} />;
+      case 'consumable_list': return <ConsumableListControl onSaveDraft={saveDraftDebounced} />;
+      case 'procurement_control': return <ProcurementControl value={form.getFieldValue(field.key)} />;
       default: return <Input placeholder={field.placeholder} />;
     }
   };

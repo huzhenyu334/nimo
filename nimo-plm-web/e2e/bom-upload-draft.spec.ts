@@ -72,6 +72,35 @@ test.describe('BOM Upload & Draft Save', () => {
     expect(body.data[0].filename).toBe('test.step');
   });
 
+  // ========== STP Thumbnail Tests ==========
+
+  test('upload STP file returns thumbnail_url if service running', async ({ request }) => {
+    const token = getAuthToken();
+    const response = await request.post('/api/v1/upload', {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        files: {
+          name: 'part.stp',
+          mimeType: 'application/octet-stream',
+          buffer: Buffer.from('fake stp content'),
+        },
+      },
+    });
+
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+    expect(body.code).toBe(0);
+    expect(body.data.length).toBe(1);
+
+    const file = body.data[0];
+    expect(file.filename).toBe('part.stp');
+    // thumbnail_url is conditional on stp-thumbnail service running
+    if (file.thumbnail_url) {
+      expect(file.thumbnail_url).toContain('/uploads/thumbnails/');
+      expect(file.thumbnail_url).toContain('.svg');
+    }
+  });
+
   // ========== Draft Save API Tests ==========
 
   test('draft save API requires auth', async ({ request }) => {
@@ -110,10 +139,8 @@ test.describe('BOM Upload & Draft Save', () => {
 
   test('MyTasks page loads with task table', async ({ page }) => {
     await page.goto('/my-tasks');
-    await page.waitForLoadState('networkidle');
-
-    // Should show the page heading
-    await expect(page.getByRole('heading', { name: '我的任务' })).toBeVisible();
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page.getByRole('heading', { name: '我的任务' })).toBeVisible({ timeout: 10000 });
 
     // Should show filter buttons
     await expect(page.getByRole('button', { name: '全部任务' })).toBeVisible();
@@ -122,7 +149,8 @@ test.describe('BOM Upload & Draft Save', () => {
 
   test('MyTasks filter buttons work', async ({ page }) => {
     await page.goto('/my-tasks');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page.getByRole('button', { name: '全部任务' })).toBeVisible({ timeout: 10000 });
 
     // Click "进行中" filter
     await page.getByRole('button', { name: '进行中' }).click();
@@ -139,10 +167,10 @@ test.describe('BOM Upload & Draft Save', () => {
 
   test('MyTasks task table has correct columns', async ({ page }) => {
     await page.goto('/my-tasks');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Check that the task table has the expected column headers
-    await expect(page.getByRole('columnheader', { name: '任务标题' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: '任务标题' })).toBeVisible({ timeout: 10000 });
     await expect(page.getByRole('columnheader', { name: '负责人' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: '剩余天数' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: '创建人' })).toBeVisible();
@@ -150,7 +178,8 @@ test.describe('BOM Upload & Draft Save', () => {
 
   test('clicking task row opens detail view', async ({ page }) => {
     await page.goto('/my-tasks');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page.getByRole('heading', { name: '我的任务' })).toBeVisible({ timeout: 10000 });
 
     // If there are tasks, click the first row
     const firstRow = page.locator('table tbody tr').first();

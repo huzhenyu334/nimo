@@ -80,7 +80,7 @@ func (s *ProcurementService) GetPR(ctx context.Context, id string) (*entity.Purc
 // CreatePRRequest 创建PR请求
 type CreatePRRequest struct {
 	Title        string         `json:"title" binding:"required"`
-	Type         string         `json:"type" binding:"required"`
+	Type         string         `json:"type"`
 	Priority     string         `json:"priority"`
 	ProjectID    *string        `json:"project_id"`
 	Phase        string         `json:"phase"`
@@ -114,7 +114,7 @@ func (s *ProcurementService) CreatePR(ctx context.Context, userID string, req *C
 		Title:        req.Title,
 		Type:         req.Type,
 		Priority:     req.Priority,
-		Status:       entity.PRStatusDraft,
+		Status:       entity.PRStatusSourcing,
 		ProjectID:    req.ProjectID,
 		Phase:        req.Phase,
 		RequiredDate: req.RequiredDate,
@@ -153,7 +153,7 @@ func (s *ProcurementService) CreatePR(ctx context.Context, userID string, req *C
 		return nil, err
 	}
 
-	s.logActivity(ctx, "pr", pr.ID, pr.PRCode, "create", "", entity.PRStatusDraft,
+	s.logActivity(ctx, "pr", pr.ID, pr.PRCode, "create", "", entity.PRStatusSourcing,
 		fmt.Sprintf("创建采购需求: %s", pr.Title), userID)
 
 	return pr, nil
@@ -240,16 +240,23 @@ func (s *ProcurementService) CreatePRFromBOM(ctx context.Context, projectID, bom
 		return nil, fmt.Errorf("生成PR编码失败: %w", err)
 	}
 
+	// Look up PLM project phase (EVT/DVT/PVT/MP)
+	projectPhase := phase
+	var plmProject plmentity.Project
+	if err := s.db.WithContext(ctx).Select("current_phase").Where("id = ?", projectID).First(&plmProject).Error; err == nil && plmProject.Phase != "" {
+		projectPhase = plmProject.Phase
+	}
+
 	pr := &entity.PurchaseRequest{
 		ID:          uuid.New().String()[:32],
 		PRCode:      code,
 		Title:       fmt.Sprintf("BOM自动生成采购需求 - %s", phase),
 		Type:        entity.PRTypeSample,
 		Priority:    "normal",
-		Status:      entity.PRStatusDraft,
+		Status:      entity.PRStatusSourcing,
 		ProjectID:   &projectID,
 		BOMID:       &bomID,
-		Phase:       phase,
+		Phase:       projectPhase,
 		RequestedBy: userID,
 	}
 
@@ -337,16 +344,21 @@ func (s *ProcurementService) AutoCreatePRFromBOM(ctx context.Context, projectID,
 
 	// 7. 创建PR，标题格式: {project_name} - {bom_name} 打样采购
 	title := fmt.Sprintf("%s - %s 打样采购", project.Name, bom.Name)
+	// Use project phase (EVT/DVT/PVT/MP), not BOM type
+	prPhase := project.Phase
+	if prPhase == "" {
+		prPhase = bom.BOMType
+	}
 	pr := &entity.PurchaseRequest{
 		ID:          uuid.New().String()[:32],
 		PRCode:      code,
 		Title:       title,
 		Type:        entity.PRTypeSample,
 		Priority:    "normal",
-		Status:      entity.PRStatusPending,
+		Status:      entity.PRStatusSourcing,
 		ProjectID:   &projectID,
 		BOMID:       &bomID,
-		Phase:       bom.BOMType,
+		Phase:       prPhase,
 		RequestedBy: userID,
 	}
 

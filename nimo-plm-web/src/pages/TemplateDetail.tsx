@@ -981,6 +981,9 @@ const TemplateDetail: React.FC = () => {
     { value: 'role_assignment', label: '角色分配' },
     { value: 'bom_upload', label: 'BOM上传' },
     { value: 'cmf', label: 'CMF配色' },
+    { value: 'tooling_list', label: '治具清单' },
+    { value: 'consumable_list', label: '组装辅料' },
+    { value: 'procurement_control', label: '采购控件' },
   ];
 
   const openFormConfig = (task: TaskRow) => {
@@ -1820,6 +1823,7 @@ const TemplateDetail: React.FC = () => {
                       options={[
                         { value: 'EBOM', label: '电子BOM (EBOM)' },
                         { value: 'SBOM', label: '结构BOM (SBOM)' },
+                        { value: 'PBOM', label: '包装BOM (PBOM)' },
                       ]}
                     />
                     <div style={{ marginTop: 4, padding: '4px 8px', background: '#e6f7ff', borderRadius: 4 }}>
@@ -1846,6 +1850,46 @@ const TemplateDetail: React.FC = () => {
                     />
                     <div style={{ marginTop: 4, padding: '4px 8px', background: '#f6ffed', borderRadius: 4 }}>
                       <Text type="secondary" style={{ fontSize: 11 }}>CMF配色控件将从所选任务的SBOM中提取外观件，自动生成配色表</Text>
+                    </div>
+                  </div>
+                )}
+                {field.type === 'procurement_control' && (
+                  <div style={{ marginTop: 8 }}>
+                    <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>引用来源任务</Text>
+                    <Select
+                      size="small"
+                      style={{ width: '100%' }}
+                      placeholder="选择含有可采购字段的前置任务"
+                      value={field.source_task_code || undefined}
+                      onChange={(val) => {
+                        updateFormField(idx, { source_task_code: val, source_field_keys: [] });
+                      }}
+                      allowClear
+                      options={tasks
+                        .filter((t) => {
+                          const fs = templateForms[t.task_code] || [];
+                          return fs.some((f) => ['tooling_list', 'consumable_list', 'bom_upload'].includes(f.type));
+                        })
+                        .map((t) => ({ value: t.task_code, label: `${t.name} (${t.task_code})` }))}
+                    />
+                    {field.source_task_code && (
+                      <div style={{ marginTop: 4 }}>
+                        <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>选择要采购的字段</Text>
+                        <Select
+                          size="small"
+                          mode="multiple"
+                          style={{ width: '100%' }}
+                          placeholder="选择字段"
+                          value={field.source_field_keys || []}
+                          onChange={(val) => updateFormField(idx, { source_field_keys: val })}
+                          options={(templateForms[field.source_task_code] || [])
+                            .filter((f) => ['tooling_list', 'consumable_list', 'bom_upload'].includes(f.type))
+                            .map((f) => ({ value: f.key, label: `${f.label} (${f.type})` }))}
+                        />
+                      </div>
+                    )}
+                    <div style={{ marginTop: 4, padding: '4px 8px', background: '#fff7e6', borderRadius: 4 }}>
+                      <Text type="secondary" style={{ fontSize: 11 }}>任务启动时自动从来源任务提取物料清单，创建SRM采购需求（PR）</Text>
                     </div>
                   </div>
                 )}

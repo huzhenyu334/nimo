@@ -124,8 +124,7 @@ const (
 
 // ValidPRItemTransitions 合法的PR行项状态流转
 var ValidPRItemTransitions = map[string][]string{
-	PRItemStatusPending:    {PRItemStatusSourcing, PRItemStatusSampling},
-	PRItemStatusSampling:   {PRItemStatusQuoting},
+	PRItemStatusPending:    {PRItemStatusQuoting, PRItemStatusSourcing},
 	PRItemStatusQuoting:    {PRItemStatusSourcing},
 	PRItemStatusSourcing:   {PRItemStatusOrdered},
 	PRItemStatusOrdered:    {PRItemStatusShipped},

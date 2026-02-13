@@ -16,20 +16,20 @@ type ProductSKU struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 
 	// Relations
-	Project      *Project          `json:"project,omitempty" gorm:"foreignKey:ProjectID"`
-	CMFConfigs   []SKUCMFConfig    `json:"cmf_configs,omitempty" gorm:"foreignKey:SKUID"`
-	BOMOverrides []SKUBOMOverride  `json:"bom_overrides,omitempty" gorm:"foreignKey:SKUID"`
+	Project    *Project       `json:"project,omitempty" gorm:"foreignKey:ProjectID"`
+	CMFConfigs []SKUCMFConfig `json:"cmf_configs,omitempty" gorm:"foreignKey:SKUID"`
+	BOMItems   []SKUBOMItem   `json:"bom_items,omitempty" gorm:"foreignKey:SKUID"`
 }
 
 func (ProductSKU) TableName() string {
 	return "product_skus"
 }
 
-// SKUCMFConfig SKU × SBOM Item → CMF配置
+// SKUCMFConfig SKU × SBOM Item → CMF配置（颜色/表面处理）
 type SKUCMFConfig struct {
 	ID               string    `json:"id" gorm:"primaryKey;size:32"`
-	SKUID            string    `json:"sku_id" gorm:"size:32;not null;index"`
-	BOMItemID        string    `json:"bom_item_id" gorm:"size:32;not null"`
+	SKUID            string    `json:"sku_id" gorm:"column:sku_id;size:32;not null;index"`
+	BOMItemID        string    `json:"bom_item_id" gorm:"column:bom_item_id;size:32;not null"`
 	Color            string    `json:"color" gorm:"size:64"`
 	ColorCode        string    `json:"color_code" gorm:"size:32"`
 	SurfaceTreatment string    `json:"surface_treatment" gorm:"size:128"`
@@ -46,26 +46,22 @@ func (SKUCMFConfig) TableName() string {
 	return "sku_cmf_configs"
 }
 
-// SKUBOMOverride SKU结构差异
-type SKUBOMOverride struct {
-	ID                    string    `json:"id" gorm:"primaryKey;size:32"`
-	SKUID                 string    `json:"sku_id" gorm:"size:32;not null;index"`
-	Action                string    `json:"action" gorm:"size:16;not null"`
-	BaseItemID            *string   `json:"base_item_id,omitempty" gorm:"size:32"`
-	OverrideName          string    `json:"override_name,omitempty" gorm:"size:128"`
-	OverrideSpecification string    `json:"override_specification,omitempty"`
-	OverrideQuantity      float64   `json:"override_quantity" gorm:"type:numeric(15,4);default:1"`
-	OverrideUnit          string    `json:"override_unit,omitempty" gorm:"size:16;default:pcs"`
-	OverrideMaterialType  string    `json:"override_material_type,omitempty" gorm:"size:64"`
-	OverrideProcessType   string    `json:"override_process_type,omitempty" gorm:"size:32"`
-	Notes                 string    `json:"notes,omitempty"`
-	CreatedAt             time.Time `json:"created_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+// SKUBOMItem SKU与SBOM零件的关联（从SBOM全量中勾选该SKU使用的零件）
+type SKUBOMItem struct {
+	ID           string  `json:"id" gorm:"primaryKey;size:32"`
+	SKUID        string  `json:"sku_id" gorm:"column:sku_id;size:32;not null;index"`
+	BOMItemID    string  `json:"bom_item_id" gorm:"column:bom_item_id;size:32;not null;index"`
+	CMFVariantID *string `json:"cmf_variant_id,omitempty" gorm:"size:32"`
+	Quantity     float64 `json:"quantity" gorm:"type:numeric(15,4);default:0"` // 0表示使用SBOM默认数量
+	Notes        string  `json:"notes,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 
-	SKU      *ProductSKU     `json:"sku,omitempty" gorm:"foreignKey:SKUID"`
-	BaseItem *ProjectBOMItem `json:"base_item,omitempty" gorm:"foreignKey:BaseItemID"`
+	SKU        *ProductSKU        `json:"sku,omitempty" gorm:"foreignKey:SKUID"`
+	BOMItem    *ProjectBOMItem    `json:"bom_item,omitempty" gorm:"foreignKey:BOMItemID"`
+	CMFVariant *BOMItemCMFVariant `json:"cmf_variant,omitempty" gorm:"foreignKey:CMFVariantID"`
 }
 
-func (SKUBOMOverride) TableName() string {
-	return "sku_bom_overrides"
+func (SKUBOMItem) TableName() string {
+	return "sku_bom_items"
 }
