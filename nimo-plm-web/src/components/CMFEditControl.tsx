@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  Collapse,
   Input,
   Select,
   Button,
@@ -23,7 +22,6 @@ import {
   BgColorsOutlined,
   SaveOutlined,
   CloseOutlined,
-  EditOutlined,
   UploadOutlined,
   PaperClipOutlined,
   ArrowLeftOutlined,
@@ -36,18 +34,12 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 
 const { Text } = Typography;
 
-// ========== Option Constants (与CMFVariantEditor统一) ==========
+// ========== Option Constants ==========
 
 const GLOSS_OPTIONS = ['高光', '半哑', '哑光', '丝光', '镜面'];
-
-const FINISH_OPTIONS = [
-  '阳极氧化', '喷涂', '电镀', 'PVD', 'IMD', 'UV转印', '丝印', '激光雷雕', '水转印',
-];
-
+const FINISH_OPTIONS = ['阳极氧化', '喷涂', '电镀', 'PVD', 'IMD', 'UV转印', '丝印', '激光雷雕', '水转印'];
 const TEXTURE_OPTIONS = ['光面', '磨砂', '皮纹', '拉丝', '碳纤维纹', '木纹'];
-
 const COATING_OPTIONS = ['UV漆', 'PU漆', '粉末涂装', '电泳', '无'];
-
 const DRAWING_TYPE_OPTIONS = ['丝印', '移印', 'UV转印', '激光雕刻', '水转印', '热转印', '烫金', '其他'];
 
 interface DrawingFile {
@@ -70,17 +62,6 @@ interface CMFEditControlProps {
   readonly?: boolean;
 }
 
-// ========== 属性行组件（只读时使用） ==========
-const PropItem: React.FC<{ label: string; value?: string; suffix?: React.ReactNode }> = ({ label, value, suffix }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-    <Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>{label}</Text>
-    <Text style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-      {value || '-'}
-    </Text>
-    {suffix}
-  </div>
-);
-
 // ========== 色块组件 ==========
 const ColorSwatch: React.FC<{ hex?: string; size?: number }> = ({ hex, size = 16 }) => {
   if (!hex) return null;
@@ -93,84 +74,107 @@ const ColorSwatch: React.FC<{ hex?: string; size?: number }> = ({ hex, size = 16
   );
 };
 
-// ========== 单个变体卡片（查看模式） ==========
-const VariantViewCard: React.FC<{ variant: CMFVariant }> = ({ variant }) => {
-  const renderImageUrl = variant.reference_image_file_id
-    ? (variant.reference_image_url || `/uploads/${variant.reference_image_file_id}/image`)
-    : undefined;
-  const viewDrawings = parseDrawings(variant.process_drawings);
+// ========== Click-to-edit cell (BOM table style) ==========
+const EditableCell: React.FC<{
+  value: any;
+  field: string;
+  type?: 'text' | 'select' | 'color';
+  options?: { label: string; value: string }[];
+  readonly?: boolean;
+  onSave: (field: string, value: any) => void;
+}> = ({ value, field, type = 'text', options, readonly, onSave }) => {
+  const [editing, setEditing] = React.useState(false);
+
+  if (readonly) {
+    if (type === 'color') {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, minHeight: 22, padding: '0 2px' }}>
+          <ColorSwatch hex={value} />
+          <span>{value || <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}</span>
+        </div>
+      );
+    }
+    return (
+      <div style={{ minHeight: 22, padding: '0 2px' }}>
+        {value ?? <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
+      </div>
+    );
+  }
+
+  if (editing) {
+    if (type === 'color') {
+      return (
+        <ColorPicker
+          showText
+          format="hex"
+          size="small"
+          defaultValue={value || undefined}
+          onChangeComplete={(c) => {
+            onSave(field, c.toHexString());
+            setEditing(false);
+          }}
+          onOpenChange={(open) => { if (!open) setEditing(false); }}
+          open
+        />
+      );
+    }
+    if (type === 'select' && options) {
+      return (
+        <Select
+          size="small"
+          autoFocus
+          defaultValue={value || undefined}
+          defaultOpen
+          style={{ width: '100%' }}
+          options={options}
+          allowClear
+          onChange={(v) => { onSave(field, v || ''); setEditing(false); }}
+          onBlur={() => setEditing(false)}
+        />
+      );
+    }
+    return (
+      <Input
+        size="small"
+        autoFocus
+        defaultValue={value || ''}
+        onBlur={(e) => { onSave(field, e.target.value); setEditing(false); }}
+        onPressEnter={(e) => { onSave(field, (e.target as HTMLInputElement).value); setEditing(false); }}
+      />
+    );
+  }
+
+  // Display mode
+  const displayValue = type === 'select' && options
+    ? options.find(o => o.value === value)?.label || value
+    : value;
 
   return (
-    <div style={{
-      border: '1px solid #f0f0f0',
-      borderRadius: 8,
-      padding: '12px 16px',
-      marginBottom: 8,
-      background: '#fafafa',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <Space size={6}>
-          <Tag color="processing" style={{ margin: 0, fontSize: 11 }}>V{variant.variant_index}</Tag>
-          {variant.material_code && <Text style={{ fontSize: 11, color: '#8c8c8c' }}>{variant.material_code}</Text>}
-        </Space>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px 16px' }}>
-        <PropItem label="颜色:" value={variant.color_hex} suffix={<ColorSwatch hex={variant.color_hex} />} />
-        <PropItem label="色号(Pantone):" value={variant.pantone_code} />
-        <PropItem label="光泽度:" value={variant.gloss_level} />
-        <PropItem label="表面处理:" value={variant.finish} />
-        <PropItem label="纹理:" value={variant.texture} />
-        <PropItem label="涂层类型:" value={variant.coating} />
-      </div>
-
-      {/* 渲染效果图 */}
-      <div style={{ marginTop: 6, fontSize: 12 }}>
-        <Text type="secondary">渲染效果图: </Text>
-        {renderImageUrl ? (
-          <Image src={renderImageUrl} width={60} height={45}
-            style={{ objectFit: 'cover', borderRadius: 4, marginLeft: 4 }}
-            fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNDUiPjxyZWN0IGZpbGw9IiNmNWY1ZjUiIHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiLz48L3N2Zz4=" />
-        ) : <Text style={{ fontSize: 12 }}>-</Text>}
-      </div>
-
-      {/* 工艺图纸 */}
-      <div style={{ marginTop: 4, fontSize: 12 }}>
-        <Text type="secondary">工艺图纸: </Text>
-        {variant.process_drawing_type && <Tag style={{ fontSize: 11 }}>{variant.process_drawing_type}</Tag>}
-        {viewDrawings.length > 0 ? viewDrawings.map(f => (
-          <div key={f.file_id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
-            <PaperClipOutlined style={{ color: '#1677ff', fontSize: 11 }} />
-            <a href={f.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>{f.file_name}</a>
-          </div>
-        )) : !variant.process_drawing_type && <Text style={{ fontSize: 12 }}>-</Text>}
-      </div>
-
-      {/* 备注 */}
-      <div style={{ marginTop: 4, fontSize: 12 }}>
-        <Text type="secondary">备注: </Text><Text style={{ fontSize: 12 }}>{variant.notes || '-'}</Text>
-      </div>
+    <div
+      style={{ cursor: 'pointer', minHeight: 22, padding: '0 2px', borderRadius: 2, display: 'flex', alignItems: 'center', gap: 4 }}
+      className="editable-cell"
+      onClick={() => setEditing(true)}
+    >
+      {type === 'color' && <ColorSwatch hex={value} />}
+      {displayValue ?? <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
     </div>
   );
 };
 
-// ========== 单个变体卡片（编辑模式） ==========
-const VariantEditCard: React.FC<{
+// ========== CMF Table Row ==========
+const CMFTableRow: React.FC<{
   variant: CMFVariant;
   projectId: string;
-}> = ({ variant, projectId }) => {
+  readonly: boolean;
+}> = ({ variant, projectId, readonly }) => {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
-  const [editing, setEditing] = React.useState(false);
-  const [form] = Form.useForm();
 
   const updateMutation = useMutation({
     mutationFn: (data: Partial<CMFVariant>) =>
       cmfVariantApi.updateVariant(projectId, variant.id, data),
     onSuccess: () => {
-      message.success('已保存');
       queryClient.invalidateQueries({ queryKey: ['appearance-parts', projectId] });
-      setEditing(false);
     },
     onError: (err: any) => message.error(err?.response?.data?.message || '保存失败'),
   });
@@ -178,241 +182,205 @@ const VariantEditCard: React.FC<{
   const deleteMutation = useMutation({
     mutationFn: () => cmfVariantApi.deleteVariant(projectId, variant.id),
     onSuccess: () => {
-      message.success('已删除');
       queryClient.invalidateQueries({ queryKey: ['appearance-parts', projectId] });
     },
     onError: (err: any) => message.error(err?.response?.data?.message || '删除失败'),
   });
 
-  const [renderUploading, setRenderUploading] = React.useState(false);
-  const [drawingUploading, setDrawingUploading] = React.useState(false);
-  const [renderImageId, setRenderImageId] = React.useState(variant.reference_image_file_id || '');
-  const [renderImageUrl, setRenderImageUrlState] = React.useState(variant.reference_image_url || '');
-  const [drawingType, setDrawingType] = React.useState(variant.process_drawing_type || '');
-  const [drawings, setDrawings] = React.useState<DrawingFile[]>(parseDrawings(variant.process_drawings));
-
-  const handleSave = () => {
-    form.validateFields().then(values => {
-      if (values.color_hex && typeof values.color_hex === 'object' && values.color_hex.toHexString) {
-        values.color_hex = values.color_hex.toHexString();
-      }
-      values.reference_image_file_id = renderImageId;
-      values.reference_image_url = renderImageUrl;
-      values.process_drawing_type = drawingType;
-      values.process_drawings = JSON.stringify(drawings);
-      updateMutation.mutate(values);
-    });
+  const handleSave = (field: string, value: any) => {
+    if (value === variant[field as keyof CMFVariant]) return;
+    updateMutation.mutate({ [field]: value });
   };
 
+  const renderImageUrl = variant.reference_image_file_id
+    ? (variant.reference_image_url || `/uploads/${variant.reference_image_file_id}/image`)
+    : undefined;
+  const drawings = parseDrawings(variant.process_drawings);
+
   const handleRenderUpload = async (file: File) => {
-    setRenderUploading(true);
     try {
       const result = await taskFormApi.uploadFile(file);
-      setRenderImageId(result.id);
-      setRenderImageUrlState(result.url);
+      updateMutation.mutate({
+        reference_image_file_id: result.id,
+        reference_image_url: result.url,
+      });
     } catch { message.error('上传失败'); }
-    finally { setRenderUploading(false); }
     return false;
   };
 
   const handleDrawingUpload = async (file: File) => {
-    setDrawingUploading(true);
     try {
       const result = await taskFormApi.uploadFile(file);
-      setDrawings(prev => [...prev, { file_id: result.id, file_name: result.filename || file.name, url: result.url }]);
+      const newDrawings = [...drawings, { file_id: result.id, file_name: result.filename || file.name, url: result.url }];
+      updateMutation.mutate({
+        process_drawings: JSON.stringify(newDrawings) as any,
+      });
     } catch { message.error('上传失败'); }
-    finally { setDrawingUploading(false); }
     return false;
   };
 
-  // ---- 编辑态 ----
-  if (editing) {
-    const existingRenderUrl = renderImageId ? (renderImageUrl || `/uploads/${renderImageId}/image`) : undefined;
-
-    return (
-      <div style={{
-        border: '1px solid #91caff',
-        borderRadius: 8,
-        padding: '12px 16px',
-        marginBottom: 8,
-        background: '#f0f5ff',
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <Space size={6}>
-            <Tag color="processing" style={{ margin: 0, fontSize: 11 }}>V{variant.variant_index}</Tag>
-            {variant.material_code && <Text style={{ fontSize: 11, color: '#8c8c8c' }}>{variant.material_code}</Text>}
-            <Tag color="blue" style={{ margin: 0, fontSize: 11 }}>编辑中</Tag>
-          </Space>
-          <Space size={4}>
-            <Button size="small" icon={<CloseOutlined />} onClick={() => setEditing(false)}>取消</Button>
-            <Button size="small" type="primary" icon={<SaveOutlined />}
-              onClick={handleSave} loading={updateMutation.isPending}>保存</Button>
-          </Space>
-        </div>
-
-        <Form form={form} size="small" layout="vertical"
-          initialValues={{
-            color_hex: variant.color_hex || '',
-            pantone_code: variant.pantone_code || '',
-            gloss_level: variant.gloss_level || undefined,
-            finish: variant.finish || undefined,
-            texture: variant.texture || undefined,
-            coating: variant.coating || undefined,
-            notes: variant.notes || '',
-          }}
-        >
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px 12px' }}>
-            <Form.Item label="颜色" name="color_hex" style={{ marginBottom: 8 }}>
-              <ColorPicker showText format="hex" size="small" />
-            </Form.Item>
-
-            <Form.Item label="色号(Pantone)" name="pantone_code" style={{ marginBottom: 8 }}>
-              <Input placeholder="如: Black 6C" />
-            </Form.Item>
-
-            <Form.Item label="光泽度" name="gloss_level" style={{ marginBottom: 8 }}>
-              <Select placeholder="选择光泽度" allowClear showSearch
-                options={GLOSS_OPTIONS.map(o => ({ label: o, value: o }))} />
-            </Form.Item>
-
-            <Form.Item label="表面处理" name="finish" style={{ marginBottom: 8 }}>
-              <Select placeholder="选择表面处理" allowClear showSearch
-                options={FINISH_OPTIONS.map(o => ({ label: o, value: o }))} />
-            </Form.Item>
-
-            <Form.Item label="纹理" name="texture" style={{ marginBottom: 8 }}>
-              <Select placeholder="选择纹理" allowClear showSearch
-                options={TEXTURE_OPTIONS.map(o => ({ label: o, value: o }))} />
-            </Form.Item>
-
-            <Form.Item label="涂层类型" name="coating" style={{ marginBottom: 8 }}>
-              <Select placeholder="选择涂层" allowClear showSearch
-                options={COATING_OPTIONS.map(o => ({ label: o, value: o }))} />
-            </Form.Item>
-          </div>
-
-          {/* 渲染效果图上传 */}
-          <div style={{ marginBottom: 8 }}>
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>渲染效果图</Text>
-            <Space size={8} align="start">
-              {existingRenderUrl && (
-                <div style={{ position: 'relative' }}>
-                  <Image src={existingRenderUrl} width={60} height={45}
-                    style={{ objectFit: 'cover', borderRadius: 4 }}
-                    fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNDUiPjxyZWN0IGZpbGw9IiNmNWY1ZjUiIHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiLz48L3N2Zz4=" />
-                  <DeleteOutlined
-                    style={{ position: 'absolute', top: -4, right: -4, color: '#ff4d4f', cursor: 'pointer', fontSize: 11, background: '#fff', borderRadius: '50%', padding: 2 }}
-                    onClick={() => { setRenderImageId(''); setRenderImageUrlState(''); }}
-                  />
-                </div>
-              )}
-              <Upload showUploadList={false} accept="image/*" beforeUpload={(file) => { handleRenderUpload(file); return false; }}>
-                <Button size="small" icon={<UploadOutlined />} loading={renderUploading}>上传效果图</Button>
-              </Upload>
-            </Space>
-          </div>
-
-          {/* 工艺图纸上传 */}
-          <div style={{ marginBottom: 8 }}>
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>工艺图纸</Text>
-            <Space size={8} style={{ marginBottom: 4 }}>
-              <Select size="small" value={drawingType || undefined} placeholder="图纸类型"
-                allowClear style={{ width: 120 }}
-                onChange={(v) => setDrawingType(v || '')}
-                options={DRAWING_TYPE_OPTIONS.map(o => ({ label: o, value: o }))} />
-              <Upload showUploadList={false} accept=".pdf,.dwg,.dxf,.ai,.cdr,image/*"
-                beforeUpload={(file) => { handleDrawingUpload(file); return false; }}>
-                <Button size="small" icon={<UploadOutlined />} loading={drawingUploading}>上传图纸</Button>
-              </Upload>
-            </Space>
-            {drawings.map(f => (
-              <div key={f.file_id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, marginBottom: 2 }}>
-                <PaperClipOutlined style={{ color: '#1677ff' }} />
-                <a href={f.url} target="_blank" rel="noopener noreferrer"
-                  style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {f.file_name}
-                </a>
-                <DeleteOutlined style={{ color: '#ff4d4f', cursor: 'pointer', fontSize: 11 }}
-                  onClick={() => setDrawings(prev => prev.filter(d => d.file_id !== f.file_id))} />
-              </div>
-            ))}
-          </div>
-
-          <Form.Item label="备注" name="notes" style={{ marginBottom: 0 }}>
-            <Input.TextArea rows={1} placeholder="备注信息" />
-          </Form.Item>
-        </Form>
-      </div>
-    );
-  }
-
-  // ---- 展示态 ----
-  const dispRenderUrl = variant.reference_image_file_id
-    ? (variant.reference_image_url || `/uploads/${variant.reference_image_file_id}/image`)
-    : undefined;
-  const dispDrawings = parseDrawings(variant.process_drawings);
+  const glossOpts = GLOSS_OPTIONS.map(o => ({ label: o, value: o }));
+  const finishOpts = FINISH_OPTIONS.map(o => ({ label: o, value: o }));
+  const textureOpts = TEXTURE_OPTIONS.map(o => ({ label: o, value: o }));
+  const coatingOpts = COATING_OPTIONS.map(o => ({ label: o, value: o }));
 
   return (
-    <div style={{
-      border: '1px solid #f0f0f0',
-      borderRadius: 8,
-      padding: '12px 16px',
-      marginBottom: 8,
-      background: '#fafafa',
-      transition: 'all 0.2s',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <Space size={6}>
-          <Tag color="processing" style={{ margin: 0, fontSize: 11 }}>V{variant.variant_index}</Tag>
-          {variant.material_code && <Text style={{ fontSize: 11, color: '#8c8c8c' }}>{variant.material_code}</Text>}
-        </Space>
-        <Space size={4}>
-          <Tooltip title="编辑">
-            <Button size="small" type="text" icon={<EditOutlined />} onClick={() => setEditing(true)} />
-          </Tooltip>
+    <tr style={{ borderBottom: '1px solid #f0f0f0' }}>
+      <td style={tdStyle}>
+        <Tag color="processing" style={{ margin: 0, fontSize: 11 }}>V{variant.variant_index}</Tag>
+      </td>
+      <td style={tdStyle}>
+        <EditableCell value={variant.color_hex} field="color_hex" type="color" readonly={readonly} onSave={handleSave} />
+      </td>
+      <td style={tdStyle}>
+        <EditableCell value={variant.pantone_code} field="pantone_code" readonly={readonly} onSave={handleSave} />
+      </td>
+      <td style={tdStyle}>
+        <EditableCell value={variant.gloss_level} field="gloss_level" type="select" options={glossOpts} readonly={readonly} onSave={handleSave} />
+      </td>
+      <td style={tdStyle}>
+        <EditableCell value={variant.finish} field="finish" type="select" options={finishOpts} readonly={readonly} onSave={handleSave} />
+      </td>
+      <td style={tdStyle}>
+        <EditableCell value={variant.texture} field="texture" type="select" options={textureOpts} readonly={readonly} onSave={handleSave} />
+      </td>
+      <td style={tdStyle}>
+        <EditableCell value={variant.coating} field="coating" type="select" options={coatingOpts} readonly={readonly} onSave={handleSave} />
+      </td>
+      <td style={tdStyle}>
+        {renderImageUrl ? (
+          <Image src={renderImageUrl} width={40} height={30}
+            style={{ objectFit: 'cover', borderRadius: 3 }}
+            fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iMzAiPjxyZWN0IGZpbGw9IiNmNWY1ZjUiIHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiLz48L3N2Zz4=" />
+        ) : readonly ? (
+          <Text type="secondary" style={{ fontSize: 11 }}>-</Text>
+        ) : (
+          <Upload showUploadList={false} accept="image/*" beforeUpload={(file) => { handleRenderUpload(file); return false; }}>
+            <Button size="small" type="text" icon={<UploadOutlined />} style={{ fontSize: 11, padding: '0 4px' }} />
+          </Upload>
+        )}
+      </td>
+      <td style={tdStyle}>
+        {drawings.length > 0 ? (
+          <Space size={2} direction="vertical">
+            {variant.process_drawing_type && <Tag style={{ fontSize: 10, margin: 0 }}>{variant.process_drawing_type}</Tag>}
+            {drawings.map(f => (
+              <Tooltip key={f.file_id} title={f.file_name}>
+                <a href={f.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11 }}>
+                  <PaperClipOutlined style={{ color: '#1677ff' }} />
+                </a>
+              </Tooltip>
+            ))}
+          </Space>
+        ) : readonly ? (
+          <Text type="secondary" style={{ fontSize: 11 }}>-</Text>
+        ) : (
+          <Upload showUploadList={false} accept=".pdf,.dwg,.dxf,.ai,.cdr,image/*" beforeUpload={(file) => { handleDrawingUpload(file); return false; }}>
+            <Button size="small" type="text" icon={<UploadOutlined />} style={{ fontSize: 11, padding: '0 4px' }} />
+          </Upload>
+        )}
+      </td>
+      <td style={tdStyle}>
+        <EditableCell value={variant.notes} field="notes" readonly={readonly} onSave={handleSave} />
+      </td>
+      {!readonly && (
+        <td style={{ ...tdStyle, textAlign: 'center' }}>
           <Popconfirm title="确认删除此CMF方案？" onConfirm={() => deleteMutation.mutate()}>
-            <Tooltip title="删除">
-              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-            </Tooltip>
+            <Button size="small" type="text" danger icon={<DeleteOutlined />} />
           </Popconfirm>
-        </Space>
+        </td>
+      )}
+    </tr>
+  );
+};
+
+const tdStyle: React.CSSProperties = {
+  padding: '6px 8px',
+  fontSize: 12,
+  verticalAlign: 'middle',
+};
+
+const thStyle: React.CSSProperties = {
+  padding: '6px 8px',
+  fontSize: 11,
+  fontWeight: 500,
+  color: '#8c8c8c',
+  textAlign: 'left',
+  borderBottom: '1px solid #e8e8e8',
+  background: '#fafafa',
+  whiteSpace: 'nowrap',
+};
+
+// ========== Part Section (BOM sub-category style) ==========
+const PartSection: React.FC<{
+  part: AppearancePartWithCMF;
+  projectId: string;
+  readonly: boolean;
+  onAddVariant: (itemId: string) => void;
+  addLoading: boolean;
+}> = ({ part, projectId, readonly, onAddVariant, addLoading }) => {
+  const item = part.bom_item;
+  const variants = part.cmf_variants || [];
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      {/* Section header — matches BOM sub-category style */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px',
+        background: '#fff7e6', borderRadius: '4px 4px 0 0',
+        borderBottom: '1px solid #f0f0f0',
+      }}>
+        {item.thumbnail_url && (
+          <img src={item.thumbnail_url} alt="" width={24} height={18}
+            style={{ objectFit: 'contain', borderRadius: 3, background: '#f5f5f5' }} />
+        )}
+        <Text style={{ fontSize: 13, fontWeight: 500 }}>#{item.item_number} {item.name}</Text>
+        <Tag style={{ fontSize: 11 }}>{variants.length} 方案</Tag>
+        <div style={{ flex: 1 }} />
+        {!readonly && (
+          <Button
+            type="dashed"
+            size="small"
+            icon={<PlusOutlined />}
+            onClick={() => onAddVariant(item.id)}
+            loading={addLoading}
+          >
+            添加方案
+          </Button>
+        )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px 16px' }}>
-        <PropItem label="颜色:" value={variant.color_hex} suffix={<ColorSwatch hex={variant.color_hex} />} />
-        <PropItem label="色号(Pantone):" value={variant.pantone_code} />
-        <PropItem label="光泽度:" value={variant.gloss_level} />
-        <PropItem label="表面处理:" value={variant.finish} />
-        <PropItem label="纹理:" value={variant.texture} />
-        <PropItem label="涂层类型:" value={variant.coating} />
-      </div>
-
-      {/* 渲染效果图 */}
-      <div style={{ marginTop: 6, fontSize: 12 }}>
-        <Text type="secondary">渲染效果图: </Text>
-        {dispRenderUrl ? (
-          <Image src={dispRenderUrl} width={60} height={45}
-            style={{ objectFit: 'cover', borderRadius: 4, marginLeft: 4 }}
-            fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNDUiPjxyZWN0IGZpbGw9IiNmNWY1ZjUiIHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiLz48L3N2Zz4=" />
-        ) : <Text style={{ fontSize: 12 }}>-</Text>}
-      </div>
-
-      {/* 工艺图纸 */}
-      <div style={{ marginTop: 4, fontSize: 12 }}>
-        <Text type="secondary">工艺图纸: </Text>
-        {variant.process_drawing_type && <Tag style={{ fontSize: 11 }}>{variant.process_drawing_type}</Tag>}
-        {dispDrawings.length > 0 ? dispDrawings.map(f => (
-          <div key={f.file_id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
-            <PaperClipOutlined style={{ color: '#1677ff', fontSize: 11 }} />
-            <a href={f.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>{f.file_name}</a>
-          </div>
-        )) : !variant.process_drawing_type && <Text style={{ fontSize: 12 }}>-</Text>}
-      </div>
-
-      {/* 备注 */}
-      <div style={{ marginTop: 4, fontSize: 12 }}>
-        <Text type="secondary">备注: </Text><Text style={{ fontSize: 12 }}>{variant.notes || '-'}</Text>
-      </div>
+      {/* Table */}
+      {variants.length > 0 ? (
+        <div style={{ overflowX: 'auto', border: '1px solid #f0f0f0', borderTop: 0, borderRadius: '0 0 4px 4px' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto', minWidth: 900 }}>
+            <thead>
+              <tr>
+                <th style={{ ...thStyle, width: 50 }}>版本</th>
+                <th style={{ ...thStyle, width: 100 }}>颜色</th>
+                <th style={{ ...thStyle, width: 100 }}>色号(Pantone)</th>
+                <th style={{ ...thStyle, width: 80 }}>光泽度</th>
+                <th style={{ ...thStyle, width: 90 }}>表面处理</th>
+                <th style={{ ...thStyle, width: 80 }}>纹理</th>
+                <th style={{ ...thStyle, width: 90 }}>涂层类型</th>
+                <th style={{ ...thStyle, width: 50 }}>效果图</th>
+                <th style={{ ...thStyle, width: 50 }}>图纸</th>
+                <th style={thStyle}>备注</th>
+                {!readonly && <th style={{ ...thStyle, width: 40, textAlign: 'center' }}>操作</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {variants.map(v => (
+                <CMFTableRow key={v.id} variant={v} projectId={projectId} readonly={readonly} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div style={{ padding: '16px 0', textAlign: 'center', color: '#999', fontSize: 12, border: '1px solid #f0f0f0', borderTop: 0, borderRadius: '0 0 4px 4px' }}>
+          暂无CMF方案
+        </div>
+      )}
     </div>
   );
 };
@@ -695,7 +663,6 @@ const MobileVariantSummaryCard: React.FC<{
         transition: 'background 0.15s',
       }}
     >
-      {/* Color swatch / thumbnail */}
       {renderImageUrl ? (
         <img src={renderImageUrl} alt="" width={44} height={44}
           style={{ objectFit: 'cover', borderRadius: 8, background: '#f5f5f5', flexShrink: 0 }} />
@@ -715,7 +682,6 @@ const MobileVariantSummaryCard: React.FC<{
         </div>
       )}
 
-      {/* Info */}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
           <Tag color="processing" style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>
@@ -734,7 +700,6 @@ const MobileVariantSummaryCard: React.FC<{
         </div>
       </div>
 
-      {/* Arrow */}
       <RightOutlined style={{ color: '#bfbfbf', fontSize: 12, flexShrink: 0 }} />
     </div>
   );
@@ -771,7 +736,7 @@ const CMFEditControl: React.FC<CMFEditControlProps> = ({ projectId, taskId: _tas
     return <Empty description="未找到外观件。请先在EBOM中将零件标记为外观件。" />;
   }
 
-  // ===== Mobile layout: compact cards =====
+  // ===== Mobile layout =====
   if (isMobile) {
     return (
       <div>
@@ -786,7 +751,6 @@ const CMFEditControl: React.FC<CMFEditControlProps> = ({ projectId, taskId: _tas
 
           return (
             <div key={item.id} style={{ marginBottom: 16 }}>
-              {/* Part header */}
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8,
                 padding: '8px 0', marginBottom: 4,
@@ -801,7 +765,6 @@ const CMFEditControl: React.FC<CMFEditControlProps> = ({ projectId, taskId: _tas
                 <Tag color="blue" style={{ fontSize: 10, margin: 0 }}>{variants.length}方案</Tag>
               </div>
 
-              {/* Variant summary cards */}
               {variants.map(v => (
                 <MobileVariantSummaryCard
                   key={v.id}
@@ -810,7 +773,6 @@ const CMFEditControl: React.FC<CMFEditControlProps> = ({ projectId, taskId: _tas
                 />
               ))}
 
-              {/* Add button */}
               {!readonly && (
                 <Button
                   type="dashed"
@@ -827,7 +789,6 @@ const CMFEditControl: React.FC<CMFEditControlProps> = ({ projectId, taskId: _tas
           );
         })}
 
-        {/* Slide-in edit panel */}
         {editingVariant && (
           <CMFMobileEditPanel
             variant={editingVariant}
@@ -840,60 +801,27 @@ const CMFEditControl: React.FC<CMFEditControlProps> = ({ projectId, taskId: _tas
     );
   }
 
-  // ===== Desktop layout: existing Collapse =====
-  const collapseItems = parts.map((part: AppearancePartWithCMF) => {
-    const item = part.bom_item;
-    const variants = part.cmf_variants || [];
-
-    return {
-      key: item.id,
-      label: (
-        <Space size={8}>
-          {item.thumbnail_url && (
-            <img src={item.thumbnail_url} alt="" width={28} height={21}
-              style={{ objectFit: 'contain', borderRadius: 3, background: '#f5f5f5' }} />
-          )}
-          <Text strong style={{ fontSize: 13 }}>#{item.item_number} {item.name}</Text>
-          {item.extended_attrs?.material_type && <Tag style={{ fontSize: 11 }}>{item.extended_attrs.material_type}</Tag>}
-          <Tag color="blue" style={{ fontSize: 11 }}>{variants.length} 方案</Tag>
-        </Space>
-      ),
-      children: (
-        <div>
-          {variants.map(v => (
-            readonly
-              ? <VariantViewCard key={v.id} variant={v} />
-              : <VariantEditCard key={v.id} variant={v} projectId={projectId} />
-          ))}
-          {!readonly && (
-            <Button
-              type="dashed"
-              icon={<PlusOutlined />}
-              onClick={() => createMutation.mutate({ itemId: item.id })}
-              loading={createMutation.isPending}
-              style={{ width: '100%', marginTop: 4, borderRadius: 8 }}
-            >
-              添加CMF方案
-            </Button>
-          )}
-        </div>
-      ),
-    };
-  });
-
+  // ===== Desktop layout: table sections (BOM style) =====
   return (
     <div>
       <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
         <BgColorsOutlined style={{ color: '#1677ff' }} />
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          为外观件定义CMF（颜色/材质/表面处理）方案。
-        </Text>
+        <Text strong style={{ fontSize: 14 }}>CMF方案</Text>
+        <Tag style={{ fontSize: 11 }}>
+          {parts.reduce((n: number, p: AppearancePartWithCMF) => n + (p.cmf_variants?.length || 0), 0)} 方案
+        </Tag>
       </div>
-      <Collapse
-        defaultActiveKey={parts.map((p: AppearancePartWithCMF) => p.bom_item.id)}
-        items={collapseItems}
-        style={{ background: '#fff' }}
-      />
+
+      {parts.map((part: AppearancePartWithCMF) => (
+        <PartSection
+          key={part.bom_item.id}
+          part={part}
+          projectId={projectId}
+          readonly={readonly}
+          onAddVariant={(itemId) => createMutation.mutate({ itemId })}
+          addLoading={createMutation.isPending}
+        />
+      ))}
     </div>
   );
 };
