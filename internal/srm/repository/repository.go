@@ -16,6 +16,7 @@ type Repositories struct {
 	PR               *PRRepository
 	PO               *PORepository
 	Inspection       *InspectionRepository
+	Inventory        *InventoryRepository
 	Project          *ProjectRepository
 	ActivityLog      *ActivityLogRepository
 	DelayRequest     *DelayRequestRepository
@@ -34,6 +35,7 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		PR:               NewPRRepository(db),
 		PO:               NewPORepository(db),
 		Inspection:       NewInspectionRepository(db),
+		Inventory:        NewInventoryRepository(db),
 		Project:          NewProjectRepository(db),
 		ActivityLog:      NewActivityLogRepository(db),
 		DelayRequest:     NewDelayRequestRepository(db),

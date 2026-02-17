@@ -47,6 +47,9 @@ func (r *InspectionRepository) FindAll(ctx context.Context, page, pageSize int, 
 	err := query.
 		Preload("PO").
 		Preload("Supplier").
+		Preload("Items", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order ASC")
+		}).
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(pageSize).
@@ -61,6 +64,9 @@ func (r *InspectionRepository) FindByID(ctx context.Context, id string) (*entity
 	err := r.db.WithContext(ctx).
 		Preload("PO").
 		Preload("Supplier").
+		Preload("Items", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order ASC")
+		}).
 		Where("id = ?", id).
 		First(&inspection).Error
 	if err != nil {
@@ -80,6 +86,11 @@ func (r *InspectionRepository) Create(ctx context.Context, inspection *entity.In
 // Update 更新检验
 func (r *InspectionRepository) Update(ctx context.Context, inspection *entity.Inspection) error {
 	return r.db.WithContext(ctx).Save(inspection).Error
+}
+
+// UpdateItem 更新检验行项
+func (r *InspectionRepository) UpdateItem(ctx context.Context, item *entity.InspectionItem) error {
+	return r.db.WithContext(ctx).Save(item).Error
 }
 
 // GenerateCode 生成检验编码 IQC-{year}-{4位}

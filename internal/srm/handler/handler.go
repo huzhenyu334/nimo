@@ -13,6 +13,7 @@ type Handlers struct {
 	PR               *PRHandler
 	PO               *POHandler
 	Inspection       *InspectionHandler
+	Inventory        *InventoryHandler
 	Dashboard        *DashboardHandler
 	Project          *ProjectHandler
 	Settlement       *SettlementHandler

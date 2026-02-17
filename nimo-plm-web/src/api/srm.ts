@@ -156,13 +156,61 @@ export interface Inspection {
   sample_qty?: number;
   status: string;
   result: string;
+  overall_result: string;
   inspection_items?: unknown;
+  items?: InspectionItem[];
   report_url: string;
+  inspector: string;
   inspector_id?: string;
+  inspection_date?: string;
   inspected_at?: string;
   created_at: string;
   updated_at: string;
   notes: string;
+  po?: PurchaseOrder;
+  supplier?: Supplier;
+}
+
+export interface InspectionItem {
+  id: string;
+  inspection_id: string;
+  po_item_id?: string;
+  material_name: string;
+  material_code: string;
+  inspected_quantity: number;
+  qualified_quantity: number;
+  defect_quantity: number;
+  defect_description: string;
+  result: string;
+  sort_order: number;
+}
+
+export interface InventoryRecord {
+  id: string;
+  material_name: string;
+  material_code: string;
+  mpn: string;
+  supplier_id?: string;
+  quantity: number;
+  unit: string;
+  warehouse: string;
+  last_in_date?: string;
+  safety_stock: number;
+  created_at: string;
+  updated_at: string;
+  supplier?: Supplier;
+}
+
+export interface InventoryTransaction {
+  id: string;
+  inventory_id: string;
+  type: string;
+  quantity: number;
+  reference_type: string;
+  reference_id: string;
+  operator: string;
+  notes: string;
+  created_at: string;
 }
 
 export interface SamplingRequest {
@@ -562,8 +610,60 @@ export const srmApi = {
     return response.data.data;
   },
 
-  completeInspection: async (id: string, data: { result: string; inspection_items?: unknown; notes?: string }): Promise<Inspection> => {
+  completeInspection: async (id: string, data: {
+    result: string;
+    inspection_items?: unknown;
+    items?: Array<{ id: string; inspected_quantity: number; qualified_quantity: number; defect_quantity: number; defect_description?: string; result: string }>;
+    notes?: string;
+  }): Promise<Inspection> => {
     const response = await apiClient.post<ApiResponse<Inspection>>(`/srm/inspections/${id}/complete`, data);
+    return response.data.data;
+  },
+
+  createInspectionFromPO: async (poId: string): Promise<Inspection> => {
+    const response = await apiClient.post<ApiResponse<Inspection>>('/srm/inspections/from-po', { po_id: poId });
+    return response.data.data;
+  },
+
+  // --- Inventory ---
+  listInventory: async (params?: {
+    search?: string;
+    warehouse?: string;
+    supplier_id?: string;
+    low_stock?: string;
+    page?: number;
+    page_size?: number;
+  }): Promise<PaginatedResponse<InventoryRecord>> => {
+    const response = await apiClient.get<ApiResponse<PaginatedResponse<InventoryRecord>>>('/srm/inventory', { params });
+    return response.data.data;
+  },
+
+  getInventoryTransactions: async (id: string, params?: { page?: number; page_size?: number }): Promise<PaginatedResponse<InventoryTransaction>> => {
+    const response = await apiClient.get<ApiResponse<PaginatedResponse<InventoryTransaction>>>(`/srm/inventory/${id}/transactions`, { params });
+    return response.data.data;
+  },
+
+  stockIn: async (data: {
+    material_name: string;
+    material_code?: string;
+    mpn?: string;
+    supplier_id?: string;
+    quantity: number;
+    unit?: string;
+    warehouse?: string;
+    notes?: string;
+  }): Promise<InventoryRecord> => {
+    const response = await apiClient.post<ApiResponse<InventoryRecord>>('/srm/inventory/in', data);
+    return response.data.data;
+  },
+
+  stockOut: async (data: { inventory_id: string; quantity: number; notes?: string }): Promise<InventoryRecord> => {
+    const response = await apiClient.post<ApiResponse<InventoryRecord>>('/srm/inventory/out', data);
+    return response.data.data;
+  },
+
+  stockAdjust: async (data: { inventory_id: string; quantity: number; notes?: string }): Promise<InventoryRecord> => {
+    const response = await apiClient.post<ApiResponse<InventoryRecord>>('/srm/inventory/adjust', data);
     return response.data.data;
   },
 

@@ -14,6 +14,26 @@ func NewInspectionHandler(svc *service.InspectionService) *InspectionHandler {
 	return &InspectionHandler{svc: svc}
 }
 
+// CreateFromPO 从PO创建质检单
+// POST /api/v1/srm/inspections/from-po
+func (h *InspectionHandler) CreateFromPO(c *gin.Context) {
+	var req struct {
+		POID string `json:"po_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+
+	inspection, err := h.svc.CreateInspectionFromPO(c.Request.Context(), req.POID)
+	if err != nil {
+		InternalError(c, "创建质检单失败: "+err.Error())
+		return
+	}
+
+	Created(c, inspection)
+}
+
 // CreateInspection 创建检验单
 // POST /api/v1/srm/inspections
 func (h *InspectionHandler) CreateInspection(c *gin.Context) {

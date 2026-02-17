@@ -7,47 +7,73 @@ import (
 
 // Inspection 检验任务
 type Inspection struct {
-	ID             string    `json:"id" gorm:"primaryKey;size:32"`
-	InspectionCode string   `json:"inspection_code" gorm:"size:32;uniqueIndex;not null"`
-	POID           *string   `json:"po_id" gorm:"size:32"`
-	POItemID       *string   `json:"po_item_id" gorm:"size:32"`
-	SupplierID     *string   `json:"supplier_id" gorm:"size:32"`
+	ID             string  `json:"id" gorm:"primaryKey;size:32"`
+	InspectionCode string  `json:"inspection_code" gorm:"size:32;uniqueIndex;not null"`
+	POID           *string `json:"po_id" gorm:"size:32"`
+	POItemID       *string `json:"po_item_id" gorm:"size:32"`
+	SupplierID     *string `json:"supplier_id" gorm:"size:32"`
 
 	MaterialID   *string `json:"material_id" gorm:"size:32"`
 	MaterialCode string  `json:"material_code" gorm:"size:50"`
 	MaterialName string  `json:"material_name" gorm:"size:200"`
 
 	// 检验信息
-	Quantity  *float64 `json:"quantity" gorm:"type:decimal(10,2)"`
-	SampleQty *int     `json:"sample_qty"`
-	Status    string   `json:"status" gorm:"size:20;default:pending"` // pending/in_progress/completed
-	Result    string   `json:"result" gorm:"size:20"`                 // passed/failed/conditional
+	Quantity      *float64 `json:"quantity" gorm:"type:decimal(10,2)"`
+	SampleQty     *int     `json:"sample_qty"`
+	Status        string   `json:"status" gorm:"size:20;default:pending"` // pending/inspecting/completed
+	Result        string   `json:"result" gorm:"size:20"`                 // passed/failed/conditional
+	OverallResult string   `json:"overall_result" gorm:"size:20"`         // passed/failed/conditional
 
 	// 检验详情
 	InspectionItems json.RawMessage `json:"inspection_items" gorm:"type:jsonb"`
 	ReportURL       string          `json:"report_url" gorm:"size:500"`
 
 	// 人员
+	Inspector   string     `json:"inspector" gorm:"size:100"`
 	InspectorID *string    `json:"inspector_id" gorm:"size:32"`
 	InspectedAt *time.Time `json:"inspected_at"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Notes     string    `json:"notes" gorm:"type:text"`
+	InspectionDate *time.Time `json:"inspection_date"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	Notes          string     `json:"notes" gorm:"type:text"`
 
 	// 关联
-	PO       *PurchaseOrder `json:"po,omitempty" gorm:"foreignKey:POID"`
-	Supplier *Supplier      `json:"supplier,omitempty" gorm:"foreignKey:SupplierID"`
+	Items    []InspectionItem `json:"items,omitempty" gorm:"foreignKey:InspectionID"`
+	PO       *PurchaseOrder   `json:"po,omitempty" gorm:"foreignKey:POID"`
+	Supplier *Supplier        `json:"supplier,omitempty" gorm:"foreignKey:SupplierID"`
 }
 
 func (Inspection) TableName() string {
 	return "srm_inspections"
 }
 
+// InspectionItem 质检行项
+type InspectionItem struct {
+	ID               string  `json:"id" gorm:"primaryKey;size:32"`
+	InspectionID     string  `json:"inspection_id" gorm:"size:32;not null;index"`
+	POItemID         *string `json:"po_item_id" gorm:"size:32"`
+	MaterialName     string  `json:"material_name" gorm:"size:200"`
+	MaterialCode     string  `json:"material_code" gorm:"size:50"`
+	InspectedQty     float64 `json:"inspected_quantity" gorm:"type:decimal(10,2)"`
+	QualifiedQty     float64 `json:"qualified_quantity" gorm:"type:decimal(10,2)"`
+	DefectQty        float64 `json:"defect_quantity" gorm:"type:decimal(10,2)"`
+	DefectDesc       string  `json:"defect_description" gorm:"type:text"`
+	Result           string  `json:"result" gorm:"size:20"` // passed/failed/conditional
+	SortOrder        int     `json:"sort_order" gorm:"default:0"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+func (InspectionItem) TableName() string {
+	return "srm_inspection_items"
+}
+
 // 检验状态
 const (
 	InspectionStatusPending    = "pending"
-	InspectionStatusInProgress = "in_progress"
+	InspectionStatusInspecting = "inspecting"
+	InspectionStatusInProgress = "in_progress" // backward compat
 	InspectionStatusCompleted  = "completed"
 )
 

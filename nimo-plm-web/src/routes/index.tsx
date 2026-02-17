@@ -14,6 +14,7 @@ import CorrectiveActions from '@/pages/srm/CorrectiveActions';
 import Evaluations from '@/pages/srm/Evaluations';
 import SRMProjectDetail from '@/pages/srm/ProjectDetail';
 import SRMEquipment from '@/pages/srm/Equipment';
+import Inventory from '@/pages/srm/Inventory';
 import ECNList from '@/pages/ECN';
 import ECNDetail from '@/pages/ECN/ECNDetail';
 import ECNForm from '@/pages/ECN/ECNForm';
@@ -178,6 +179,10 @@ export const router = createBrowserRouter([
       {
         path: 'srm/projects/:id',
         element: <SRMProjectDetail />,
+      },
+      {
+        path: 'srm/inventory',
+        element: <Inventory />,
       },
       {
         path: 'srm/equipment',

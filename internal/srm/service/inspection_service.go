@@ -18,6 +18,8 @@ import (
 type InspectionService struct {
 	repo            *repository.InspectionRepository
 	prRepo          *repository.PRRepository
+	poRepo          *repository.PORepository
+	inventorySvc    *InventoryService
 	activityLogRepo *repository.ActivityLogRepository
 	feishuClient    *feishu.FeishuClient
 }
@@ -27,6 +29,16 @@ func NewInspectionService(repo *repository.InspectionRepository, prRepo *reposit
 		repo:   repo,
 		prRepo: prRepo,
 	}
+}
+
+// SetPORepo 注入PO仓库
+func (s *InspectionService) SetPORepo(repo *repository.PORepository) {
+	s.poRepo = repo
+}
+
+// SetInventoryService 注入库存服务
+func (s *InspectionService) SetInventoryService(svc *InventoryService) {
+	s.inventorySvc = svc
 }
 
 // SetActivityLogRepo 注入操作日志仓库
@@ -94,9 +106,20 @@ func (s *InspectionService) UpdateInspection(ctx context.Context, id string, req
 
 // CompleteInspectionRequest 完成检验请求
 type CompleteInspectionRequest struct {
-	Result          string           `json:"result" binding:"required"` // passed/failed/conditional
-	InspectionItems *json.RawMessage `json:"inspection_items"`
-	Notes           string           `json:"notes"`
+	Result          string                      `json:"result" binding:"required"` // passed/failed/conditional
+	InspectionItems *json.RawMessage            `json:"inspection_items"`
+	Items           []CompleteInspectionItemReq `json:"items"`
+	Notes           string                      `json:"notes"`
+}
+
+// CompleteInspectionItemReq 行项结果
+type CompleteInspectionItemReq struct {
+	ID           string  `json:"id"`
+	InspectedQty float64 `json:"inspected_quantity"`
+	QualifiedQty float64 `json:"qualified_quantity"`
+	DefectQty    float64 `json:"defect_quantity"`
+	DefectDesc   string  `json:"defect_description"`
+	Result       string  `json:"result"`
 }
 
 // CompleteInspection 完成检验
@@ -109,8 +132,10 @@ func (s *InspectionService) CompleteInspection(ctx context.Context, id, userID s
 	now := time.Now()
 	inspection.Status = entity.InspectionStatusCompleted
 	inspection.Result = req.Result
+	inspection.OverallResult = req.Result
 	inspection.InspectorID = &userID
 	inspection.InspectedAt = &now
+	inspection.InspectionDate = &now
 	if req.InspectionItems != nil {
 		inspection.InspectionItems = *req.InspectionItems
 	}
@@ -118,8 +143,45 @@ func (s *InspectionService) CompleteInspection(ctx context.Context, id, userID s
 		inspection.Notes = req.Notes
 	}
 
+	// Update inspection item results if provided
+	if len(req.Items) > 0 {
+		for _, itemReq := range req.Items {
+			for i := range inspection.Items {
+				if inspection.Items[i].ID == itemReq.ID {
+					inspection.Items[i].QualifiedQty = itemReq.QualifiedQty
+					inspection.Items[i].DefectQty = itemReq.DefectQty
+					inspection.Items[i].DefectDesc = itemReq.DefectDesc
+					inspection.Items[i].InspectedQty = itemReq.InspectedQty
+					inspection.Items[i].Result = itemReq.Result
+				}
+			}
+		}
+	}
+
 	if err := s.repo.Update(ctx, inspection); err != nil {
 		return nil, err
+	}
+
+	// Save updated items
+	for _, item := range inspection.Items {
+		s.repo.UpdateItem(ctx, &item)
+	}
+
+	// Update PO received quantities for passed/conditional items
+	if (req.Result == "passed" || req.Result == "conditional") && s.poRepo != nil {
+		for _, item := range inspection.Items {
+			if item.Result == "failed" {
+				continue
+			}
+			if item.POItemID != nil && item.QualifiedQty > 0 {
+				s.poRepo.ReceiveItem(ctx, *item.POItemID, item.QualifiedQty)
+			}
+
+			// Auto stock-in for qualified quantity
+			if s.inventorySvc != nil && item.QualifiedQty > 0 {
+				s.inventorySvc.StockInFromInspection(ctx, inspection.ID, item.MaterialName, item.MaterialCode, inspection.SupplierID, item.QualifiedQty, "pcs")
+			}
+		}
 	}
 
 	// 记录操作日志
@@ -203,6 +265,58 @@ func (s *InspectionService) sendInspectionFailedNotification(ctx context.Context
 	} else {
 		log.Printf("[SRM] 飞书检验不合格通知已发送: %s", inspection.InspectionCode)
 	}
+}
+
+// CreateInspectionFromPO 从采购订单创建质检单（包含所有PO行项）
+func (s *InspectionService) CreateInspectionFromPO(ctx context.Context, poID string) (*entity.Inspection, error) {
+	if s.poRepo == nil {
+		return nil, fmt.Errorf("PO仓库未注入")
+	}
+	po, err := s.poRepo.FindByID(ctx, poID)
+	if err != nil {
+		return nil, fmt.Errorf("采购订单不存在")
+	}
+
+	code, err := s.repo.GenerateCode(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var totalQty float64
+	var items []entity.InspectionItem
+	for i, poItem := range po.Items {
+		totalQty += poItem.Quantity
+		itemID := poItem.ID
+		items = append(items, entity.InspectionItem{
+			ID:           uuid.New().String()[:32],
+			POItemID:     &itemID,
+			MaterialName: poItem.MaterialName,
+			MaterialCode: poItem.MaterialCode,
+			InspectedQty: poItem.Quantity,
+			SortOrder:    i + 1,
+		})
+	}
+
+	inspection := &entity.Inspection{
+		ID:             uuid.New().String()[:32],
+		InspectionCode: code,
+		POID:           &poID,
+		SupplierID:     &po.SupplierID,
+		MaterialName:   fmt.Sprintf("%s 等%d项", po.POCode, len(po.Items)),
+		Quantity:       &totalQty,
+		Status:         entity.InspectionStatusPending,
+		Items:          items,
+	}
+
+	if err := s.repo.Create(ctx, inspection); err != nil {
+		return nil, err
+	}
+	// Re-read with preloads
+	created, _ := s.repo.FindByID(ctx, inspection.ID)
+	if created != nil {
+		return created, nil
+	}
+	return inspection, nil
 }
 
 // CreateInspectionFromPOItem 从PO行项创建检验任务

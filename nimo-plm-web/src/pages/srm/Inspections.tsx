@@ -11,21 +11,22 @@ import {
   Drawer,
   Descriptions,
   Form,
+  InputNumber,
   Spin,
 } from 'antd';
 import { ReloadOutlined, CheckCircleOutlined, SearchOutlined, RightOutlined } from '@ant-design/icons';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { srmApi, Inspection } from '@/api/srm';
+import { srmApi, Inspection, InspectionItem } from '@/api/srm';
 import dayjs from 'dayjs';
 
 const { Search } = Input;
 
 const statusLabels: Record<string, string> = {
-  pending: '待检验', in_progress: '检验中', completed: '已完成',
+  pending: '待检验', inspecting: '检验中', in_progress: '检验中', completed: '已完成',
 };
 const statusColors: Record<string, string> = {
-  pending: 'default', in_progress: 'processing', completed: 'success',
+  pending: 'default', inspecting: 'processing', in_progress: 'processing', completed: 'success',
 };
 
 const resultLabels: Record<string, string> = {
@@ -46,6 +47,7 @@ const Inspections: React.FC = () => {
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [currentInsp, setCurrentInsp] = useState<Inspection | null>(null);
   const [completeForm] = Form.useForm();
+  const [itemResults, setItemResults] = useState<Record<string, Partial<InspectionItem>>>({});
 
   const { data, isLoading } = useQuery({
     queryKey: ['srm-inspections', searchText, filterStatus, filterResult, page, pageSize],
@@ -65,11 +67,12 @@ const Inspections: React.FC = () => {
   });
 
   const completeMutation = useMutation({
-    mutationFn: (values: { result: string; notes?: string; inspection_items?: unknown }) =>
+    mutationFn: (values: { result: string; notes?: string; items?: any[] }) =>
       srmApi.completeInspection(currentInsp!.id, values),
     onSuccess: () => {
       message.success('检验完成');
       completeForm.resetFields();
+      setItemResults({});
       queryClient.invalidateQueries({ queryKey: ['srm-inspections'] });
       queryClient.invalidateQueries({ queryKey: ['srm-inspection', currentInsp?.id] });
     },
@@ -89,8 +92,8 @@ const Inspections: React.FC = () => {
       key: 'po_code',
       width: 130,
       render: (_: unknown, record: Inspection) => {
-        const poCode = (record as any).po?.po_code;
-        return poCode ? <span style={{ fontFamily: 'monospace' }}>{poCode}</span> : (record.po_id ? record.po_id.slice(0, 8) : '-');
+        const poCode = record.po?.po_code;
+        return poCode ? <span style={{ fontFamily: 'monospace' }}>{poCode}</span> : '-';
       },
     },
     { title: '物料', dataIndex: 'material_name', key: 'material_name', width: 160, ellipsis: true },
@@ -99,8 +102,7 @@ const Inspections: React.FC = () => {
       key: 'supplier_name',
       width: 120,
       render: (_: unknown, record: Inspection) => {
-        const supplierName = (record as any).supplier?.name || (record as any).supplier?.short_name;
-        return supplierName || (record.supplier_id ? record.supplier_id.slice(0, 8) : '-');
+        return record.supplier?.name || record.supplier?.short_name || '-';
       },
     },
     {
@@ -119,20 +121,19 @@ const Inspections: React.FC = () => {
     },
     {
       title: '结果',
-      dataIndex: 'result',
       key: 'result',
       width: 90,
-      render: (r: string) => {
+      render: (_: unknown, record: Inspection) => {
+        const r = record.overall_result || record.result;
         if (!r) return <Tag>待检</Tag>;
         return <Tag color={resultColors[r]}>{resultLabels[r] || r}</Tag>;
       },
     },
     {
       title: '检验员',
-      dataIndex: 'inspector_id',
-      key: 'inspector_id',
+      key: 'inspector',
       width: 100,
-      render: (id: string) => id?.slice(0, 8) || '-',
+      render: (_: unknown, record: Inspection) => record.inspector || '-',
     },
     {
       title: '操作',
@@ -153,43 +154,149 @@ const Inspections: React.FC = () => {
   const detail = inspDetail || currentInsp;
   const canComplete = detail?.status !== 'completed';
   const inspections = data?.items || [];
+  const detailItems = (inspDetail as Inspection)?.items || [];
 
-  // Shared drawer component rendered in both mobile and desktop
+  const handleCompleteSubmit = (values: any) => {
+    // Build items array from edited state
+    const items = detailItems.map(item => ({
+      id: item.id,
+      inspected_quantity: itemResults[item.id]?.inspected_quantity ?? item.inspected_quantity,
+      qualified_quantity: itemResults[item.id]?.qualified_quantity ?? item.qualified_quantity,
+      defect_quantity: itemResults[item.id]?.defect_quantity ?? item.defect_quantity,
+      defect_description: itemResults[item.id]?.defect_description ?? item.defect_description ?? '',
+      result: itemResults[item.id]?.result ?? item.result ?? values.result,
+    }));
+
+    completeMutation.mutate({
+      result: values.result,
+      notes: values.notes,
+      items: items.length > 0 ? items : undefined,
+    });
+  };
+
+  // Inspection items table columns (for the drawer)
+  const inspItemColumns = [
+    { title: '物料', dataIndex: 'material_name', key: 'material_name', width: 120, ellipsis: true },
+    { title: '编码', dataIndex: 'material_code', key: 'material_code', width: 90 },
+    {
+      title: '检验数',
+      dataIndex: 'inspected_quantity',
+      key: 'inspected_quantity',
+      width: 90,
+      render: (v: number, record: InspectionItem) => canComplete ? (
+        <InputNumber
+          size="small"
+          min={0}
+          defaultValue={v}
+          style={{ width: 70 }}
+          onChange={(val) => setItemResults(prev => ({ ...prev, [record.id]: { ...prev[record.id], inspected_quantity: val || 0 } }))}
+        />
+      ) : v,
+    },
+    {
+      title: '合格数',
+      dataIndex: 'qualified_quantity',
+      key: 'qualified_quantity',
+      width: 90,
+      render: (v: number, record: InspectionItem) => canComplete ? (
+        <InputNumber
+          size="small"
+          min={0}
+          defaultValue={v}
+          style={{ width: 70 }}
+          onChange={(val) => setItemResults(prev => ({ ...prev, [record.id]: { ...prev[record.id], qualified_quantity: val || 0 } }))}
+        />
+      ) : v,
+    },
+    {
+      title: '不良数',
+      dataIndex: 'defect_quantity',
+      key: 'defect_quantity',
+      width: 90,
+      render: (v: number, record: InspectionItem) => canComplete ? (
+        <InputNumber
+          size="small"
+          min={0}
+          defaultValue={v}
+          style={{ width: 70 }}
+          onChange={(val) => setItemResults(prev => ({ ...prev, [record.id]: { ...prev[record.id], defect_quantity: val || 0 } }))}
+        />
+      ) : <span style={{ color: v > 0 ? '#cf1322' : undefined }}>{v}</span>,
+    },
+    {
+      title: '结果',
+      key: 'result',
+      width: 90,
+      render: (_: unknown, record: InspectionItem) => {
+        if (canComplete) {
+          return (
+            <Select
+              size="small"
+              defaultValue={record.result || undefined}
+              placeholder="结果"
+              style={{ width: 80 }}
+              onChange={(val) => setItemResults(prev => ({ ...prev, [record.id]: { ...prev[record.id], result: val } }))}
+              options={[
+                { value: 'passed', label: '合格' },
+                { value: 'failed', label: '不合格' },
+                { value: 'conditional', label: '让步' },
+              ]}
+            />
+          );
+        }
+        const r = record.result;
+        return r ? <Tag color={resultColors[r]}>{resultLabels[r] || r}</Tag> : '-';
+      },
+    },
+  ];
+
+  // Shared drawer component
   const drawerNode = (
     <Drawer
       title={detail?.inspection_code || '检验详情'}
       open={drawerVisible}
-      onClose={() => { setDrawerVisible(false); setCurrentInsp(null); completeForm.resetFields(); }}
-      width={isMobile ? '100%' : 600}
+      onClose={() => { setDrawerVisible(false); setCurrentInsp(null); completeForm.resetFields(); setItemResults({}); }}
+      width={isMobile ? '100%' : 760}
     >
       {detail && (
         <>
-          <Descriptions column={isMobile ? 1 : 2} bordered size="small" style={{ marginBottom: 24 }}>
+          <Descriptions column={isMobile ? 1 : 2} bordered size="small" style={{ marginBottom: 16 }}>
             <Descriptions.Item label="检验编码">{detail.inspection_code}</Descriptions.Item>
-            <Descriptions.Item label="物料">{detail.material_name}</Descriptions.Item>
-            <Descriptions.Item label="物料编码">{detail.material_code || '-'}</Descriptions.Item>
+            <Descriptions.Item label="PO编码">{detail.po?.po_code || '-'}</Descriptions.Item>
+            <Descriptions.Item label="供应商">{detail.supplier?.name || '-'}</Descriptions.Item>
             <Descriptions.Item label="数量">{detail.quantity ?? '-'}</Descriptions.Item>
-            <Descriptions.Item label="抽样数">{detail.sample_qty ?? '-'}</Descriptions.Item>
             <Descriptions.Item label="状态">
               <Tag color={statusColors[detail.status]}>{statusLabels[detail.status] || detail.status}</Tag>
             </Descriptions.Item>
             <Descriptions.Item label="结果">
-              {detail.result ? (
-                <Tag color={resultColors[detail.result]}>{resultLabels[detail.result] || detail.result}</Tag>
-              ) : (
-                '待检'
-              )}
+              {(detail.overall_result || detail.result) ? (
+                <Tag color={resultColors[detail.overall_result || detail.result]}>
+                  {resultLabels[detail.overall_result || detail.result] || detail.overall_result || detail.result}
+                </Tag>
+              ) : '待检'}
             </Descriptions.Item>
+            <Descriptions.Item label="检验员">{detail.inspector || '-'}</Descriptions.Item>
             <Descriptions.Item label="检验时间">
-              {detail.inspected_at ? dayjs(detail.inspected_at).format('YYYY-MM-DD HH:mm') : '-'}
+              {detail.inspection_date ? dayjs(detail.inspection_date).format('YYYY-MM-DD HH:mm') : (detail.inspected_at ? dayjs(detail.inspected_at).format('YYYY-MM-DD HH:mm') : '-')}
             </Descriptions.Item>
             <Descriptions.Item label="备注" span={isMobile ? 1 : 2}>{detail.notes || '-'}</Descriptions.Item>
-            <Descriptions.Item label="检验项目" span={isMobile ? 1 : 2}>
-              <pre style={{ margin: 0, fontSize: 12, maxHeight: 200, overflow: 'auto' }}>
-                {detail.inspection_items ? JSON.stringify(detail.inspection_items, null, 2) : '无'}
-              </pre>
-            </Descriptions.Item>
           </Descriptions>
+
+          {/* Inspection Items Table */}
+          {detailItems.length > 0 && (
+            <>
+              <h4 style={{ marginBottom: 8 }}>质检行项 ({detailItems.length})</h4>
+              <Table
+                columns={inspItemColumns}
+                dataSource={detailItems}
+                rowKey="id"
+                size="small"
+                scroll={{ x: 600 }}
+                pagination={false}
+                style={{ marginBottom: 16 }}
+              />
+            </>
+          )}
 
           {canComplete && (
             <>
@@ -197,24 +304,9 @@ const Inspections: React.FC = () => {
               <Form
                 form={completeForm}
                 layout="vertical"
-                onFinish={(values) => {
-                  let items = undefined;
-                  if (values.inspection_items_json) {
-                    try {
-                      items = JSON.parse(values.inspection_items_json);
-                    } catch {
-                      message.error('检验项目JSON格式错误');
-                      return;
-                    }
-                  }
-                  completeMutation.mutate({
-                    result: values.result,
-                    notes: values.notes,
-                    inspection_items: items,
-                  });
-                }}
+                onFinish={handleCompleteSubmit}
               >
-                <Form.Item name="result" label="检验结果" rules={[{ required: true, message: '请选择结果' }]}>
+                <Form.Item name="result" label="整体检验结果" rules={[{ required: true, message: '请选择结果' }]}>
                   <Select
                     placeholder="选择结果"
                     options={[
@@ -226,9 +318,6 @@ const Inspections: React.FC = () => {
                 </Form.Item>
                 <Form.Item name="notes" label="备注">
                   <Input.TextArea rows={2} placeholder="检验备注" />
-                </Form.Item>
-                <Form.Item name="inspection_items_json" label="检验项目 (JSON)">
-                  <Input.TextArea rows={4} placeholder='[{"item": "外观", "result": "OK"}, ...]' />
                 </Form.Item>
                 <Button
                   type="primary"
@@ -250,11 +339,10 @@ const Inspections: React.FC = () => {
   if (isMobile) {
     const statusFilterOptions = [
       { label: '全部', value: undefined as string | undefined },
-      ...Object.entries(statusLabels).map(([k, v]) => ({ label: v, value: k as string | undefined })),
+      ...Object.entries(statusLabels).filter(([k]) => k !== 'in_progress').map(([k, v]) => ({ label: v, value: k as string | undefined })),
     ];
     return (
       <div style={{ background: '#f5f5f5', minHeight: '100vh' }}>
-        {/* Sticky search bar */}
         <div style={{ padding: '12px 16px', background: '#fff', position: 'sticky', top: 0, zIndex: 10 }}>
           <Input
             placeholder="搜索检验编码/物料"
@@ -266,8 +354,6 @@ const Inspections: React.FC = () => {
             style={{ borderRadius: 20 }}
           />
         </div>
-
-        {/* Status filter pills */}
         <div className="mobile-filter-pills" style={{ padding: '8px 12px' }}>
           {statusFilterOptions.map(opt => (
             <div
@@ -277,67 +363,38 @@ const Inspections: React.FC = () => {
             >{opt.label}</div>
           ))}
         </div>
-
-        {/* Card list */}
         <div style={{ padding: '0 12px' }}>
           {isLoading ? (
             <div style={{ textAlign: 'center', padding: 40 }}><Spin tip="加载中..." /></div>
           ) : inspections.length === 0 ? (
             <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>暂无检验记录</div>
-          ) : inspections.map((insp) => {
-            const poCode = (insp as any).po?.po_code;
-            const supplierName = (insp as any).supplier?.name || (insp as any).supplier?.short_name;
-            return (
-              <div
-                key={insp.id}
-                onClick={() => { setCurrentInsp(insp); setDrawerVisible(true); }}
-                style={{
-                  background: '#fff',
-                  borderRadius: 10,
-                  padding: '12px 14px',
-                  marginBottom: 8,
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-                  cursor: 'pointer',
-                }}
-              >
-                {/* Row 1: inspection_code + status tag */}
-                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-                  <span style={{ fontFamily: 'monospace', color: '#1677ff', fontSize: 13, flex: 1 }}>
-                    {insp.inspection_code}
-                  </span>
-                  <Tag color={statusColors[insp.status]} style={{ margin: 0 }}>
-                    {statusLabels[insp.status] || insp.status}
-                  </Tag>
-                </div>
-
-                {/* Row 2: material name (bold) */}
-                <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {insp.material_name || '-'}
-                </div>
-
-                {/* Row 3: po_code, supplier, quantity, result */}
-                <div style={{ display: 'flex', alignItems: 'center', fontSize: 13, color: '#666', gap: 8, flexWrap: 'wrap' }}>
-                  {poCode && (
-                    <span style={{ fontFamily: 'monospace', fontSize: 12 }}>PO: {poCode}</span>
-                  )}
-                  {supplierName && (
-                    <span>{supplierName}</span>
-                  )}
-                  {insp.quantity != null && (
-                    <span>x{insp.quantity}</span>
-                  )}
-                  {insp.result ? (
-                    <Tag color={resultColors[insp.result]} style={{ margin: 0, fontSize: 11 }}>
-                      {resultLabels[insp.result] || insp.result}
-                    </Tag>
-                  ) : null}
-                  <RightOutlined style={{ fontSize: 10, color: '#ccc', marginLeft: 'auto' }} />
-                </div>
+          ) : inspections.map((insp) => (
+            <div
+              key={insp.id}
+              onClick={() => { setCurrentInsp(insp); setDrawerVisible(true); }}
+              style={{ background: '#fff', borderRadius: 10, padding: '12px 14px', marginBottom: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.04)', cursor: 'pointer' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                <span style={{ fontFamily: 'monospace', color: '#1677ff', fontSize: 13, flex: 1 }}>{insp.inspection_code}</span>
+                <Tag color={statusColors[insp.status]} style={{ margin: 0 }}>{statusLabels[insp.status] || insp.status}</Tag>
               </div>
-            );
-          })}
+              <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {insp.material_name || '-'}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', fontSize: 13, color: '#666', gap: 8, flexWrap: 'wrap' }}>
+                {insp.po?.po_code && <span style={{ fontFamily: 'monospace', fontSize: 12 }}>PO: {insp.po.po_code}</span>}
+                {insp.supplier?.name && <span>{insp.supplier.name}</span>}
+                {insp.quantity != null && <span>x{insp.quantity}</span>}
+                {(insp.overall_result || insp.result) ? (
+                  <Tag color={resultColors[insp.overall_result || insp.result]} style={{ margin: 0, fontSize: 11 }}>
+                    {resultLabels[insp.overall_result || insp.result]}
+                  </Tag>
+                ) : null}
+                <RightOutlined style={{ fontSize: 10, color: '#ccc', marginLeft: 'auto' }} />
+              </div>
+            </div>
+          ))}
         </div>
-
         {drawerNode}
       </div>
     );
@@ -354,7 +411,7 @@ const Inspections: React.FC = () => {
               placeholder="状态"
               allowClear
               style={{ width: 110 }}
-              options={Object.entries(statusLabels).map(([k, v]) => ({ value: k, label: v }))}
+              options={Object.entries(statusLabels).filter(([k]) => k !== 'in_progress').map(([k, v]) => ({ value: k, label: v }))}
               value={filterStatus}
               onChange={(v) => { setFilterStatus(v); setPage(1); }}
             />
@@ -392,7 +449,7 @@ const Inspections: React.FC = () => {
           dataSource={inspections}
           rowKey="id"
           loading={isLoading}
-          scroll={{ x: 950 }}
+          scroll={{ x: 1050 }}
           pagination={{
             current: page,
             pageSize,
@@ -408,7 +465,6 @@ const Inspections: React.FC = () => {
           })}
         />
       </Card>
-
       {drawerNode}
     </div>
   );

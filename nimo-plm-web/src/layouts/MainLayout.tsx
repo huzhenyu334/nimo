@@ -24,6 +24,7 @@ import {
   ArrowLeftOutlined,
   PartitionOutlined,
   DatabaseOutlined,
+  InboxOutlined,
 } from '@ant-design/icons';
 import { Dropdown, Avatar, Space, Spin } from 'antd';
 import { useAuth } from '@/contexts/AuthContext';
@@ -47,6 +48,7 @@ const pageTitles: Record<string, string> = {
   '/srm/purchase-requests': '采购需求',
   '/srm/purchase-orders': '采购订单',
   '/srm/inspections': '来料检验',
+  '/srm/inventory': '库存管理',
   '/srm/settlements': '对账结算',
   '/srm/corrective-actions': '8D改进',
   '/srm/evaluations': '供应商评价',
@@ -81,6 +83,7 @@ const moreMenuGroups = [
       { path: '/srm/purchase-requests', label: '采购需求', icon: <FileTextOutlined /> },
       { path: '/srm/purchase-orders', label: '采购订单', icon: <ShoppingCartOutlined /> },
       { path: '/srm/inspections', label: '来料检验', icon: <SafetyCertificateOutlined /> },
+      { path: '/srm/inventory', label: '库存管理', icon: <InboxOutlined /> },
       { path: '/srm/settlements', label: '对账结算', icon: <AccountBookOutlined /> },
       { path: '/srm/evaluations', label: '供应商评价', icon: <StarOutlined /> },
     ],
@@ -139,6 +142,7 @@ const MainLayout: React.FC = () => {
           { path: '/srm/purchase-requests', name: '采购需求', icon: <FileTextOutlined /> },
           { path: '/srm/purchase-orders', name: '采购订单', icon: <ShoppingCartOutlined /> },
           { path: '/srm/inspections', name: '来料检验', icon: <SafetyCertificateOutlined /> },
+          { path: '/srm/inventory', name: '库存管理', icon: <InboxOutlined /> },
           { path: '/srm/settlements', name: '对账结算', icon: <AccountBookOutlined /> },
           { path: '/srm/corrective-actions', name: '8D改进', icon: <ToolOutlined /> },
           { path: '/srm/evaluations', name: '供应商评价', icon: <StarOutlined /> },

@@ -778,6 +778,9 @@ func main() {
 		&srmentity.RFQ{},
 		&srmentity.RFQQuote{},
 		&srmentity.SamplingRequest{},
+		&srmentity.InspectionItem{},
+		&srmentity.InventoryRecord{},
+		&srmentity.InventoryTransaction{},
 	); err != nil {
 		zapLogger.Warn("AutoMigrate SRM tables warning", zap.Error(err))
 	}
@@ -849,13 +852,27 @@ func main() {
 			zapLogger.Warn("V16 migration warning", zap.String("sql", sql), zap.Error(err))
 		}
 	}
-	zapLogger.Info("SRM database migration completed (including V16)")
+	// V17: Inspection增强字段 + 库存表
+	v17SQL := []string{
+		"ALTER TABLE srm_inspections ADD COLUMN IF NOT EXISTS overall_result VARCHAR(20)",
+		"ALTER TABLE srm_inspections ADD COLUMN IF NOT EXISTS inspector VARCHAR(100)",
+		"ALTER TABLE srm_inspections ADD COLUMN IF NOT EXISTS inspection_date TIMESTAMP",
+	}
+	for _, sql := range v17SQL {
+		if err := db.Exec(sql).Error; err != nil {
+			zapLogger.Warn("V17 migration warning", zap.String("sql", sql), zap.Error(err))
+		}
+	}
+	zapLogger.Info("SRM database migration completed (including V17)")
 
 	// SRM仓库和服务
 	srmRepos := srmrepo.NewRepositories(db)
 	srmSupplierSvc := srmsvc.NewSupplierService(srmRepos.Supplier)
 	srmProcurementSvc := srmsvc.NewProcurementService(srmRepos.PR, srmRepos.PO, db)
 	srmInspectionSvc := srmsvc.NewInspectionService(srmRepos.Inspection, srmRepos.PR)
+	srmInventorySvc := srmsvc.NewInventoryService(srmRepos.Inventory)
+	srmInspectionSvc.SetPORepo(srmRepos.PO)
+	srmInspectionSvc.SetInventoryService(srmInventorySvc)
 	srmDashboardSvc := srmsvc.NewDashboardService(db)
 	srmProjectSvc := srmsvc.NewSRMProjectService(srmRepos.Project, srmRepos.PR, srmRepos.ActivityLog, srmRepos.DelayRequest, db)
 	srmSettlementSvc := srmsvc.NewSettlementService(srmRepos.Settlement)
@@ -867,6 +884,7 @@ func main() {
 	srmPRItemSvc := srmsvc.NewPRItemService(srmRepos.PR, srmRepos.Project, srmRepos.ActivityLog, db)
 	srmSamplingSvc := srmsvc.NewSamplingService(srmRepos.Sampling, srmRepos.PR, srmRepos.Supplier, srmRepos.ActivityLog, db)
 	srmHandlers := srmhandler.NewHandlers(srmSupplierSvc, srmProcurementSvc, srmInspectionSvc, srmDashboardSvc, srmRepos.PO, srmProjectSvc, srmSettlementSvc, srmCorrectiveActionSvc, srmEvaluationSvc, srmEquipmentSvc, srmRFQSvc, srmPRItemSvc, srmSamplingSvc)
+	srmHandlers.Inventory = srmhandler.NewInventoryHandler(srmInventorySvc)
 
 	// SRM→飞书：注入飞书客户端到SRM各服务
 	if feishuWorkflowClient != nil {
@@ -1503,9 +1521,20 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				{
 					inspections.GET("", srmH.Inspection.ListInspections)
 					inspections.POST("", srmH.Inspection.CreateInspection)
+					inspections.POST("/from-po", srmH.Inspection.CreateFromPO)
 					inspections.GET("/:id", srmH.Inspection.GetInspection)
 					inspections.PUT("/:id", srmH.Inspection.UpdateInspection)
 					inspections.POST("/:id/complete", srmH.Inspection.CompleteInspection)
+				}
+
+				// 库存管理
+				inventory := srmGroup.Group("/inventory")
+				{
+					inventory.GET("", srmH.Inventory.ListInventory)
+					inventory.GET("/:id/transactions", srmH.Inventory.GetTransactions)
+					inventory.POST("/in", srmH.Inventory.StockIn)
+					inventory.POST("/out", srmH.Inventory.StockOut)
+					inventory.POST("/adjust", srmH.Inventory.StockAdjust)
 				}
 
 				// 看板
