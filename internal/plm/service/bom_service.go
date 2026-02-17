@@ -433,6 +433,11 @@ func (s *ProjectBOMService) GlobalSearchItems(ctx context.Context, keyword, cate
 	})
 }
 
+// GetProjectBOMCostSummaries 获取所有项目的BOM成本汇总
+func (s *ProjectBOMService) GetProjectBOMCostSummaries(ctx context.Context) ([]repository.ProjectBOMCostSummary, error) {
+	return s.bomRepo.GetProjectBOMCostSummaries(ctx)
+}
+
 // DeleteItem 删除BOM行项
 func (s *ProjectBOMService) DeleteItem(ctx context.Context, bomID, itemID string) error {
 	bom, err := s.bomRepo.FindByID(ctx, bomID)

@@ -542,6 +542,12 @@ export const projectBomApi = {
     return { data: d.data || [], total: d.total || 0, page: d.page || 1, page_size: d.page_size || 20 };
   },
 
+  // 项目BOM成本汇总
+  bomCostSummary: async (): Promise<{ project_id: string; total_cost: number; total_items: number; unpriced_items: number }[]> => {
+    const response = await apiClient.get<ApiResponse<any[]>>('/bom-cost-summary');
+    return response.data.data || [];
+  },
+
   // 全局物料搜索（支持项目/供应商/制造商筛选）
   globalSearch: async (params: {
     q?: string;

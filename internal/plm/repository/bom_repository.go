@@ -490,3 +490,27 @@ func (r *ProjectBOMRepository) CreateStepMaterial(ctx context.Context, m *entity
 func (r *ProjectBOMRepository) DeleteStepMaterial(ctx context.Context, id string) error {
 	return r.db.WithContext(ctx).Delete(&entity.ProcessStepMaterial{}, "id = ?", id).Error
 }
+
+// ProjectBOMCostSummary 项目BOM成本汇总
+type ProjectBOMCostSummary struct {
+	ProjectID    string  `json:"project_id"`
+	TotalCost    float64 `json:"total_cost"`
+	TotalItems   int     `json:"total_items"`
+	UnpricedItems int    `json:"unpriced_items"`
+}
+
+// GetProjectBOMCostSummaries 获取所有项目的BOM成本汇总
+func (r *ProjectBOMRepository) GetProjectBOMCostSummaries(ctx context.Context) ([]ProjectBOMCostSummary, error) {
+	var results []ProjectBOMCostSummary
+	err := r.db.WithContext(ctx).
+		Table("project_bom_items").
+		Select(`project_boms.project_id,
+			SUM(COALESCE(project_bom_items.unit_price, 0) * project_bom_items.quantity) as total_cost,
+			COUNT(project_bom_items.id) as total_items,
+			COUNT(CASE WHEN project_bom_items.unit_price IS NULL OR project_bom_items.unit_price = 0 THEN 1 END) as unpriced_items`).
+		Joins("JOIN project_boms ON project_bom_items.bom_id = project_boms.id").
+		Where("project_boms.status != ?", "obsolete").
+		Group("project_boms.project_id").
+		Find(&results).Error
+	return results, err
+}

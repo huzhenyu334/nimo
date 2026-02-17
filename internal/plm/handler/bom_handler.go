@@ -335,6 +335,16 @@ func (h *BOMHandler) GlobalSearch(c *gin.Context) {
 	})
 }
 
+// BOMCostSummary GET /api/v1/bom-cost-summary
+func (h *BOMHandler) BOMCostSummary(c *gin.Context) {
+	summaries, err := h.svc.GetProjectBOMCostSummaries(c.Request.Context())
+	if err != nil {
+		InternalError(c, "获取成本汇总失败: "+err.Error())
+		return
+	}
+	Success(c, summaries)
+}
+
 func (h *BOMHandler) DeleteBOM(c *gin.Context) {
 	bomID := c.Param("bomId")
 	if err := h.svc.DeleteBOM(c.Request.Context(), bomID); err != nil {

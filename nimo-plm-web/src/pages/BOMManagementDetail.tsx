@@ -558,11 +558,15 @@ const BOMManagementDetail: React.FC = () => {
 
       {/* Cost summary for BOM detail */}
       {bomDetail && localItems.length > 0 && (() => {
+        const pricedItems = localItems.filter(item => item.unit_price != null && item.unit_price > 0);
         const totalCost = localItems.reduce((sum, item) => {
           const cost = item.extended_cost ?? ((item.quantity || 0) * (item.unit_price || 0));
           return sum + (cost || 0);
         }, 0);
-        const unpriced = localItems.filter(item => item.unit_price == null || item.unit_price === 0).length;
+        const unpriced = localItems.length - pricedItems.length;
+        const avgPrice = pricedItems.length > 0
+          ? pricedItems.reduce((s, i) => s + (i.unit_price || 0), 0) / pricedItems.length
+          : 0;
         const fmt = (v: number) => v > 0 ? `\u00a5${v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-';
         return (
           <div style={{
@@ -573,6 +577,9 @@ const BOMManagementDetail: React.FC = () => {
               {activeTab}总成本: <Text strong style={{ color: '#1677ff', fontSize: 15 }}>{fmt(totalCost)}</Text>
             </Text>
             <Text type="secondary" style={{ fontSize: 12 }}>共 {localItems.length} 项物料</Text>
+            {avgPrice > 0 && (
+              <Text type="secondary" style={{ fontSize: 12 }}>平均单价: {fmt(avgPrice)}</Text>
+            )}
             {unpriced > 0 && (
               <Text type="warning" style={{ fontSize: 12 }}>{unpriced}项未定价</Text>
             )}
