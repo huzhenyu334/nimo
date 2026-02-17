@@ -45,15 +45,16 @@ test.describe('BOM Management', () => {
     }
   });
 
-  test('bom detail has create button', async ({ page }) => {
+  test('bom detail has add row button', async ({ page }) => {
     await page.goto('/bom-management');
     await page.waitForTimeout(1500);
     const projectItems = page.locator('[style*="cursor: pointer"]');
     if (await projectItems.count() > 0) {
       await projectItems.first().click();
       await page.waitForTimeout(1500);
-      const createBtn = page.locator('button').filter({ hasText: '新建' });
-      await expect(createBtn).toBeVisible();
+      // BOM detail page shows "添加行" buttons for adding items to categories
+      const addRowBtn = page.locator('button').filter({ hasText: '添加行' });
+      await expect(addRowBtn.first()).toBeVisible();
     }
   });
 

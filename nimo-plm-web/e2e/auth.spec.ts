@@ -42,14 +42,11 @@ test.describe('Authentication', () => {
     expect(location).toContain('open.feishu.cn');
   });
 
-  // Feishu SSO full flow requires external OAuth - skip in automated tests
-  test.skip('full Feishu SSO login flow', async ({ page }) => {
-    // This test would require:
-    // 1. Navigate to /login
-    // 2. Click Feishu login button
-    // 3. Complete Feishu OAuth (requires real Feishu account)
-    // 4. Verify redirect back with tokens
-    // Skipped because it needs external Feishu authentication
+  test('login page has Feishu login button', async ({ page }) => {
     await page.goto('/login');
+    await page.waitForLoadState('domcontentloaded');
+    // Verify login page renders with a clickable login element
+    const loginBtn = page.locator('button, a, [role="button"]').filter({ hasText: /飞书|Feishu|登录|Login/i });
+    await expect(loginBtn.first()).toBeVisible({ timeout: 5000 });
   });
 });

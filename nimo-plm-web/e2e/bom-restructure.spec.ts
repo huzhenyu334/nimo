@@ -133,31 +133,22 @@ test.describe('BOM Restructure - 3-Level Architecture', () => {
     await page.goto('/projects');
     await page.waitForLoadState('networkidle');
 
-    // Try to enter a project
-    const projectRow = page.getByRole('row').nth(1);
-    const projectExists = await projectRow.isVisible().catch(() => false);
-    if (!projectExists) {
-      test.skip();
-      return;
-    }
-
-    // Click first project
-    await projectRow.click();
+    // Click first project card
+    const projectCard = page.locator('.ant-card-hoverable').first();
+    await expect(projectCard).toBeVisible({ timeout: 5000 });
+    await projectCard.click();
     await page.waitForLoadState('networkidle');
 
     // Navigate to BOM tab
     const bomTab = page.getByRole('tab', { name: /BOM/ });
-    if (await bomTab.isVisible().catch(() => false)) {
-      await bomTab.click();
-      await page.waitForLoadState('networkidle');
+    await expect(bomTab).toBeVisible({ timeout: 5000 });
+    await bomTab.click();
+    await page.waitForLoadState('networkidle');
 
-      // Check for "新建BOM" button — just verify it exists, do NOT click it
-      const createBtn = page.getByRole('button', { name: /新建/ });
-      if (await createBtn.isVisible().catch(() => false)) {
-        // Verify the button is present — no need to actually open modal and risk creating BOMs
-        await expect(createBtn).toBeVisible();
-      }
-    }
+    // Verify EBOM/PBOM/MBOM tabs are visible
+    await expect(page.locator('.ant-tabs-tab').filter({ hasText: 'EBOM' }).first()).toBeVisible();
+    await expect(page.locator('.ant-tabs-tab').filter({ hasText: 'PBOM' }).first()).toBeVisible();
+    await expect(page.locator('.ant-tabs-tab').filter({ hasText: 'MBOM' }).first()).toBeVisible();
   });
 
   // API tests - process routes (creates BOM, cleans up)

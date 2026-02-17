@@ -17,6 +17,16 @@ function getAuthToken(): string {
   return '';
 }
 
+// Helper: navigate to first project detail page
+async function navigateToProjectDetail(page: any) {
+  await page.goto('/projects');
+  await page.waitForLoadState('networkidle');
+  const projectCard = page.locator('.ant-card-hoverable').first();
+  await expect(projectCard).toBeVisible({ timeout: 5000 });
+  await projectCard.click();
+  await page.waitForLoadState('networkidle');
+}
+
 test.describe('SKU Management', () => {
   test('SKU API returns 401 without auth', async ({ request }) => {
     const response = await request.get('/api/v1/projects/fake-id/skus', {
@@ -27,7 +37,7 @@ test.describe('SKU Management', () => {
 
   test('SKU list API works with auth', async ({ request }) => {
     const token = getAuthToken();
-    if (!token) { test.skip(); return; }
+    expect(token).toBeTruthy();
 
     const projectsRes = await request.get('/api/v1/projects', {
       headers: { Authorization: `Bearer ${token}` },
@@ -35,7 +45,7 @@ test.describe('SKU Management', () => {
     expect(projectsRes.ok()).toBeTruthy();
     const projectsData = await projectsRes.json();
     const projects = projectsData.data?.items || projectsData.data || [];
-    if (projects.length === 0) { test.skip(); return; }
+    expect(projects.length).toBeGreaterThan(0);
 
     const projectId = projects[0].id;
     const skuRes = await request.get(`/api/v1/projects/${projectId}/skus`, {
@@ -48,14 +58,14 @@ test.describe('SKU Management', () => {
 
   test('SKU CRUD flow via API', async ({ request }) => {
     const token = getAuthToken();
-    if (!token) { test.skip(); return; }
+    expect(token).toBeTruthy();
     const headers = { Authorization: `Bearer ${token}` };
 
     // Get a project
     const projectsRes = await request.get('/api/v1/projects', { headers });
     const projectsData = await projectsRes.json();
     const projects = projectsData.data?.items || projectsData.data || [];
-    if (projects.length === 0) { test.skip(); return; }
+    expect(projects.length).toBeGreaterThan(0);
     const projectId = projects[0].id;
 
     // Create SKU
@@ -110,26 +120,13 @@ test.describe('SKU Management', () => {
   });
 
   test('project detail page has SKU tab', async ({ page }) => {
-    await page.goto('/projects');
-    await page.waitForLoadState('networkidle');
-
-    const detailBtn = page.getByRole('button', { name: '详情' }).first();
-    if (!(await detailBtn.isVisible())) { test.skip(); return; }
-    await detailBtn.click();
-    await page.waitForLoadState('networkidle');
-
+    await navigateToProjectDetail(page);
     const skuTab = page.getByRole('tab', { name: /SKU配色/ });
     await expect(skuTab).toBeVisible();
   });
 
   test('SKU tab shows list and create button', async ({ page }) => {
-    await page.goto('/projects');
-    await page.waitForLoadState('networkidle');
-
-    const detailBtn = page.getByRole('button', { name: '详情' }).first();
-    if (!(await detailBtn.isVisible())) { test.skip(); return; }
-    await detailBtn.click();
-    await page.waitForLoadState('networkidle');
+    await navigateToProjectDetail(page);
 
     await page.getByRole('tab', { name: /SKU配色/ }).click();
     await page.waitForTimeout(500);
@@ -139,13 +136,7 @@ test.describe('SKU Management', () => {
   });
 
   test('create and delete SKU via UI', async ({ page }) => {
-    await page.goto('/projects');
-    await page.waitForLoadState('networkidle');
-
-    const detailBtn = page.getByRole('button', { name: '详情' }).first();
-    if (!(await detailBtn.isVisible())) { test.skip(); return; }
-    await detailBtn.click();
-    await page.waitForLoadState('networkidle');
+    await navigateToProjectDetail(page);
 
     // Click SKU tab
     await page.getByRole('tab', { name: /SKU配色/ }).click();
