@@ -1139,6 +1139,7 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 			// Phase 2: BOM导入模板下载
 			authorized.GET("/bom-template", h.ProjectBOM.DownloadTemplate)
 			authorized.GET("/bom-items/search", h.ProjectBOM.SearchItems)
+			authorized.GET("/bom-items/search-paginated", h.ProjectBOM.SearchItemsPaginated)
 
 			// V18: 属性模板管理
 			bomTemplates := authorized.Group("/bom-attr-templates")

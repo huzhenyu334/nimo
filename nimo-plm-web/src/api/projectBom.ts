@@ -527,6 +527,20 @@ export const projectBomApi = {
     const response = await apiClient.get<ApiResponse<any[]>>('/bom-items/search', { params });
     return response.data.data || [];
   },
+
+  // 跨项目搜索BOM行项（分页版，用于全局物料查询页面）
+  searchItemsPaginated: async (params: {
+    q?: string;
+    category?: string;
+    sub_category?: string;
+    bom_id?: string;
+    page?: number;
+    page_size?: number;
+  }): Promise<{ data: any[]; total: number; page: number; page_size: number }> => {
+    const response = await apiClient.get('/bom-items/search-paginated', { params });
+    const d = response.data as any;
+    return { data: d.data || [], total: d.total || 0, page: d.page || 1, page_size: d.page_size || 20 };
+  },
 };
 
 export interface BOMPermissions {

@@ -23,6 +23,7 @@ import {
   RightOutlined,
   ArrowLeftOutlined,
   PartitionOutlined,
+  DatabaseOutlined,
 } from '@ant-design/icons';
 import { Dropdown, Avatar, Space, Spin } from 'antd';
 import { useAuth } from '@/contexts/AuthContext';
@@ -35,6 +36,7 @@ const pageTitles: Record<string, string> = {
   '/projects': '研发项目',
   '/approvals': '审批中心',
   '/materials': '物料选型库',
+  '/material-search': '物料查询',
   '/templates': '流程管理',
   '/roles': '角色管理',
   '/bom-management': 'BOM管理',
@@ -86,6 +88,7 @@ const moreMenuGroups = [
   {
     title: '系统设置',
     items: [
+      { path: '/material-search', label: '物料查询', icon: <DatabaseOutlined /> },
       { path: '/materials', label: '物料选型库', icon: <ExperimentOutlined /> },
       { path: '/roles', label: '角色管理', icon: <TeamOutlined /> },
     ],
@@ -120,6 +123,7 @@ const MainLayout: React.FC = () => {
       { path: '/projects', name: '项目管理', icon: <ProjectOutlined /> },
       { path: '/bom-management', name: 'BOM管理', icon: <PartitionOutlined /> },
       { path: '/bom-ecn', name: 'BOM ECN管理', icon: <SwapOutlined /> },
+      { path: '/material-search', name: '物料查询', icon: <DatabaseOutlined /> },
       { path: '/materials', name: '物料选型库', icon: <ExperimentOutlined /> },
       { path: '/templates', name: '流程管理', icon: <SnippetsOutlined /> },
       { path: '/approvals', name: '审批管理', icon: <AuditOutlined /> },

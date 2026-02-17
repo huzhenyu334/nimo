@@ -413,6 +413,11 @@ func (s *ProjectBOMService) SearchItems(ctx context.Context, keyword, category s
 	return s.bomRepo.SearchItems(ctx, keyword, category, limit)
 }
 
+// SearchItemsPaginated 跨项目搜索BOM行项（分页版）
+func (s *ProjectBOMService) SearchItemsPaginated(ctx context.Context, keyword, category, subCategory, bomID string, page, pageSize int) ([]repository.MaterialSearchResult, int64, error) {
+	return s.bomRepo.SearchItemsPaginated(ctx, keyword, category, subCategory, bomID, page, pageSize)
+}
+
 // DeleteItem 删除BOM行项
 func (s *ProjectBOMService) DeleteItem(ctx context.Context, bomID, itemID string) error {
 	bom, err := s.bomRepo.FindByID(ctx, bomID)

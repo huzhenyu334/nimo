@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Typography, Tag, Empty, Space, Spin } from 'antd';
+import { Button, Typography, Tag, Empty, Spin } from 'antd';
 import {
   PlusOutlined,
   GiftOutlined,
@@ -326,9 +326,12 @@ const PBOMControl: React.FC<PBOMControlProps> = ({
           <Text style={{ fontSize: 13 }}>
             PBOM总成本: <Text strong style={{ color: '#1677ff' }}>{formatCurrency(totalCost)}</Text>
           </Text>
-          <Space>
-            <Text type="secondary" style={{ fontSize: 12 }}>共 {value.length} 项</Text>
-          </Space>
+          <Text type="secondary" style={{ fontSize: 12 }}>共 {value.length} 项</Text>
+          {value.filter(item => item.unit_price == null || item.unit_price === 0).length > 0 && (
+            <Text type="warning" style={{ fontSize: 12 }}>
+              {value.filter(item => item.unit_price == null || item.unit_price === 0).length}项未定价
+            </Text>
+          )}
         </div>
       )}
       {/* 添加物料弹窗 */}

@@ -119,7 +119,17 @@ const DynamicBOMTable: React.FC<DynamicBOMTableProps> = ({
         });
         onChange(newItems);
       } else {
-        const newItems = items.map(item => item.id === record.id ? { ...item, [field]: value } : item);
+        const newItems = items.map(item => {
+          if (item.id !== record.id) return item;
+          const updated = { ...item, [field]: value };
+          // Auto-compute extended_cost when quantity or unit_price changes
+          if (field === 'quantity' || field === 'unit_price') {
+            const qty = field === 'quantity' ? (Number(value) || 0) : (item.quantity || 0);
+            const price = field === 'unit_price' ? (Number(value) || 0) : (item.unit_price || 0);
+            updated.extended_cost = qty * price;
+          }
+          return updated;
+        });
         onChange(newItems);
       }
     }

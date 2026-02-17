@@ -547,6 +547,30 @@ const BOMManagementDetail: React.FC = () => {
         </div>
       )}
 
+      {/* Cost summary for BOM detail */}
+      {bomDetail && localItems.length > 0 && (() => {
+        const totalCost = localItems.reduce((sum, item) => {
+          const cost = item.extended_cost ?? ((item.quantity || 0) * (item.unit_price || 0));
+          return sum + (cost || 0);
+        }, 0);
+        const unpriced = localItems.filter(item => item.unit_price == null || item.unit_price === 0).length;
+        const fmt = (v: number) => v > 0 ? `\u00a5${v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-';
+        return (
+          <div style={{
+            display: 'flex', gap: 16, padding: '10px 16px', background: '#f6ffed',
+            borderRadius: 6, border: '1px solid #b7eb8f', flexWrap: 'wrap', marginTop: 12, alignItems: 'center',
+          }}>
+            <Text style={{ fontSize: 13 }}>
+              {activeTab}总成本: <Text strong style={{ color: '#1677ff', fontSize: 15 }}>{fmt(totalCost)}</Text>
+            </Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>共 {localItems.length} 项物料</Text>
+            {unpriced > 0 && (
+              <Text type="warning" style={{ fontSize: 12 }}>{unpriced}项未定价</Text>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Create BOM Modal */}
       <Modal
         title="新建BOM"

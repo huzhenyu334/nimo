@@ -199,6 +199,57 @@ func (r *ProjectBOMRepository) SearchItems(ctx context.Context, keyword string, 
 	return items, err
 }
 
+// MaterialSearchResult wraps a BOM item with its parent BOM's project/type info
+type MaterialSearchResult struct {
+	entity.ProjectBOMItem
+	ProjectID   string `json:"project_id" gorm:"column:project_id"`
+	BOMType     string `json:"bom_type" gorm:"column:bom_type"`
+	ProjectName string `json:"project_name" gorm:"column:project_name"`
+}
+
+// SearchItemsPaginated 跨项目搜索BOM行项（分页版，用于全局物料查询页面）
+func (r *ProjectBOMRepository) SearchItemsPaginated(ctx context.Context, keyword, category, subCategory, bomID string, page, pageSize int) ([]MaterialSearchResult, int64, error) {
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 20
+	}
+	if page <= 0 {
+		page = 1
+	}
+	var total int64
+	query := r.db.WithContext(ctx).Model(&entity.ProjectBOMItem{})
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		query = query.Where(
+			"project_bom_items.name ILIKE ? OR project_bom_items.mpn ILIKE ? OR project_bom_items.supplier ILIKE ? OR project_bom_items.extended_attrs->>'specification' ILIKE ?",
+			like, like, like, like,
+		)
+	}
+	if category != "" {
+		query = query.Where("project_bom_items.category = ?", category)
+	}
+	if subCategory != "" {
+		query = query.Where("project_bom_items.sub_category = ?", subCategory)
+	}
+	if bomID != "" {
+		query = query.Where("project_bom_items.bom_id = ?", bomID)
+	}
+	// Count total
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	// Fetch with joins to get project/bom info
+	var items []MaterialSearchResult
+	err := query.
+		Joins("LEFT JOIN project_boms ON project_boms.id = project_bom_items.bom_id").
+		Joins("LEFT JOIN projects ON projects.id = project_boms.project_id").
+		Select("project_bom_items.*, project_boms.project_id, project_boms.bom_type, projects.name as project_name").
+		Order("project_bom_items.updated_at DESC").
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Find(&items).Error
+	return items, total, err
+}
+
 // FindItemsByMPN 按MPN精确查找已有BOM行项（用于导入去重）
 func (r *ProjectBOMRepository) FindItemsByMPN(ctx context.Context, bomID string, mpns []string) (map[string]entity.ProjectBOMItem, error) {
 	if len(mpns) == 0 {
