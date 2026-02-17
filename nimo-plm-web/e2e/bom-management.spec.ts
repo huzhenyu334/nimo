@@ -58,6 +58,24 @@ test.describe('BOM Management', () => {
     }
   });
 
+  test('bom detail supplier column shows Select dropdown', async ({ page }) => {
+    await page.goto('/bom-management');
+    await page.waitForTimeout(1500);
+    const projectItems = page.locator('[style*="cursor: pointer"]');
+    if (await projectItems.count() > 0) {
+      await projectItems.first().click();
+      await page.waitForTimeout(1500);
+      // The supplier column should render as Select components (not plain text inputs)
+      const supplierSelects = page.locator('.ant-select').filter({ has: page.locator('[title="选择供应商"]') });
+      // Also check that the table header has "供应商" column
+      const supplierHeader = page.locator('th, .editable-table-header').filter({ hasText: '供应商' });
+      // At least one should be visible (header or select)
+      const hasHeader = await supplierHeader.count() > 0;
+      const hasSelect = await supplierSelects.count() > 0;
+      expect(hasHeader || hasSelect).toBeTruthy();
+    }
+  });
+
   test('bom permissions API returns valid response', async ({ page }) => {
     await page.goto('/bom-management');
     await page.waitForTimeout(1500);

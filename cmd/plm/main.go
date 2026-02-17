@@ -122,6 +122,11 @@ func main() {
 	// V16: STP缩略图URL字段
 	db.Exec("ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS thumbnail_url VARCHAR(512)")
 
+	// V19: BOM供应商关联字段
+	db.Exec("ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS supplier_id VARCHAR(32)")
+	db.Exec("ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS manufacturer_id VARCHAR(32)")
+	db.Exec("ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS mpn VARCHAR(128)")
+
 	// V18: BOM ECN功能
 	if err := db.AutoMigrate(&entity.BOMDraft{}, &entity.BOMECN{}); err != nil {
 		zapLogger.Warn("AutoMigrate BOM ECN tables warning", zap.Error(err))

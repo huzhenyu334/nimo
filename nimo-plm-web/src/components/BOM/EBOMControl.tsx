@@ -210,6 +210,8 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
           readonly={readonly || !catEditable}
           onItemSave={onItemSave}
           showMaterialCode={showMaterialCode}
+          bomType="EBOM"
+          category={category}
         />
       </div>
     );

@@ -332,6 +332,7 @@ export const srmApi = {
   listSuppliers: async (params?: {
     search?: string;
     category?: string;
+    category_ne?: string;
     level?: string;
     status?: string;
     page?: number;

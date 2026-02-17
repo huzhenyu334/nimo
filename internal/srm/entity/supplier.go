@@ -112,11 +112,12 @@ func (Supplier) TableName() string {
 
 // 供应商分类
 const (
-	SupplierCategoryStructural = "structural"
-	SupplierCategoryElectronic = "electronic"
-	SupplierCategoryOptical    = "optical"
-	SupplierCategoryPackaging  = "packaging"
-	SupplierCategoryOther      = "other"
+	SupplierCategoryStructural   = "structural"
+	SupplierCategoryElectronic   = "electronic"
+	SupplierCategoryOptical      = "optical"
+	SupplierCategoryPackaging    = "packaging"
+	SupplierCategoryManufacturer = "manufacturer" // 芯片原厂/制造商
+	SupplierCategoryOther        = "other"
 )
 
 // 供应商等级

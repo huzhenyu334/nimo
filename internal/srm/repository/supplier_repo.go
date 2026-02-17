@@ -32,6 +32,9 @@ func (r *SupplierRepository) FindAll(ctx context.Context, page, pageSize int, fi
 	if category := filters["category"]; category != "" {
 		query = query.Where("category = ?", category)
 	}
+	if categoryNe := filters["category_ne"]; categoryNe != "" {
+		query = query.Where("category != ?", categoryNe)
+	}
 	if level := filters["level"]; level != "" {
 		query = query.Where("level = ?", level)
 	}

@@ -66,7 +66,10 @@ type ProjectBOMItem struct {
 	Name         string   `json:"name" gorm:"size:128;not null"`
 	Quantity     float64  `json:"quantity" gorm:"type:numeric(15,4);not null;default:1"`
 	Unit         string   `json:"unit" gorm:"size:16;not null;default:pcs"`
-	Supplier     string   `json:"supplier,omitempty" gorm:"size:128"`
+	Supplier     string   `json:"supplier,omitempty" gorm:"size:128"`              // 旧文本字段（兼容）
+	SupplierID   *string  `json:"supplier_id,omitempty" gorm:"size:32"`            // 供应商ID，关联srm_suppliers
+	ManufacturerID *string `json:"manufacturer_id,omitempty" gorm:"size:32"`       // 制造商ID，关联srm_suppliers（电子料）
+	MPN          string   `json:"mpn,omitempty" gorm:"size:128"`                   // 制造商料号
 	UnitPrice    *float64 `json:"unit_price,omitempty" gorm:"type:numeric(15,4)"`
 	ExtendedCost *float64 `json:"extended_cost,omitempty" gorm:"type:numeric(15,4)"`
 	Notes        string   `json:"notes,omitempty"`

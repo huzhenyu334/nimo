@@ -197,6 +197,8 @@ const PBOMControl: React.FC<PBOMControlProps> = ({
           readonly={readonly || !catEditable}
           onItemSave={onItemSave}
           showMaterialCode={showMaterialCode}
+          bomType="PBOM"
+          category={category}
         />
 
         {/* Add row button */}

@@ -128,6 +128,67 @@ test.describe('BOM Restructure - 3-Level Architecture', () => {
     expect(treeResp.status()).toBe(200);
   });
 
+  // API tests - BOM item with supplier_id, manufacturer_id, mpn
+  test('create EBOM item with supplier_id and manufacturer_id', async ({ request }) => {
+    const proj = await getFirstProjectId(request);
+    if (!proj) { test.skip(); return; }
+
+    // Create EBOM
+    const createResp = await request.post(`/api/v1/projects/${proj.projectId}/boms`, {
+      data: { name: 'E2E-Supplier-Test', bom_type: 'EBOM', version: 'v1.0' },
+      headers: authHeaders,
+    });
+    expect(createResp.status()).toBe(201);
+    const bom = (await createResp.json()).data;
+    createdBomIds.push({ projectId: proj.projectId, bomId: bom.id });
+
+    // Add item with supplier_id, manufacturer_id, mpn
+    const itemResp = await request.post(`/api/v1/projects/${proj.projectId}/boms/${bom.id}/items`, {
+      data: {
+        name: '电容C1',
+        quantity: 20,
+        unit: 'pcs',
+        category: 'electronic',
+        sub_category: 'component',
+        supplier_id: null,
+        manufacturer_id: 'mfr-murata-001',
+        mpn: 'GRM155R71C104KA88D',
+      },
+      headers: authHeaders,
+    });
+    expect(itemResp.status()).toBe(201);
+    const item = (await itemResp.json()).data;
+    expect(item.manufacturer_id).toBe('mfr-murata-001');
+    expect(item.mpn).toBe('GRM155R71C104KA88D');
+  });
+
+  // API tests - supplier search with category_ne filter
+  test('supplier search excludes manufacturer category', async ({ request }) => {
+    // Search all suppliers excluding manufacturer
+    const resp = await request.get('/api/v1/srm/suppliers?category_ne=manufacturer&page_size=50', {
+      headers: authHeaders,
+    });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    const items = body.data?.items || [];
+    // None should be manufacturer
+    for (const s of items) {
+      expect(s.category).not.toBe('manufacturer');
+    }
+
+    // Search only manufacturer
+    const mfrResp = await request.get('/api/v1/srm/suppliers?category=manufacturer', {
+      headers: authHeaders,
+    });
+    expect(mfrResp.status()).toBe(200);
+    const mfrBody = await mfrResp.json();
+    const mfrItems = mfrBody.data?.items || [];
+    expect(mfrItems.length).toBeGreaterThanOrEqual(3); // TI, Murata, Samsung
+    for (const s of mfrItems) {
+      expect(s.category).toBe('manufacturer');
+    }
+  });
+
   // UI tests - BOM tab loads with new type labels
   test('BOM tab shows EBOM/PBOM/MBOM type options', async ({ page }) => {
     await page.goto('/projects');

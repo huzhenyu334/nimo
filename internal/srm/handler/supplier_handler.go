@@ -19,10 +19,11 @@ func NewSupplierHandler(svc *service.SupplierService) *SupplierHandler {
 func (h *SupplierHandler) ListSuppliers(c *gin.Context) {
 	page, pageSize := GetPagination(c)
 	filters := map[string]string{
-		"search":   c.Query("search"),
-		"category": c.Query("category"),
-		"level":    c.Query("level"),
-		"status":   c.Query("status"),
+		"search":      c.Query("search"),
+		"category":    c.Query("category"),
+		"category_ne": c.Query("category_ne"),
+		"level":       c.Query("level"),
+		"status":      c.Query("status"),
 	}
 
 	items, total, err := h.svc.List(c.Request.Context(), page, pageSize, filters)

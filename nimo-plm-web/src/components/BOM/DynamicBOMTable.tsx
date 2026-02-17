@@ -17,6 +17,7 @@ import type { CategoryAttrTemplate } from '@/api/projectBom';
 import { COMMON_FIELDS } from './bomConstants';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import EditableTable, { type EditableColumn } from '../EditableTable';
+import SupplierSelect from './SupplierSelect';
 
 const { Text } = Typography;
 
@@ -34,6 +35,8 @@ export interface DynamicBOMTableProps {
   onItemSave?: (itemId: string, field: string, value: any) => void;
   showMaterialCode?: boolean;
   onDeleteRow?: (itemId: string) => void;
+  bomType?: string;  // EBOM/PBOM/MBOM — 用于控制是否显示制造商/MPN列
+  category?: string; // 大类: electronic/structural/... — 电子BOM才显示制造商/MPN
 }
 
 // ========== Helpers ==========
@@ -66,6 +69,8 @@ const DynamicBOMTable: React.FC<DynamicBOMTableProps> = ({
   onItemSave,
   showMaterialCode = false,
   onDeleteRow,
+  bomType,
+  category,
 }) => {
   const isMobile = useIsMobile();
 
@@ -94,10 +99,14 @@ const DynamicBOMTable: React.FC<DynamicBOMTableProps> = ({
     return showable.sort((a, b) => a.sort_order - b.sort_order);
   }, [templates, fieldOrder]);
 
+  // Fields that live on the item directly (not in extended_attrs)
+  const DIRECT_FIELDS = useMemo(() => [
+    ...COMMON_FIELDS, 'item_number', 'supplier_id', 'manufacturer_id', 'mpn', 'manufacturer_name',
+  ], []);
+
   // Handle cell save — route to extended_attrs or common fields
   const handleCellSave = useCallback((record: Record<string, any>, field: string, value: any, _index: number) => {
-    const isExtendedField = !COMMON_FIELDS.includes(field)
-      && field !== 'item_number'
+    const isExtendedField = !DIRECT_FIELDS.includes(field)
       && templates.some(t => t.field_key === field);
 
     if (onItemSave && record.id) {
@@ -114,7 +123,7 @@ const DynamicBOMTable: React.FC<DynamicBOMTableProps> = ({
         onChange(newItems);
       }
     }
-  }, [items, onChange, onItemSave, templates]);
+  }, [items, onChange, onItemSave, templates, DIRECT_FIELDS]);
 
   // Handle delete
   const handleDeleteRow = useCallback((record: Record<string, any>, _index: number) => {
@@ -158,15 +167,64 @@ const DynamicBOMTable: React.FC<DynamicBOMTableProps> = ({
             return cost > 0 ? Number(cost).toFixed(2) : <Text type="secondary" style={{ fontSize: 11 }}>-</Text>;
           },
         });
+      } else if (fieldKey === 'supplier') {
+        // Supplier column: Select with search (关联suppliers表)
+        cols.push({
+          key: 'supplier_id', title: config.title, width: 130, editable: false,
+          render: (_: any, record: Record<string, any>) => (
+            <SupplierSelect
+              value={record.supplier_id}
+              displayName={record.supplier}
+              categoryNe="manufacturer"
+              readonly={readonly}
+              placeholder="选择供应商"
+              onChange={(supplierId, supplierName) => {
+                const newItems = items.map(item =>
+                  item.id === record.id
+                    ? { ...item, supplier_id: supplierId, supplier: supplierName }
+                    : item,
+                );
+                onChange(newItems);
+              }}
+            />
+          ),
+        });
       } else {
         cols.push({
           key: fieldKey, title: config.title, width: config.width, align: config.align,
-          type: config.type, ellipsis: fieldKey === 'supplier' || fieldKey === 'notes',
+          type: config.type, ellipsis: fieldKey === 'notes',
           formatValue: fieldKey === 'unit_price'
             ? (v: any) => (v != null && v !== '') ? Number(v).toFixed(2) : null
             : undefined,
         });
       }
+    }
+
+    // EBOM electronic: 制造商 + MPN 列
+    if (bomType === 'EBOM' && category === 'electronic') {
+      cols.push({
+        key: 'manufacturer_id', title: '制造商', width: 130, editable: false,
+        render: (_: any, record: Record<string, any>) => (
+          <SupplierSelect
+            value={record.manufacturer_id}
+            displayName={record.manufacturer_name}
+            category="manufacturer"
+            readonly={readonly}
+            placeholder="选择制造商"
+            onChange={(mfrId, mfrName) => {
+              const newItems = items.map(item =>
+                item.id === record.id
+                  ? { ...item, manufacturer_id: mfrId, manufacturer_name: mfrName }
+                  : item,
+              );
+              onChange(newItems);
+            }}
+          />
+        ),
+      });
+      cols.push({
+        key: 'mpn', title: 'MPN', width: 120, type: 'text', ellipsis: true,
+      });
     }
 
     // Extended template fields
@@ -280,7 +338,7 @@ const DynamicBOMTable: React.FC<DynamicBOMTableProps> = ({
     }
 
     return cols;
-  }, [orderedTemplates, showMaterialCode, items, onChange, readonly]);
+  }, [orderedTemplates, showMaterialCode, items, onChange, readonly, bomType, category]);
 
   // Mobile card view (BOM-specific)
   if (isMobile) {

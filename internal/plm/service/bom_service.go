@@ -231,9 +231,12 @@ func (s *ProjectBOMService) AddItem(ctx context.Context, bomID string, input *BO
 		Name:          input.Name,
 		Quantity:      input.Quantity,
 		Unit:          input.Unit,
-		Supplier:      input.Supplier,
-		UnitPrice:     input.UnitPrice,
-		IsAlternative: input.IsAlternative,
+		Supplier:       input.Supplier,
+		SupplierID:     input.SupplierID,
+		ManufacturerID: input.ManufacturerID,
+		MPN:            input.MPN,
+		UnitPrice:      input.UnitPrice,
+		IsAlternative:  input.IsAlternative,
 		ThumbnailURL:  input.ThumbnailURL,
 		Notes:         input.Notes,
 		CreatedAt:     time.Now(),
@@ -464,6 +467,15 @@ func (s *ProjectBOMService) UpdateItem(ctx context.Context, bomID, itemID string
 	}
 	if has("supplier") {
 		item.Supplier = input.Supplier
+	}
+	if has("supplier_id") {
+		item.SupplierID = input.SupplierID
+	}
+	if has("manufacturer_id") {
+		item.ManufacturerID = input.ManufacturerID
+	}
+	if has("mpn") {
+		item.MPN = input.MPN
 	}
 	if has("unit_price") {
 		item.UnitPrice = input.UnitPrice
@@ -2677,6 +2689,9 @@ type BOMItemInput struct {
 	Manufacturer     string                 `json:"manufacturer"`     // kept for API compat, stored in extended_attrs
 	ManufacturerPN   string                 `json:"manufacturer_pn"`  // kept for API compat, stored in extended_attrs
 	Supplier         string                 `json:"supplier"`
+	SupplierID       *string                `json:"supplier_id"`
+	ManufacturerID   *string                `json:"manufacturer_id"`
+	MPN              string                 `json:"mpn"`
 	SupplierPN       string                 `json:"supplier_pn"`      // kept for API compat, stored in extended_attrs
 	UnitPrice        *float64               `json:"unit_price"`
 	LeadTimeDays     *int                   `json:"lead_time_days"`   // kept for API compat, stored in extended_attrs
