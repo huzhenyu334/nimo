@@ -38,6 +38,7 @@ const pageTitles: Record<string, string> = {
   '/templates': '流程管理',
   '/roles': '角色管理',
   '/bom-management': 'BOM管理',
+  '/bom-ecn': 'BOM ECN管理',
   '/ecn': 'ECN变更管理',
   '/srm': 'SRM采购管理',
   '/srm/suppliers': '供应商',
@@ -65,6 +66,7 @@ const moreMenuGroups = [
     title: '项目管理',
     items: [
       { path: '/bom-management', label: 'BOM管理', icon: <PartitionOutlined /> },
+      { path: '/bom-ecn', label: 'BOM ECN管理', icon: <SwapOutlined /> },
       { path: '/templates', label: '流程管理', icon: <SnippetsOutlined /> },
       { path: '/ecn', label: 'ECN变更管理', icon: <SwapOutlined /> },
     ],
@@ -117,6 +119,7 @@ const MainLayout: React.FC = () => {
       { path: '/my-tasks', name: '我的任务', icon: <CheckSquareOutlined /> },
       { path: '/projects', name: '项目管理', icon: <ProjectOutlined /> },
       { path: '/bom-management', name: 'BOM管理', icon: <PartitionOutlined /> },
+      { path: '/bom-ecn', name: 'BOM ECN管理', icon: <SwapOutlined /> },
       { path: '/materials', name: '物料选型库', icon: <ExperimentOutlined /> },
       { path: '/templates', name: '流程管理', icon: <SnippetsOutlined /> },
       { path: '/approvals', name: '审批管理', icon: <AuditOutlined /> },

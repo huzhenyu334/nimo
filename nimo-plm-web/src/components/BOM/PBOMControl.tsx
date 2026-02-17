@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Button, Typography, Tag, Empty, Space } from 'antd';
+import React, { useMemo, useCallback } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Button, Typography, Tag, Empty, Space, Spin } from 'antd';
 import {
   PlusOutlined,
   GiftOutlined,
@@ -72,19 +73,20 @@ const PBOMControl: React.FC<PBOMControlProps> = ({
   onMobileAddRow,
 }) => {
   const value = Array.isArray(rawValue) ? rawValue : [];
-  const [allTemplates, setAllTemplates] = useState<CategoryAttrTemplate[]>([]);
   const isMobile = useIsMobile();
+
+  // Fetch templates via react-query (cached globally, 5min staleTime)
+  const { data: allTemplates = [], isLoading: templatesLoading } = useQuery({
+    queryKey: ['bom-attr-templates'],
+    queryFn: () => projectBomApi.listTemplates(),
+    staleTime: 5 * 60 * 1000,
+  });
 
   const isCategoryEditable = useCallback((category: string): boolean => {
     if (readonly) return false;
     if (!editableCategories) return true;
     return editableCategories.includes(category);
   }, [readonly, editableCategories]);
-
-  // Fetch templates on mount
-  useEffect(() => {
-    projectBomApi.listTemplates().then(setAllTemplates).catch(() => {});
-  }, []);
 
   // Determine which categories and sub-categories to show
   const visibleCategories = useMemo(() => {
@@ -213,6 +215,11 @@ const PBOMControl: React.FC<PBOMControlProps> = ({
       </div>
     );
   };
+
+  // Wait for templates before rendering tables
+  if (templatesLoading) {
+    return <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>;
+  }
 
   // Mobile layout — Meituan-style category view
   if (isMobile) {

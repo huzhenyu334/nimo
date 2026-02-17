@@ -26,6 +26,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { srmApi, SRMProject, PRItem, PurchaseRequest, ActivityLog, Supplier, SamplingRequest } from '@/api/srm';
 import { projectApi } from '@/api/projects';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { Input } from 'antd';
 import dayjs from 'dayjs';
 
@@ -126,6 +127,7 @@ const STATUS_ACTIONS: Record<string, Array<{ label: string; toStatus: string; da
 const KanbanBoard: React.FC = () => {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
+  const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
   const projectId = searchParams.get('project') || '';
   const [drawerItem, setDrawerItem] = useState<KanbanItem | null>(null);
@@ -588,53 +590,75 @@ const KanbanBoard: React.FC = () => {
   ];
 
   return (
-    <div>
+    <div style={{ padding: isMobile ? 8 : 0 }}>
       {/* Top bar: project selector + stats */}
-      <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontWeight: 600, fontSize: 16 }}>采购看板</span>
-          <Select
-            placeholder="选择采购项目"
-            style={{ width: 260 }}
-            value={projectId || undefined}
-            onChange={handleProjectChange}
-            loading={projectsLoading}
-            showSearch
-            optionFilterProp="label"
-            options={projectOptions}
-          />
-          <ReloadOutlined
-            style={{ cursor: 'pointer', color: '#1890ff' }}
-            onClick={() => refreshKanban()}
-          />
+      <div style={{ marginBottom: isMobile ? 12 : 16, display: 'flex', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? 10 : 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: isMobile ? 'stretch' : 'center', gap: 8, flexDirection: isMobile ? 'column' : 'row' }}>
+          {!isMobile && <span style={{ fontWeight: 600, fontSize: 16 }}>采购看板</span>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Select
+              placeholder="选择采购项目"
+              style={{ width: isMobile ? '100%' : 260, flex: isMobile ? 1 : undefined }}
+              value={projectId || undefined}
+              onChange={handleProjectChange}
+              loading={projectsLoading}
+              showSearch
+              optionFilterProp="label"
+              options={projectOptions}
+            />
+            <ReloadOutlined
+              style={{ cursor: 'pointer', color: '#1890ff', fontSize: 16 }}
+              onClick={() => refreshKanban()}
+            />
+          </div>
           <Select
             mode="multiple"
             placeholder="需求分类"
-            style={{ width: 320 }}
+            style={{ width: isMobile ? '100%' : 320 }}
             value={selectedCategories}
             onChange={handleCategoryChange}
-            maxTagCount={2}
+            maxTagCount={isMobile ? 1 : 2}
             maxTagPlaceholder={(omitted) => `+${omitted.length}`}
             options={CATEGORY_FILTERS}
           />
         </div>
 
         {projectId && allItems.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flex: 1 }}>
-            <span style={{ color: '#666', fontSize: 13 }}>
-              总计: <strong>{stats.total}</strong> |
-              寻源中: <strong>{stats.pending}</strong> |
-              已下单: <strong>{stats.ordered}</strong> |
-              已收货: <strong>{stats.received}</strong> |
-              已通过: <strong>{stats.passed}/{stats.total}</strong> ({stats.pct}%)
-            </span>
-            <Progress
-              percent={stats.pct}
-              size="small"
-              style={{ width: 160, margin: 0 }}
-              strokeColor="#52c41a"
-            />
-          </div>
+          isMobile ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+              <div style={{ background: '#f6ffed', borderRadius: 8, padding: '8px 10px', textAlign: 'center' }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{stats.passed}/{stats.total}</div>
+                <div style={{ fontSize: 11, color: '#999' }}>已通过</div>
+              </div>
+              <div style={{ background: '#e6f7ff', borderRadius: 8, padding: '8px 10px', textAlign: 'center' }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: '#1890ff' }}>{stats.ordered}</div>
+                <div style={{ fontSize: 11, color: '#999' }}>已下单</div>
+              </div>
+              <div style={{ background: '#fff7e6', borderRadius: 8, padding: '8px 10px', textAlign: 'center' }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: '#faad14' }}>{stats.pending}</div>
+                <div style={{ fontSize: 11, color: '#999' }}>寻源中</div>
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <Progress percent={stats.pct} size="small" strokeColor="#52c41a" />
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flex: 1 }}>
+              <span style={{ color: '#666', fontSize: 13 }}>
+                总计: <strong>{stats.total}</strong> |
+                寻源中: <strong>{stats.pending}</strong> |
+                已下单: <strong>{stats.ordered}</strong> |
+                已收货: <strong>{stats.received}</strong> |
+                已通过: <strong>{stats.passed}/{stats.total}</strong> ({stats.pct}%)
+              </span>
+              <Progress
+                percent={stats.pct}
+                size="small"
+                style={{ width: 160, margin: 0 }}
+                strokeColor="#52c41a"
+              />
+            </div>
+          )
         )}
       </div>
 

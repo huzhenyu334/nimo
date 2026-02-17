@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Button, Typography, Tag, Empty, Space } from 'antd';
+import React, { useMemo, useCallback } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Button, Typography, Tag, Empty, Space, Spin } from 'antd';
 import {
   PlusOutlined,
   ExperimentOutlined,
@@ -74,8 +75,14 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
   onMobileAddRow,
 }) => {
   const value = Array.isArray(rawValue) ? rawValue : [];
-  const [allTemplates, setAllTemplates] = useState<CategoryAttrTemplate[]>([]);
   const isMobile = useIsMobile();
+
+  // Fetch templates via react-query (cached globally, 5min staleTime)
+  const { data: allTemplates = [], isLoading: templatesLoading } = useQuery({
+    queryKey: ['bom-attr-templates'],
+    queryFn: () => projectBomApi.listTemplates(),
+    staleTime: 5 * 60 * 1000,
+  });
 
   // Check if a category is editable (when editableCategories is provided)
   const isCategoryEditable = useCallback((category: string): boolean => {
@@ -83,11 +90,6 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
     if (!editableCategories) return true; // no restriction = all editable
     return editableCategories.includes(category);
   }, [readonly, editableCategories]);
-
-  // Fetch templates on mount
-  useEffect(() => {
-    projectBomApi.listTemplates().then(setAllTemplates).catch(() => {});
-  }, []);
 
   // Determine which categories and sub-categories to show
   const visibleCategories = useMemo(() => {
@@ -258,6 +260,11 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
       </div>
     );
   };
+
+  // Wait for templates before rendering tables
+  if (templatesLoading) {
+    return <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>;
+  }
 
   // Mobile layout — Meituan-style category view
   if (isMobile) {

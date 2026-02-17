@@ -197,6 +197,48 @@ test('mobile: project detail BOM tab has compact tabs', async ({ page }) => {
   }
 });
 
+test('mobile: project detail overview hides top header area', async ({ page }) => {
+  await page.goto('/projects');
+  await page.waitForTimeout(1500);
+  const cards = page.locator('.ds-list-card');
+  if (await cards.count() > 0) {
+    await cards.first().click();
+    await page.waitForTimeout(1500);
+    // On mobile, the PhaseProgressBar and progress circle should NOT be visible above tabs
+    // The desktop header with progress circle should be hidden
+    const progressCircle = page.locator('.ant-progress-circle');
+    // There should be no circle progress in the header (only small bar in overview card)
+    const circleCount = await progressCircle.count();
+    expect(circleCount).toBe(0);
+    // The overview card ds-detail-page should still be visible
+    const detailPage = page.locator('.ds-detail-page');
+    if (await detailPage.count() > 0) {
+      await expect(detailPage).toBeVisible();
+    }
+  }
+});
+
+test('mobile: SRM kanban top area has stat cards', async ({ page }) => {
+  await page.goto('/srm/kanban');
+  await page.waitForTimeout(1500);
+  // Select project
+  const projectSelect = page.locator('.ant-select').first();
+  await projectSelect.click();
+  const firstOption = page.locator('.ant-select-item-option').first();
+  if (await firstOption.count() > 0) {
+    await firstOption.click();
+    await page.waitForTimeout(2000);
+    // Project selector should be full-width on mobile
+    const selectWidth = await projectSelect.evaluate(el => el.getBoundingClientRect().width);
+    const viewportWidth = page.viewportSize()?.width || 430;
+    // Select should be nearly full width (accounting for reload icon)
+    expect(selectWidth).toBeGreaterThan(viewportWidth * 0.6);
+    // Should not show the desktop "采购看板" title text
+    const titleSpan = page.locator('span').filter({ hasText: '采购看板' });
+    expect(await titleSpan.count()).toBe(0);
+  }
+});
+
 test('mobile: BOM category view has left nav and right content', async ({ page }) => {
   await page.goto('/projects');
   await page.waitForTimeout(1500);

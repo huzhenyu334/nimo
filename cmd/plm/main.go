@@ -122,6 +122,14 @@ func main() {
 	// V16: STP缩略图URL字段
 	db.Exec("ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS thumbnail_url VARCHAR(512)")
 
+	// V18: BOM ECN功能
+	if err := db.AutoMigrate(&entity.BOMDraft{}, &entity.BOMECN{}); err != nil {
+		zapLogger.Warn("AutoMigrate BOM ECN tables warning", zap.Error(err))
+	}
+	// 扩展BOM status支持新状态
+	db.Exec("ALTER TABLE project_boms DROP CONSTRAINT IF EXISTS project_boms_status_check")
+	db.Exec("ALTER TABLE project_boms ADD CONSTRAINT project_boms_status_check CHECK (status IN ('draft', 'submitted', 'approved', 'rejected', 'released', 'frozen', 'obsolete', 'editing', 'ecn_pending'))")
+
 	// 清理旧的唯一索引（EmployeeNo 允许为空，不再需要唯一约束）
 	// 清理所有可能的 employee_no 唯一约束/索引
 	db.Exec("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_employee_no_key")
@@ -1309,6 +1317,13 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				projects.DELETE("/:id/lang-variants/:variantId", h.LangVariant.DeleteVariant)
 				projects.GET("/:id/multilang-parts", h.LangVariant.GetMultilangParts)
 
+				// V18: BOM ECN - 草稿和ECN管理
+				projects.POST("/:id/boms/:bomId/edit", h.BOMECN.StartEditing)
+				projects.POST("/:id/boms/:bomId/draft", h.BOMECN.SaveDraft)
+				projects.GET("/:id/boms/:bomId/draft", h.BOMECN.GetDraft)
+				projects.DELETE("/:id/boms/:bomId/draft", h.BOMECN.DiscardDraft)
+				projects.POST("/:id/boms/:bomId/ecn", h.BOMECN.SubmitECN)
+
 				// V2: 交付物管理
 				projects.GET("/:id/deliverables", h.Deliverable.ListByProject)
 				projects.GET("/:id/phases/:phaseId/deliverables", h.Deliverable.ListByPhase)
@@ -1341,6 +1356,15 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 			// CMF图纸管理
 			authorized.POST("/cmf-designs/:designId/drawings", h.CMF.AddDrawing)
 			authorized.DELETE("/cmf-designs/:designId/drawings/:drawingId", h.CMF.RemoveDrawing)
+
+			// V18: BOM ECN管理
+			bomEcns := authorized.Group("/bom-ecn")
+			{
+				bomEcns.GET("", h.BOMECN.ListECNs)
+				bomEcns.GET("/:id", h.BOMECN.GetECN)
+				bomEcns.POST("/:id/approve", h.BOMECN.ApproveECN)
+				bomEcns.POST("/:id/reject", h.BOMECN.RejectECN)
+			}
 
 			// ECN管理
 			ecns := authorized.Group("/ecns")

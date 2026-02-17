@@ -14,7 +14,7 @@ export interface ProjectBOM {
   version: string;
   version_major: number;
   version_minor: number;
-  status: 'draft' | 'released' | 'obsolete' | 'pending_review' | 'published' | 'rejected' | 'frozen';
+  status: 'draft' | 'released' | 'obsolete' | 'pending_review' | 'published' | 'rejected' | 'frozen' | 'editing' | 'ecn_pending';
   description?: string;
   release_note?: string;
   released_at?: string;
@@ -483,10 +483,88 @@ export const projectBomApi = {
     const res = await apiClient.get<ApiResponse<BOMPermissions>>(`/projects/${projectId}/bom-permissions`);
     return res.data.data;
   },
+
+  // ========== BOM ECN功能 ==========
+  // 开始编辑BOM
+  startEditing: async (projectId: string, bomId: string): Promise<ProjectBOM> => {
+    const response = await apiClient.post<ApiResponse<ProjectBOM>>(
+      `/projects/${projectId}/boms/${bomId}/edit`
+    );
+    return response.data.data;
+  },
+
+  // 保存草稿
+  saveDraft: async (projectId: string, bomId: string, data: BOMDraftData): Promise<BOMDraft> => {
+    const response = await apiClient.post<ApiResponse<BOMDraft>>(
+      `/projects/${projectId}/boms/${bomId}/draft`, data
+    );
+    return response.data.data;
+  },
+
+  // 获取草稿
+  getDraft: async (projectId: string, bomId: string): Promise<BOMDraft> => {
+    const response = await apiClient.get<ApiResponse<BOMDraft>>(
+      `/projects/${projectId}/boms/${bomId}/draft`
+    );
+    return response.data.data;
+  },
+
+  // 撤销编辑
+  discardDraft: async (projectId: string, bomId: string): Promise<void> => {
+    await apiClient.delete(`/projects/${projectId}/boms/${bomId}/draft`);
+  },
+
+  // 提交ECN
+  submitECN: async (projectId: string, bomId: string, data: { title: string }): Promise<BOMECN> => {
+    const response = await apiClient.post<ApiResponse<BOMECN>>(
+      `/projects/${projectId}/boms/${bomId}/ecn`, data
+    );
+    return response.data.data;
+  },
 };
 
 export interface BOMPermissions {
   can_edit_categories: string[];
   can_view_all: boolean;
   can_release: boolean;
+}
+
+// BOM草稿相关类型
+export interface BOMDraftData {
+  items: ProjectBOMItem[];
+  name?: string;
+  description?: string;
+}
+
+export interface BOMDraft {
+  id: string;
+  bom_id: string;
+  draft_data: BOMDraftData;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// BOM ECN相关类型
+export interface BOMECN {
+  id: string;
+  ecn_number: string;
+  bom_id: string;
+  title: string;
+  description?: string;
+  change_summary: Record<string, any>;
+  status: 'pending' | 'approved' | 'rejected';
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  approved_by?: string;
+  approved_at?: string;
+  rejected_by?: string;
+  rejected_at?: string;
+  rejection_note?: string;
+  // Relations
+  bom?: ProjectBOM;
+  creator?: { id: string; name: string };
+  approver?: { id: string; name: string };
+  rejecter?: { id: string; name: string };
 }

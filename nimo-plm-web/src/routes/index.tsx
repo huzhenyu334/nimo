@@ -19,6 +19,7 @@ import ECNDetail from '@/pages/ECN/ECNDetail';
 import ECNForm from '@/pages/ECN/ECNForm';
 import BOMManagement from '@/pages/BOMManagement';
 import BOMManagementDetail from '@/pages/BOMManagementDetail';
+import ECNManagement from '@/pages/ECNManagement';
 import { useAuth } from '@/contexts/AuthContext';
 
 // 受保护路由组件
@@ -108,6 +109,10 @@ export const router = createBrowserRouter([
       {
         path: 'bom-management/:projectId',
         element: <BOMManagementDetail />,
+      },
+      {
+        path: 'bom-ecn',
+        element: <ECNManagement />,
       },
       {
         path: 'ecn',

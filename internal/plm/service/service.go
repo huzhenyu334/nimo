@@ -36,6 +36,8 @@ type Services struct {
 	CMFVariant *CMFVariantService
 	// V17 语言变体
 	LangVariant *LangVariantService
+	// V18 BOM ECN
+	BOMECN *BOMECNService
 }
 
 // NewServices 创建服务集合
@@ -84,6 +86,8 @@ func NewServices(repos *repository.Repositories, rdb *redis.Client, cfg *config.
 		CMFVariant: NewCMFVariantService(repos.CMFVariant, repos.ProjectBOM),
 		// V17 语言变体
 		LangVariant: NewLangVariantService(repos.LangVariant, repos.ProjectBOM),
+		// V18 BOM ECN
+		BOMECN: NewBOMECNService(repos.ProjectBOM, repos.BOMDraft, repos.BOMECN),
 	}
 }
 

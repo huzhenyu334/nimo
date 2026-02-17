@@ -2776,33 +2776,33 @@ const ProjectDetail: React.FC = () => {
   return (
     <div style={{ padding: isMobileView ? 12 : 24 }}>
       {/* Header */}
-      <div style={{ marginBottom: isMobileView ? 12 : 24 }}>
-        {!isMobileView && (
+      {!isMobileView && (
+        <div style={{ marginBottom: 24 }}>
           <Button type="link" icon={<ArrowLeftOutlined />} onClick={() => navigate('/projects')} style={{ padding: 0, marginBottom: 8 }}>
             返回项目列表
           </Button>
-        )}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobileView ? 'center' : 'flex-start', flexWrap: isMobileView ? 'wrap' : 'nowrap', gap: isMobileView ? 8 : 0 }}>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <Title level={isMobileView ? 4 : 3} style={{ margin: 0 }}>
-              {project.name}
-              {project.code && <Text code style={{ marginLeft: 8, fontSize: isMobileView ? 12 : 14 }}>{project.code}</Text>}
-            </Title>
-            <div style={{ marginTop: 8 }}>
-              <PhaseProgressBar currentPhase={project.phase} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <Title level={3} style={{ margin: 0 }}>
+                {project.name}
+                {project.code && <Text code style={{ marginLeft: 8, fontSize: 14 }}>{project.code}</Text>}
+              </Title>
+              <div style={{ marginTop: 8 }}>
+                <PhaseProgressBar currentPhase={project.phase} />
+              </div>
             </div>
+            <Space>
+              <Badge status={statusColors[project.status] as any} text={
+                project.status === 'planning' ? '规划中' :
+                project.status === 'active' ? '进行中' :
+                project.status === 'completed' ? '已完成' :
+                project.status === 'on_hold' ? '暂停' : project.status
+              } />
+              <Progress type="circle" percent={project.progress} size={48} />
+            </Space>
           </div>
-          <Space>
-            <Badge status={statusColors[project.status] as any} text={
-              project.status === 'planning' ? '规划中' :
-              project.status === 'active' ? '进行中' :
-              project.status === 'completed' ? '已完成' :
-              project.status === 'on_hold' ? '暂停' : project.status
-            } />
-            <Progress type="circle" percent={project.progress} size={48} />
-          </Space>
         </div>
-      </div>
+      )}
 
       {/* Tabs */}
       <Card bodyStyle={{ padding: isMobileView ? 8 : undefined }}>

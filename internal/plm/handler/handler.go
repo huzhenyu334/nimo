@@ -51,6 +51,8 @@ type Handlers struct {
 	CMFVariant  *CMFVariantHandler
 	// V17 语言变体
 	LangVariant *LangVariantHandler
+	// V18 BOM ECN
+	BOMECN      *BOMECNHandler
 }
 
 // NewHandlers 创建处理器集合
@@ -92,6 +94,8 @@ func NewHandlers(svc *service.Services, repos *repository.Repositories, cfg *con
 	h.CMFVariant = NewCMFVariantHandler(svc.CMFVariant)
 	// V17 语言变体
 	h.LangVariant = NewLangVariantHandler(svc.LangVariant)
+	// V18 BOM ECN
+	h.BOMECN = NewBOMECNHandler(svc.BOMECN)
 	return h
 }
 

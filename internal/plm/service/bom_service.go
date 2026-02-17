@@ -412,8 +412,8 @@ func (s *ProjectBOMService) DeleteItem(ctx context.Context, bomID, itemID string
 	return nil
 }
 
-// UpdateItem 更新单个BOM行项
-func (s *ProjectBOMService) UpdateItem(ctx context.Context, bomID, itemID string, input *BOMItemInput) (*entity.ProjectBOMItem, error) {
+// UpdateItem 更新单个BOM行项（部分更新：只更新 presentFields 中存在的字段）
+func (s *ProjectBOMService) UpdateItem(ctx context.Context, bomID, itemID string, input *BOMItemInput, presentFields map[string]bool) (*entity.ProjectBOMItem, error) {
 	bom, err := s.bomRepo.FindByID(ctx, bomID)
 	if err != nil {
 		return nil, fmt.Errorf("bom not found: %w", err)
@@ -430,32 +430,51 @@ func (s *ProjectBOMService) UpdateItem(ctx context.Context, bomID, itemID string
 		return nil, fmt.Errorf("item does not belong to this BOM")
 	}
 
-	if input.Name != "" {
+	// Helper: only update if the field was present in the request JSON
+	has := func(key string) bool { return presentFields[key] }
+
+	if has("name") && input.Name != "" {
 		item.Name = input.Name
 	}
-	if input.Category != "" {
+	if has("category") && input.Category != "" {
 		item.Category = input.Category
 	}
-	if input.SubCategory != "" {
+	if has("sub_category") && input.SubCategory != "" {
 		item.SubCategory = input.SubCategory
 	}
-	if input.MaterialID != nil {
+	if has("material_id") {
 		item.MaterialID = input.MaterialID
 	}
-	item.Quantity = input.Quantity
-	if input.Unit != "" {
+	if has("quantity") {
+		item.Quantity = input.Quantity
+	}
+	if has("unit") && input.Unit != "" {
 		item.Unit = input.Unit
 	}
-	item.Supplier = input.Supplier
-	item.UnitPrice = input.UnitPrice
-	item.IsAlternative = input.IsAlternative
-	item.Notes = input.Notes
-	item.ThumbnailURL = input.ThumbnailURL
-	item.ParentItemID = input.ParentItemID
-	item.Level = input.Level
+	if has("supplier") {
+		item.Supplier = input.Supplier
+	}
+	if has("unit_price") {
+		item.UnitPrice = input.UnitPrice
+	}
+	if has("is_alternative") {
+		item.IsAlternative = input.IsAlternative
+	}
+	if has("notes") {
+		item.Notes = input.Notes
+	}
+	if has("thumbnail_url") {
+		item.ThumbnailURL = input.ThumbnailURL
+	}
+	if has("parent_item_id") {
+		item.ParentItemID = input.ParentItemID
+	}
+	if has("level") {
+		item.Level = input.Level
+	}
 
 	// Merge extended_attrs (don't overwrite, merge keys)
-	if input.ExtendedAttrs != nil {
+	if has("extended_attrs") && input.ExtendedAttrs != nil {
 		if item.ExtendedAttrs == nil {
 			item.ExtendedAttrs = entity.JSONB{}
 		}
@@ -463,22 +482,41 @@ func (s *ProjectBOMService) UpdateItem(ctx context.Context, bomID, itemID string
 			item.ExtendedAttrs[k] = v
 		}
 	}
-	// Copy API compat fields to extended_attrs
-	setExtAttr(&item.ExtendedAttrs, "specification", input.Specification)
-	setExtAttr(&item.ExtendedAttrs, "reference", input.Reference)
-	setExtAttr(&item.ExtendedAttrs, "manufacturer", input.Manufacturer)
-	setExtAttr(&item.ExtendedAttrs, "manufacturer_pn", input.ManufacturerPN)
-	setExtAttr(&item.ExtendedAttrs, "supplier_pn", input.SupplierPN)
-	setExtAttr(&item.ExtendedAttrs, "drawing_no", input.DrawingNo)
-	setExtAttr(&item.ExtendedAttrs, "is_critical", input.IsCritical)
-	if input.LeadTimeDays != nil {
+	// Copy API compat fields to extended_attrs (only if sent)
+	if has("specification") {
+		setExtAttr(&item.ExtendedAttrs, "specification", input.Specification)
+	}
+	if has("reference") {
+		setExtAttr(&item.ExtendedAttrs, "reference", input.Reference)
+	}
+	if has("manufacturer") {
+		setExtAttr(&item.ExtendedAttrs, "manufacturer", input.Manufacturer)
+	}
+	if has("manufacturer_pn") {
+		setExtAttr(&item.ExtendedAttrs, "manufacturer_pn", input.ManufacturerPN)
+	}
+	if has("supplier_pn") {
+		setExtAttr(&item.ExtendedAttrs, "supplier_pn", input.SupplierPN)
+	}
+	if has("drawing_no") {
+		setExtAttr(&item.ExtendedAttrs, "drawing_no", input.DrawingNo)
+	}
+	if has("is_critical") {
+		setExtAttr(&item.ExtendedAttrs, "is_critical", input.IsCritical)
+	}
+	if has("lead_time_days") && input.LeadTimeDays != nil {
 		setExtAttr(&item.ExtendedAttrs, "lead_time_days", *input.LeadTimeDays)
 	}
-	setExtAttr(&item.ExtendedAttrs, "is_appearance_part", input.IsAppearancePart)
+	if has("is_appearance_part") {
+		setExtAttr(&item.ExtendedAttrs, "is_appearance_part", input.IsAppearancePart)
+	}
 
-	if input.UnitPrice != nil {
-		extCost := input.Quantity * *input.UnitPrice
-		item.ExtendedCost = &extCost
+	// Recalculate extended cost if price or quantity changed
+	if has("unit_price") || has("quantity") {
+		if item.UnitPrice != nil {
+			extCost := item.Quantity * *item.UnitPrice
+			item.ExtendedCost = &extCost
+		}
 	}
 
 	item.UpdatedAt = time.Now()
@@ -2620,7 +2658,7 @@ type BOMItemInput struct {
 	Level            int                    `json:"level"`
 	Category         string                 `json:"category"`
 	SubCategory      string                 `json:"sub_category"`
-	Name             string                 `json:"name" binding:"required"`
+	Name             string                 `json:"name"`
 	Specification    string                 `json:"specification"`     // kept for API compat, stored in extended_attrs
 	Quantity         float64                `json:"quantity"`
 	Unit             string                 `json:"unit"`
@@ -2717,7 +2755,7 @@ func (s *ProjectBOMService) GetBOMPermissions(ctx context.Context, projectID, us
 	var adminCount int64
 	db.WithContext(ctx).Table("user_roles").
 		Joins("JOIN roles ON roles.id = user_roles.role_id").
-		Where("user_roles.user_id = ? AND roles.code IN ?", userID, []string{"admin", "super_admin"}).
+		Where("user_roles.user_id = ? AND roles.code IN ?", userID, []string{"admin", "super_admin", "plm_admin"}).
 		Count(&adminCount)
 	if adminCount > 0 {
 		return &BOMPermissions{

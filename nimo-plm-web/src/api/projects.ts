@@ -15,9 +15,20 @@ export interface Project {
   progress: number;
   manager_id?: string;
   manager_name?: string;
+  manager?: { id: string; name: string };
+  product?: { id: string; name: string };
   template_id?: string;
   created_at: string;
   updated_at: string;
+}
+
+// Extract flat fields from nested objects returned by API
+function normalizeProject(p: any): Project {
+  return {
+    ...p,
+    manager_name: p.manager_name || p.manager?.name,
+    product_name: p.product_name || p.product?.name,
+  };
 }
 
 export interface TaskPhase {
@@ -59,14 +70,18 @@ export interface Task {
 export const projectApi = {
   // 获取项目列表
   list: async (params?: { status?: string; page?: number; page_size?: number }): Promise<PaginatedResponse<Project>> => {
-    const response = await apiClient.get<ApiResponse<PaginatedResponse<Project>>>('/projects', { params });
-    return response.data.data;
+    const response = await apiClient.get<ApiResponse<PaginatedResponse<any>>>('/projects', { params });
+    const data = response.data.data;
+    return {
+      ...data,
+      items: (data.items || []).map(normalizeProject),
+    };
   },
 
   // 获取项目详情
   get: async (id: string): Promise<Project> => {
-    const response = await apiClient.get<ApiResponse<Project>>(`/projects/${id}`);
-    return response.data.data;
+    const response = await apiClient.get<ApiResponse<any>>(`/projects/${id}`);
+    return normalizeProject(response.data.data);
   },
 
   // 创建项目

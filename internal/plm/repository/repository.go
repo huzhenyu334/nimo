@@ -44,6 +44,9 @@ type Repositories struct {
 	CMFVariant      *CMFVariantRepository
 	// V17 语言变体
 	LangVariant     *LangVariantRepository
+	// V18 BOM ECN
+	BOMDraft        *BOMDraftRepository
+	BOMECN          *BOMECNRepository
 }
 
 // NewRepositories 创建仓库集合
@@ -80,5 +83,8 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		CMFVariant:      NewCMFVariantRepository(db),
 		// V17 语言变体
 		LangVariant:     NewLangVariantRepository(db),
+		// V18 BOM ECN
+		BOMDraft:        NewBOMDraftRepository(db),
+		BOMECN:          NewBOMECNRepository(db),
 	}
 }

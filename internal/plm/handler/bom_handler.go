@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -194,13 +196,33 @@ func (h *BOMHandler) BatchAddItems(c *gin.Context) {
 func (h *BOMHandler) UpdateItem(c *gin.Context) {
 	bomID := c.Param("bomId")
 	itemID := c.Param("itemId")
+
+	// Read raw body to detect which fields were actually sent
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		BadRequest(c, "Failed to read request body")
+		return
+	}
+
+	var rawFields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &rawFields); err != nil {
+		BadRequest(c, "Invalid JSON: "+err.Error())
+		return
+	}
+
 	var input service.BOMItemInput
-	if err := c.ShouldBindJSON(&input); err != nil {
+	if err := json.Unmarshal(body, &input); err != nil {
 		BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
 
-	item, err := h.svc.UpdateItem(c.Request.Context(), bomID, itemID, &input)
+	// Build set of field names that were present in the request
+	presentFields := make(map[string]bool, len(rawFields))
+	for k := range rawFields {
+		presentFields[k] = true
+	}
+
+	item, err := h.svc.UpdateItem(c.Request.Context(), bomID, itemID, &input, presentFields)
 	if err != nil {
 		BadRequest(c, err.Error())
 		return
