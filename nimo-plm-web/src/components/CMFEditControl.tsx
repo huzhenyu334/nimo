@@ -7,7 +7,6 @@ import {
   Typography,
   Spin,
   Empty,
-  Popconfirm,
   Image,
   Tag,
   Tooltip,
@@ -20,8 +19,6 @@ import {
   PlusOutlined,
   DeleteOutlined,
   BgColorsOutlined,
-  SaveOutlined,
-  CloseOutlined,
   UploadOutlined,
   PaperClipOutlined,
   ArrowLeftOutlined,
@@ -31,6 +28,7 @@ import { taskFormApi } from '@/api/taskForms';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cmfVariantApi, type CMFVariant, type AppearancePartWithCMF } from '@/api/cmfVariant';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import EditableTable, { type EditableColumn } from './EditableTable';
 
 const { Text } = Typography;
 
@@ -41,6 +39,11 @@ const FINISH_OPTIONS = ['阳极氧化', '喷涂', '电镀', 'PVD', 'IMD', 'UV转
 const TEXTURE_OPTIONS = ['光面', '磨砂', '皮纹', '拉丝', '碳纤维纹', '木纹'];
 const COATING_OPTIONS = ['UV漆', 'PU漆', '粉末涂装', '电泳', '无'];
 const DRAWING_TYPE_OPTIONS = ['丝印', '移印', 'UV转印', '激光雕刻', '水转印', '热转印', '烫金', '其他'];
+
+const GLOSS_OPTS = GLOSS_OPTIONS.map(o => ({ label: o, value: o }));
+const FINISH_OPTS = FINISH_OPTIONS.map(o => ({ label: o, value: o }));
+const TEXTURE_OPTS = TEXTURE_OPTIONS.map(o => ({ label: o, value: o }));
+const COATING_OPTS = COATING_OPTIONS.map(o => ({ label: o, value: o }));
 
 interface DrawingFile {
   file_id: string;
@@ -62,256 +65,7 @@ interface CMFEditControlProps {
   readonly?: boolean;
 }
 
-// ========== 色块组件 ==========
-const ColorSwatch: React.FC<{ hex?: string; size?: number }> = ({ hex, size = 16 }) => {
-  if (!hex) return null;
-  return (
-    <span style={{
-      display: 'inline-block', width: size, height: size, borderRadius: 3,
-      backgroundColor: hex, border: '1px solid #d9d9d9', verticalAlign: 'middle',
-      boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
-    }} />
-  );
-};
-
-// ========== Click-to-edit cell (BOM table style) ==========
-const EditableCell: React.FC<{
-  value: any;
-  field: string;
-  type?: 'text' | 'select' | 'color';
-  options?: { label: string; value: string }[];
-  readonly?: boolean;
-  onSave: (field: string, value: any) => void;
-}> = ({ value, field, type = 'text', options, readonly, onSave }) => {
-  const [editing, setEditing] = React.useState(false);
-
-  if (readonly) {
-    if (type === 'color') {
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, minHeight: 22, padding: '0 2px' }}>
-          <ColorSwatch hex={value} />
-          <span>{value || <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}</span>
-        </div>
-      );
-    }
-    return (
-      <div style={{ minHeight: 22, padding: '0 2px' }}>
-        {value ?? <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
-      </div>
-    );
-  }
-
-  if (editing) {
-    if (type === 'color') {
-      return (
-        <ColorPicker
-          showText
-          format="hex"
-          size="small"
-          defaultValue={value || undefined}
-          onChangeComplete={(c) => {
-            onSave(field, c.toHexString());
-            setEditing(false);
-          }}
-          onOpenChange={(open) => { if (!open) setEditing(false); }}
-          open
-        />
-      );
-    }
-    if (type === 'select' && options) {
-      return (
-        <Select
-          size="small"
-          autoFocus
-          defaultValue={value || undefined}
-          defaultOpen
-          style={{ width: '100%' }}
-          options={options}
-          allowClear
-          onChange={(v) => { onSave(field, v || ''); setEditing(false); }}
-          onBlur={() => setEditing(false)}
-        />
-      );
-    }
-    return (
-      <Input
-        size="small"
-        autoFocus
-        defaultValue={value || ''}
-        onBlur={(e) => { onSave(field, e.target.value); setEditing(false); }}
-        onPressEnter={(e) => { onSave(field, (e.target as HTMLInputElement).value); setEditing(false); }}
-      />
-    );
-  }
-
-  // Display mode
-  const displayValue = type === 'select' && options
-    ? options.find(o => o.value === value)?.label || value
-    : value;
-
-  return (
-    <div
-      style={{ cursor: 'pointer', minHeight: 22, padding: '0 2px', borderRadius: 2, display: 'flex', alignItems: 'center', gap: 4 }}
-      className="editable-cell"
-      onClick={() => setEditing(true)}
-    >
-      {type === 'color' && <ColorSwatch hex={value} />}
-      {displayValue ?? <Text type="secondary" style={{ fontSize: 11 }}>-</Text>}
-    </div>
-  );
-};
-
-// ========== CMF Table Row ==========
-const CMFTableRow: React.FC<{
-  variant: CMFVariant;
-  projectId: string;
-  readonly: boolean;
-}> = ({ variant, projectId, readonly }) => {
-  const { message } = App.useApp();
-  const queryClient = useQueryClient();
-
-  const updateMutation = useMutation({
-    mutationFn: (data: Partial<CMFVariant>) =>
-      cmfVariantApi.updateVariant(projectId, variant.id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['appearance-parts', projectId] });
-    },
-    onError: (err: any) => message.error(err?.response?.data?.message || '保存失败'),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: () => cmfVariantApi.deleteVariant(projectId, variant.id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['appearance-parts', projectId] });
-    },
-    onError: (err: any) => message.error(err?.response?.data?.message || '删除失败'),
-  });
-
-  const handleSave = (field: string, value: any) => {
-    if (value === variant[field as keyof CMFVariant]) return;
-    updateMutation.mutate({ [field]: value });
-  };
-
-  const renderImageUrl = variant.reference_image_file_id
-    ? (variant.reference_image_url || `/uploads/${variant.reference_image_file_id}/image`)
-    : undefined;
-  const drawings = parseDrawings(variant.process_drawings);
-
-  const handleRenderUpload = async (file: File) => {
-    try {
-      const result = await taskFormApi.uploadFile(file);
-      updateMutation.mutate({
-        reference_image_file_id: result.id,
-        reference_image_url: result.url,
-      });
-    } catch { message.error('上传失败'); }
-    return false;
-  };
-
-  const handleDrawingUpload = async (file: File) => {
-    try {
-      const result = await taskFormApi.uploadFile(file);
-      const newDrawings = [...drawings, { file_id: result.id, file_name: result.filename || file.name, url: result.url }];
-      updateMutation.mutate({
-        process_drawings: JSON.stringify(newDrawings) as any,
-      });
-    } catch { message.error('上传失败'); }
-    return false;
-  };
-
-  const glossOpts = GLOSS_OPTIONS.map(o => ({ label: o, value: o }));
-  const finishOpts = FINISH_OPTIONS.map(o => ({ label: o, value: o }));
-  const textureOpts = TEXTURE_OPTIONS.map(o => ({ label: o, value: o }));
-  const coatingOpts = COATING_OPTIONS.map(o => ({ label: o, value: o }));
-
-  return (
-    <tr style={{ borderBottom: '1px solid #f0f0f0' }}>
-      <td style={tdStyle}>
-        <Tag color="processing" style={{ margin: 0, fontSize: 11 }}>V{variant.variant_index}</Tag>
-      </td>
-      <td style={tdStyle}>
-        <EditableCell value={variant.color_hex} field="color_hex" type="color" readonly={readonly} onSave={handleSave} />
-      </td>
-      <td style={tdStyle}>
-        <EditableCell value={variant.pantone_code} field="pantone_code" readonly={readonly} onSave={handleSave} />
-      </td>
-      <td style={tdStyle}>
-        <EditableCell value={variant.gloss_level} field="gloss_level" type="select" options={glossOpts} readonly={readonly} onSave={handleSave} />
-      </td>
-      <td style={tdStyle}>
-        <EditableCell value={variant.finish} field="finish" type="select" options={finishOpts} readonly={readonly} onSave={handleSave} />
-      </td>
-      <td style={tdStyle}>
-        <EditableCell value={variant.texture} field="texture" type="select" options={textureOpts} readonly={readonly} onSave={handleSave} />
-      </td>
-      <td style={tdStyle}>
-        <EditableCell value={variant.coating} field="coating" type="select" options={coatingOpts} readonly={readonly} onSave={handleSave} />
-      </td>
-      <td style={tdStyle}>
-        {renderImageUrl ? (
-          <Image src={renderImageUrl} width={40} height={30}
-            style={{ objectFit: 'cover', borderRadius: 3 }}
-            fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iMzAiPjxyZWN0IGZpbGw9IiNmNWY1ZjUiIHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiLz48L3N2Zz4=" />
-        ) : readonly ? (
-          <Text type="secondary" style={{ fontSize: 11 }}>-</Text>
-        ) : (
-          <Upload showUploadList={false} accept="image/*" beforeUpload={(file) => { handleRenderUpload(file); return false; }}>
-            <Button size="small" type="text" icon={<UploadOutlined />} style={{ fontSize: 11, padding: '0 4px' }} />
-          </Upload>
-        )}
-      </td>
-      <td style={tdStyle}>
-        {drawings.length > 0 ? (
-          <Space size={2} direction="vertical">
-            {variant.process_drawing_type && <Tag style={{ fontSize: 10, margin: 0 }}>{variant.process_drawing_type}</Tag>}
-            {drawings.map(f => (
-              <Tooltip key={f.file_id} title={f.file_name}>
-                <a href={f.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11 }}>
-                  <PaperClipOutlined style={{ color: '#1677ff' }} />
-                </a>
-              </Tooltip>
-            ))}
-          </Space>
-        ) : readonly ? (
-          <Text type="secondary" style={{ fontSize: 11 }}>-</Text>
-        ) : (
-          <Upload showUploadList={false} accept=".pdf,.dwg,.dxf,.ai,.cdr,image/*" beforeUpload={(file) => { handleDrawingUpload(file); return false; }}>
-            <Button size="small" type="text" icon={<UploadOutlined />} style={{ fontSize: 11, padding: '0 4px' }} />
-          </Upload>
-        )}
-      </td>
-      <td style={tdStyle}>
-        <EditableCell value={variant.notes} field="notes" readonly={readonly} onSave={handleSave} />
-      </td>
-      {!readonly && (
-        <td style={{ ...tdStyle, textAlign: 'center' }}>
-          <Popconfirm title="确认删除此CMF方案？" onConfirm={() => deleteMutation.mutate()}>
-            <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
-        </td>
-      )}
-    </tr>
-  );
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '6px 8px',
-  fontSize: 12,
-  verticalAlign: 'middle',
-};
-
-const thStyle: React.CSSProperties = {
-  padding: '6px 8px',
-  fontSize: 11,
-  fontWeight: 500,
-  color: '#8c8c8c',
-  textAlign: 'left',
-  borderBottom: '1px solid #e8e8e8',
-  background: '#fafafa',
-  whiteSpace: 'nowrap',
-};
-
-// ========== Part Section (BOM sub-category style) ==========
+// ========== Part Section (uses EditableTable) ==========
 const PartSection: React.FC<{
   part: AppearancePartWithCMF;
   projectId: string;
@@ -319,8 +73,110 @@ const PartSection: React.FC<{
   onAddVariant: (itemId: string) => void;
   addLoading: boolean;
 }> = ({ part, projectId, readonly, onAddVariant, addLoading }) => {
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
   const item = part.bom_item;
   const variants = part.cmf_variants || [];
+
+  const updateMutation = useMutation({
+    mutationFn: ({ variantId, data }: { variantId: string; data: Partial<CMFVariant> }) =>
+      cmfVariantApi.updateVariant(projectId, variantId, data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['appearance-parts', projectId] }),
+    onError: (err: any) => message.error(err?.response?.data?.message || '保存失败'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (variantId: string) =>
+      cmfVariantApi.deleteVariant(projectId, variantId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['appearance-parts', projectId] }),
+    onError: (err: any) => message.error(err?.response?.data?.message || '删除失败'),
+  });
+
+  const handleCellSave = (record: Record<string, any>, field: string, value: any) => {
+    if (value === record[field]) return;
+    updateMutation.mutate({ variantId: record.id, data: { [field]: value } });
+  };
+
+  const handleDeleteRow = (record: Record<string, any>) => {
+    deleteMutation.mutate(record.id);
+  };
+
+  const cmfColumns: EditableColumn[] = React.useMemo(() => [
+    {
+      key: 'variant_index', title: '版本', width: 50, editable: false,
+      render: (v: any) => <Tag color="processing" style={{ margin: 0, fontSize: 11 }}>V{v}</Tag>,
+    },
+    { key: 'color_hex', title: '颜色', width: 100, type: 'color' as const },
+    { key: 'pantone_code', title: '色号(Pantone)', width: 100 },
+    { key: 'gloss_level', title: '光泽度', width: 80, type: 'select' as const, options: GLOSS_OPTS },
+    { key: 'finish', title: '表面处理', width: 90, type: 'select' as const, options: FINISH_OPTS },
+    { key: 'texture', title: '纹理', width: 80, type: 'select' as const, options: TEXTURE_OPTS },
+    { key: 'coating', title: '涂层类型', width: 90, type: 'select' as const, options: COATING_OPTS },
+    {
+      key: 'reference_image_file_id', title: '效果图', width: 60,
+      render: (_: any, record: Record<string, any>) => {
+        const url = record.reference_image_file_id
+          ? (record.reference_image_url || `/uploads/${record.reference_image_file_id}/image`)
+          : undefined;
+        if (url) {
+          return <Image src={url} width={40} height={30}
+            style={{ objectFit: 'cover', borderRadius: 3 }}
+            fallback="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iMzAiPjxyZWN0IGZpbGw9IiNmNWY1ZjUiIHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiLz48L3N2Zz4=" />;
+        }
+        if (readonly) return <Text type="secondary" style={{ fontSize: 11 }}>-</Text>;
+        return (
+          <Upload showUploadList={false} accept="image/*"
+            beforeUpload={(file) => {
+              taskFormApi.uploadFile(file).then((result) => {
+                updateMutation.mutate({ variantId: record.id, data: {
+                  reference_image_file_id: result.id,
+                  reference_image_url: result.url,
+                }});
+              }).catch(() => message.error('上传失败'));
+              return false;
+            }}>
+            <Button size="small" type="text" icon={<UploadOutlined />} style={{ fontSize: 11, padding: '0 4px' }} />
+          </Upload>
+        );
+      },
+    },
+    {
+      key: 'process_drawings', title: '图纸', width: 60,
+      render: (_: any, record: Record<string, any>) => {
+        const drawings = parseDrawings(record.process_drawings);
+        if (drawings.length > 0) {
+          return (
+            <Space size={2} direction="vertical">
+              {record.process_drawing_type && <Tag style={{ fontSize: 10, margin: 0 }}>{record.process_drawing_type}</Tag>}
+              {drawings.map((f: DrawingFile) => (
+                <Tooltip key={f.file_id} title={f.file_name}>
+                  <a href={f.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11 }}>
+                    <PaperClipOutlined style={{ color: '#1677ff' }} />
+                  </a>
+                </Tooltip>
+              ))}
+            </Space>
+          );
+        }
+        if (readonly) return <Text type="secondary" style={{ fontSize: 11 }}>-</Text>;
+        return (
+          <Upload showUploadList={false} accept=".pdf,.dwg,.dxf,.ai,.cdr,image/*"
+            beforeUpload={(file) => {
+              taskFormApi.uploadFile(file).then((result) => {
+                const newDrawings = [...drawings, { file_id: result.id, file_name: result.filename || file.name, url: result.url }];
+                updateMutation.mutate({ variantId: record.id, data: {
+                  process_drawings: JSON.stringify(newDrawings) as any,
+                }});
+              }).catch(() => message.error('上传失败'));
+              return false;
+            }}>
+            <Button size="small" type="text" icon={<UploadOutlined />} style={{ fontSize: 11, padding: '0 4px' }} />
+          </Upload>
+        );
+      },
+    },
+    { key: 'notes', title: '备注', width: 120 },
+  ], [readonly, updateMutation, message]);
 
   return (
     <div style={{ marginBottom: 12 }}>
@@ -352,30 +208,15 @@ const PartSection: React.FC<{
 
       {/* Table */}
       {variants.length > 0 ? (
-        <div style={{ overflowX: 'auto', border: '1px solid #f0f0f0', borderTop: 0, borderRadius: '0 0 4px 4px' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto', minWidth: 900 }}>
-            <thead>
-              <tr>
-                <th style={{ ...thStyle, width: 50 }}>版本</th>
-                <th style={{ ...thStyle, width: 100 }}>颜色</th>
-                <th style={{ ...thStyle, width: 100 }}>色号(Pantone)</th>
-                <th style={{ ...thStyle, width: 80 }}>光泽度</th>
-                <th style={{ ...thStyle, width: 90 }}>表面处理</th>
-                <th style={{ ...thStyle, width: 80 }}>纹理</th>
-                <th style={{ ...thStyle, width: 90 }}>涂层类型</th>
-                <th style={{ ...thStyle, width: 50 }}>效果图</th>
-                <th style={{ ...thStyle, width: 50 }}>图纸</th>
-                <th style={thStyle}>备注</th>
-                {!readonly && <th style={{ ...thStyle, width: 40, textAlign: 'center' }}>操作</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {variants.map(v => (
-                <CMFTableRow key={v.id} variant={v} projectId={projectId} readonly={readonly} />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <EditableTable
+          columns={cmfColumns}
+          items={variants as Record<string, any>[]}
+          onCellSave={handleCellSave}
+          onDeleteRow={handleDeleteRow}
+          readonly={readonly}
+          rowKey="id"
+          deleteConfirmText="确认删除此CMF方案？"
+        />
       ) : (
         <div style={{ padding: '16px 0', textAlign: 'center', color: '#999', fontSize: 12, border: '1px solid #f0f0f0', borderTop: 0, borderRadius: '0 0 4px 4px' }}>
           暂无CMF方案
@@ -801,7 +642,7 @@ const CMFEditControl: React.FC<CMFEditControlProps> = ({ projectId, taskId: _tas
     );
   }
 
-  // ===== Desktop layout: table sections (BOM style) =====
+  // ===== Desktop layout: EditableTable sections =====
   return (
     <div>
       <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
