@@ -20,8 +20,6 @@ import ECNDetail from '@/pages/ECN/ECNDetail';
 import ECNForm from '@/pages/ECN/ECNForm';
 import BOMManagement from '@/pages/BOMManagement';
 import BOMManagementDetail from '@/pages/BOMManagementDetail';
-import ECNManagement from '@/pages/ECNManagement';
-import MaterialSearch from '@/pages/MaterialSearch';
 import Documents from '@/pages/Documents';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -69,11 +67,7 @@ export const router = createBrowserRouter([
         path: 'projects/:id',
         element: <ProjectDetail />,
       },
-      {
-        path: 'material-search',
-        element: <MaterialSearch />,
-      },
-      {
+{
         path: 'materials',
         element: <Materials />,
       },
@@ -117,11 +111,7 @@ export const router = createBrowserRouter([
         path: 'bom-management/:projectId',
         element: <BOMManagementDetail />,
       },
-      {
-        path: 'bom-ecn',
-        element: <ECNManagement />,
-      },
-      {
+{
         path: 'documents',
         element: <Documents />,
       },

@@ -35,6 +35,11 @@ CC（Claude Code）每次启动自动读取此文件，必须遵循以下规范�
 - 模板数据用 useQuery 缓存（staleTime 5分钟），不要每个组件单独 fetch
 - 模板未加载完前显示 loading，不要分两步渲染（先基础字段再扩展字段）
 
+## 功能模块管理（重要！）
+- 开发新功能前，必须先读 MODULES.md，确认该功能不已存在
+- 完成新功能后，必须更新 MODULES.md
+- 禁止创建与现有模块功能重复的页面
+
 ## 编译部署
 - 后端: `cd /home/claw/.openclaw/workspace && go build -o bin/plm ./cmd/plm/`
 - 前端: `cd nimo-plm-web && npm run build && rm -rf ../web/plm/* && cp -r dist/* ../web/plm/`

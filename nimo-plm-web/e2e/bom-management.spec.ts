@@ -188,54 +188,6 @@ test.describe('BOM Management - Navigation', () => {
   });
 });
 
-test.describe('Material Search Page', () => {
-  test('material search page loads with search input', async ({ page }) => {
-    await page.goto('/material-search');
-    await page.waitForTimeout(1500);
-    const searchInput = page.locator('input[placeholder*="搜索"]');
-    await expect(searchInput).toBeVisible();
-  });
-
-  test('material search page has category filter', async ({ page }) => {
-    await page.goto('/material-search');
-    await page.waitForTimeout(1000);
-    // Should have a category select dropdown
-    const select = page.locator('.ant-select');
-    await expect(select.first()).toBeVisible();
-  });
-
-  test('material search page shows results table', async ({ page }) => {
-    await page.goto('/material-search');
-    await page.waitForTimeout(1500);
-    // Table should be visible (even if empty)
-    const table = page.locator('.ant-table');
-    await expect(table).toBeVisible();
-  });
-
-  test('sidebar has 物料查询 menu item', async ({ page }) => {
-    await page.goto('/dashboard');
-    await page.waitForTimeout(1000);
-    const menuItem = page.locator('.ant-menu-item, .ant-pro-base-menu-item').filter({ hasText: '物料查询' });
-    await expect(menuItem.first()).toBeVisible();
-  });
-
-  test('paginated search API returns valid response', async ({ page }) => {
-    await page.goto('/material-search');
-    await page.waitForTimeout(1000);
-    const result = await page.evaluate(async () => {
-      const token = localStorage.getItem('access_token');
-      const resp = await fetch('/api/v1/bom-items/search-paginated?page=1&page_size=5', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      return { status: resp.status, body: await resp.json() };
-    });
-    expect(result.status).toBe(200);
-    expect(result.body).toHaveProperty('data');
-    expect(result.body).toHaveProperty('total');
-    expect(result.body).toHaveProperty('page');
-  });
-});
-
 test.describe('BOM Cost Summary', () => {
   test('BOM detail page shows cost summary bar', async ({ page }) => {
     await page.goto('/bom-management');
