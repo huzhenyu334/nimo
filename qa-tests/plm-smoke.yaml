@@ -1,0 +1,21 @@
+name: PLM Smoke Test
+baseUrl: http://43.134.86.237:8080
+
+tests:
+  - name: 首页加载检查
+    steps:
+      - goto: /login
+      - waitMs: 3000
+      - expectVisible: nimo PLM
+
+  - name: 登录页元素检查（飞书登录按钮存在）
+    steps:
+      - goto: /login
+      - waitMs: 3000
+      - expectVisible: 使用飞书登录
+
+  - name: 无 console 错误
+    steps:
+      - goto: /login
+      - waitMs: 3000
+      - expectNoErrors: true
