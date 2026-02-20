@@ -466,18 +466,37 @@ func (s *TemplateService) CreateProjectFromTemplate(ctx context.Context, input *
 		tasksWithDeps[dep.TaskCode] = true
 	}
 
-	// 按层级排序创建：先 MILESTONE，再 TASK，最后 SUBTASK
+	// 按层级递归创建：先创建 level=0（无父任务），再 level=1，依次递归
 	// 这样 parent_task_id 引用时父任务一定已经创建
-	typeOrder := []string{"MILESTONE", "TASK", "SUBTASK"}
 	taskMap := make(map[string]string) // task_code -> task_id
 	var initialActiveTasks []*entity.Task // 收集初始激活的任务
 
+	// 构建 parent -> children 映射，用于按层级遍历
+	childrenMap := make(map[string][]entity.TemplateTask) // parent_task_code -> children
+	var rootTasks []entity.TemplateTask
+	for _, tt := range template.Tasks {
+		if tt.ParentTaskCode == "" {
+			rootTasks = append(rootTasks, tt)
+		} else {
+			childrenMap[tt.ParentTaskCode] = append(childrenMap[tt.ParentTaskCode], tt)
+		}
+	}
+
+	// BFS 按层级排序所有任务
+	var orderedTasks []entity.TemplateTask
+	queue := rootTasks
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		orderedTasks = append(orderedTasks, current)
+		if children, ok := childrenMap[current.TaskCode]; ok {
+			queue = append(queue, children...)
+		}
+	}
+
 	seq := 0
-	for _, taskType := range typeOrder {
-		for _, tt := range template.Tasks {
-			if tt.TaskType != taskType {
-				continue
-			}
+	for _, tt := range orderedTasks {
+		{
 
 			var assigneeID *string
 			if tt.DefaultAssigneeRole != "" {
