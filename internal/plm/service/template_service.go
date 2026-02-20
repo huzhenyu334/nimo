@@ -61,8 +61,17 @@ func (s *TemplateService) GetTemplate(ctx context.Context, id string) (*entity.P
 	return tmpl, nil
 }
 
-// CreateTemplate 创建模板
+// CreateTemplate 创建模板（name+template_type 唯一性校验）
 func (s *TemplateService) CreateTemplate(ctx context.Context, template *entity.ProjectTemplate) error {
+	// 唯一性校验：同名+同类型不允许重复
+	var count int64
+	s.templateRepo.DB().Model(&entity.ProjectTemplate{}).
+		Where("name = ? AND template_type = ?", template.Name, template.TemplateType).
+		Count(&count)
+	if count > 0 {
+		return fmt.Errorf("模板名称 '%s'（类型 %s）已存在，不允许重复创建", template.Name, template.TemplateType)
+	}
+
 	template.ID = uuid.New().String()
 	template.CreatedAt = time.Now()
 	template.UpdatedAt = time.Now()

@@ -643,6 +643,16 @@ func main() {
 		`UPDATE category_attr_templates SET sub_category = 'structural_part' WHERE sub_category IN ('housing', 'internal') AND category = 'structural'`,
 		// Delete templates to re-seed with merged structural_part fields
 		`DELETE FROM category_attr_templates`,
+
+		// V23: Clean duplicate project templates (keep earliest by created_at)
+		`DELETE FROM project_templates WHERE id IN (
+			SELECT id FROM (
+				SELECT id, ROW_NUMBER() OVER (PARTITION BY name, template_type ORDER BY created_at ASC) AS rn
+				FROM project_templates
+			) ranked WHERE rn > 1
+		)`,
+		// Add unique index to prevent future duplicates
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_project_templates_name_type ON project_templates(name, template_type)`,
 	}
 	for _, sql := range migrationSQL {
 		if err := db.Exec(sql).Error; err != nil {
