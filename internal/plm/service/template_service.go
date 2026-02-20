@@ -541,15 +541,7 @@ func (s *TemplateService) CreateProjectFromTemplate(ctx context.Context, input *
 			seq++
 			dates := taskDates[tt.TaskCode]
 
-			// 没有前置依赖的任务直接设为 in_progress
-			initialStatus := "pending"
-			var actualStart *time.Time
-			if !tasksWithDeps[tt.TaskCode] {
-				initialStatus = "in_progress"
-				now := time.Now()
-				actualStart = &now
-			}
-
+			// 所有任务默认 pending，激活逻辑在依赖创建后执行
 			task := &entity.Task{
 				ID:                     uuid.New().String()[:32],
 				ProjectID:              project.ID,
@@ -559,12 +551,11 @@ func (s *TemplateService) CreateProjectFromTemplate(ctx context.Context, input *
 				Title:                  tt.Name,
 				Description:            tt.Description,
 				TaskType:               tt.TaskType,
-				Status:                 initialStatus,
+				Status:                 "pending",
 				Priority:               "medium",
 				AssigneeID:             assigneeID,
 				StartDate:              dates.Start,
 				DueDate:                dates.End,
-				ActualStart:            actualStart,
 				Progress:               0,
 				Sequence:               seq,
 				IsLocked:               tt.IsLocked,
@@ -583,12 +574,6 @@ func (s *TemplateService) CreateProjectFromTemplate(ctx context.Context, input *
 				return nil, fmt.Errorf("create task %s: %w", tt.TaskCode, err)
 			}
 			taskMap[tt.TaskCode] = task.ID
-
-			// 收集初始激活的任务用于发送通知
-			if initialStatus == "in_progress" {
-				taskCopy := *task
-				initialActiveTasks = append(initialActiveTasks, &taskCopy)
-			}
 		}
 	}
 
@@ -610,6 +595,36 @@ func (s *TemplateService) CreateProjectFromTemplate(ctx context.Context, input *
 
 		if err := s.projectRepo.CreateTaskDependency(ctx, taskDep); err != nil {
 			continue
+		}
+	}
+
+	// 激活首阶段中没有前置依赖的任务
+	// 找出第一个阶段（按 phaseOrder）
+	firstPhase := phaseOrder[0] // "concept"
+	// 构建有前置依赖的 task_code 集合（基于已创建的实际依赖）
+	successorSet := make(map[string]bool)
+	for _, dep := range template.Dependencies {
+		successorSet[dep.TaskCode] = true
+	}
+	for _, tt := range template.Tasks {
+		phaseLower := strings.ToLower(tt.Phase)
+		if phaseLower != firstPhase {
+			continue
+		}
+		if successorSet[tt.TaskCode] {
+			continue
+		}
+		tid, ok := taskMap[tt.TaskCode]
+		if !ok {
+			continue
+		}
+		now := time.Now()
+		s.projectRepo.DB().Model(&entity.Task{}).Where("id = ?", tid).
+			Updates(map[string]interface{}{"status": "in_progress", "actual_start": now})
+		// 收集用于通知
+		var t entity.Task
+		if err := s.projectRepo.DB().First(&t, "id = ?", tid).Error; err == nil {
+			initialActiveTasks = append(initialActiveTasks, &t)
 		}
 	}
 
