@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // Logger 日志中间件
@@ -54,7 +56,7 @@ func CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Request-ID")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Request-ID, X-Impersonate-User")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
 
 		if c.Request.Method == "OPTIONS" {
@@ -91,7 +93,13 @@ type JWTClaims struct {
 }
 
 // JWTAuth JWT认证中间件
-func JWTAuth(secret string) gin.HandlerFunc {
+func JWTAuth(secret string, db ...*gorm.DB) gin.HandlerFunc {
+	// Optional db parameter for impersonation support
+	var database *gorm.DB
+	if len(db) > 0 {
+		database = db[0]
+	}
+
 	return func(c *gin.Context) {
 		var tokenString string
 
@@ -120,12 +128,59 @@ func JWTAuth(secret string) gin.HandlerFunc {
 
 		// 优先检查API Token
 		if apiToken := os.Getenv("PLM_API_TOKEN"); apiToken != "" && tokenString == apiToken {
-			c.Set("user_id", "u_admin")
-			c.Set("user_name", "Agent")
-			c.Set("feishu_uid", "")
-			c.Set("is_admin", true)
-			c.Set("roles", []string{"plm_admin"})
-			c.Set("permissions", []string{"*"})
+			// Check for impersonation header
+			impersonateUserID := c.GetHeader("X-Impersonate-User")
+			if impersonateUserID != "" && database != nil {
+				// Query target user
+				var user struct {
+					ID   string
+					Name string
+				}
+				if err := database.Table("users").
+					Select("id, name").
+					Where("id = ? AND deleted_at IS NULL", impersonateUserID).
+					First(&user).Error; err != nil {
+					c.JSON(http.StatusNotFound, gin.H{
+						"code":    40400,
+						"message": "impersonate target user not found: " + impersonateUserID,
+					})
+					c.Abort()
+					return
+				}
+
+				// Query user roles
+				var roleCodes []string
+				database.Table("user_roles").
+					Joins("JOIN roles ON roles.id = user_roles.role_id").
+					Where("user_roles.user_id = ?", user.ID).
+					Pluck("roles.code", &roleCodes)
+
+				// Query permissions via roles
+				var permissions []string
+				database.Table("role_permissions").
+					Joins("JOIN permissions ON permissions.id = role_permissions.permission_id").
+					Joins("JOIN user_roles ON user_roles.role_id = role_permissions.role_id").
+					Where("user_roles.user_id = ?", user.ID).
+					Pluck("permissions.code", &permissions)
+
+				c.Set("user_id", user.ID)
+				c.Set("user_name", user.Name)
+				c.Set("feishu_uid", "")
+				c.Set("is_admin", false)
+				c.Set("roles", roleCodes)
+				c.Set("permissions", permissions)
+				c.Set("impersonated_by", "u_admin")
+
+				log.Printf("[auth] impersonate: admin -> %s (%s)", user.ID, user.Name)
+			} else {
+				// Default admin identity
+				c.Set("user_id", "u_admin")
+				c.Set("user_name", "Agent")
+				c.Set("feishu_uid", "")
+				c.Set("is_admin", true)
+				c.Set("roles", []string{"plm_admin"})
+				c.Set("permissions", []string{"*"})
+			}
 			c.Next()
 			return
 		}

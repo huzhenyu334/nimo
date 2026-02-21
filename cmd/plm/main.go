@@ -921,7 +921,7 @@ func main() {
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 
 	// 注册路由
-	registerRoutes(router, handlers, services, cfg, srmHandlers)
+	registerRoutes(router, handlers, services, cfg, srmHandlers, db)
 
 	// 创建HTTP服务器
 	srv := &http.Server{
@@ -1016,7 +1016,7 @@ func initRedis(cfg config.RedisConfig) *redis.Client {
 	})
 }
 
-func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, cfg *config.Config, srmH *srmhandler.Handlers) {
+func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, cfg *config.Config, srmH *srmhandler.Handlers, db *gorm.DB) {
 	// 健康检查
 	r.GET("/health/live", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -1085,14 +1085,14 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 
 		// SSE 实时推送（需要认证，支持 query param token）
 		sseGroup := v1.Group("/sse")
-		sseGroup.Use(middleware.JWTAuth(cfg.JWT.Secret))
+		sseGroup.Use(middleware.JWTAuth(cfg.JWT.Secret, db))
 		{
 			sseGroup.GET("/events", h.SSE.Stream)
 		}
 
 		// 需要认证的接口
 		authorized := v1.Group("")
-		authorized.Use(middleware.JWTAuth(cfg.JWT.Secret))
+		authorized.Use(middleware.JWTAuth(cfg.JWT.Secret, db))
 		{
 			// 当前用户
 			authorized.GET("/auth/me", h.Auth.GetCurrentUser)

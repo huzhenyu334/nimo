@@ -116,7 +116,7 @@ func main() {
 
 	// ERP API v1
 	v1 := router.Group("/api/v1/erp")
-	v1.Use(middleware.JWTAuth(cfg.JWT.Secret))
+	v1.Use(middleware.JWTAuth(cfg.JWT.Secret, db))
 	{
 		// 供应商管理
 		suppliers := v1.Group("/suppliers")
