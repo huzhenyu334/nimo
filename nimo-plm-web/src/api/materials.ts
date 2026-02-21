@@ -34,6 +34,7 @@ export interface MaterialCategory {
 
 export interface MaterialListResponse {
   materials: Material[];
+  total: number;
 }
 
 export interface MaterialCategoryListResponse {

@@ -61,7 +61,7 @@ const Dashboard: React.FC = () => {
   // Fetch real project data
   const { data: projectsData, isLoading: projectsLoading } = useQuery({
     queryKey: ['projects'],
-    queryFn: () => projectApi.list({ page_size: 50 }),
+    queryFn: () => projectApi.list({ page_size: 999 }),
   });
 
   // Fetch my tasks
@@ -80,10 +80,10 @@ const Dashboard: React.FC = () => {
   });
 
   const projects = projectsData?.items || [];
-  const activeProjects = projects.filter(p => p.status === 'active');
+  const activeProjects = projects.filter(p => p.status === 'active' || p.status === 'planning');
   const completedProjects = projects.filter(p => p.status === 'completed');
   const todoItems = tasksData?.items || [];
-  const materialsCount = materialsData?.materials?.length ?? '-';
+  const materialsCount = materialsData?.total ?? '-';
 
   // Compute stats from real data
   const stats = {
@@ -128,7 +128,7 @@ const Dashboard: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card hoverable>
+          <Card hoverable onClick={() => navigate('/projects?status=completed')}>
             <Statistic
               title="已完成项目"
               value={stats.completedProjects}
