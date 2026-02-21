@@ -132,15 +132,32 @@ COO角色工具集（继承基础）:
   + 特定系统API, 内部工具...
 ```
 
-**关键原则：所有工具最终封装为OpenClaw plugin/skill。**
+**关键原则：所有工具封装为MCP Server，Plugin仅用于消息通道。**
 
-裸exec调脚本只是临时方案。Plugin化的好处：
-- 可版本管理
-- 可分配给特定agent
-- 可组合编排
-- 可审计调用记录
+### Plugin vs MCP 的分界线
 
-**载体：** `TOOLS.md`（配置说明） + OpenClaw config中的plugin/skill定义
+```
+Plugin = 消息通道（Channel）
+  OpenClaw的感官系统，管理长连接生命周期
+  必须在进程内：Feishu WebSocket、Discord Gateway、Telegram polling
+  数量极少，只有通道类
+
+MCP Server = 工具（Tool）
+  Agent调用的所有能力
+  独立进程，标准协议(stdio/HTTP)，可移植
+  好处：Cursor/Claude Desktop等任何MCP client都能复用
+  鉴权：本机stdio模式零配置，HTTP模式一次配token
+```
+
+Plugin唯一的"优势"是免鉴权（进程内天然信任），但这个成本可忽略。
+MCP的可移植性和标准化收益远大于这点便利。
+
+**工具开发策略：新工具一律MCP Server，不做Plugin。**
+
+已有的MCP Server：`cmd/mcp-plm`、`cmd/mcp-erp`
+待迁移：ACP当前是Plugin，未来应迁移为MCP Server
+
+**载体：** `TOOLS.md`（配置说明） + MCP Server定义 + OpenClaw config中的skill
 
 **当前限制：** OpenClaw暂不支持per-agent tool限制，所有agent共享工具集。未来需要支持：
 ```yaml
