@@ -26,7 +26,7 @@ import {
   InboxOutlined,
   FolderOpenOutlined,
 } from '@ant-design/icons';
-import { Dropdown, Avatar, Space, Spin } from 'antd';
+import { Dropdown, Avatar, Spin } from 'antd';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
@@ -351,14 +351,7 @@ const MainLayout: React.FC = () => {
         </Dropdown>
       ),
     },
-    actionsRender: () => [
-      <Space key="user">
-        <span style={{ color: '#fff' }}>{user?.name}</span>
-        <Avatar src={user?.avatar_url} size="small">
-          {user?.name?.[0]}
-        </Avatar>
-      </Space>,
-    ],
+    actionsRender: () => [],
     token: {
       header: {
         colorBgHeader: '#001529',

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Row, Col, Statistic, Typography, List, Tag, Progress, Badge, Space, Button, Empty, Skeleton } from 'antd';
+import { Card, Row, Col, Statistic, Typography, List, Tag, Progress, Badge, Space, Button, Empty, Skeleton, theme } from 'antd';
 import {
   ProjectOutlined,
   AuditOutlined,
@@ -46,6 +46,7 @@ const Dashboard: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { token } = theme.useToken();
 
   // SSE: 实时推送自动刷新
   useSSE({
@@ -94,7 +95,7 @@ const Dashboard: React.FC = () => {
   };
 
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: token.paddingLG }}>
       {/* Welcome */}
       <div style={{ marginBottom: 24 }}>
         <Title level={3} style={{ margin: 0 }}>
