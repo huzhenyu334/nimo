@@ -12,6 +12,10 @@
     "clawdbot-sync": {
       "version": "1.0.0",
       "installedAt": 1771511187778
+    },
+    "claude-code-orchestrator": {
+      "version": "1.0.0",
+      "installedAt": 1771936068565
     }
   }
 }

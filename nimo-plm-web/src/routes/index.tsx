@@ -21,6 +21,7 @@ import ECNForm from '@/pages/ECN/ECNForm';
 import BOMManagement from '@/pages/BOMManagement';
 import BOMManagementDetail from '@/pages/BOMManagementDetail';
 import Documents from '@/pages/Documents';
+import EBOMEmbed from '@/pages/embed/EBOMEmbed';
 import { useAuth } from '@/contexts/AuthContext';
 
 // 受保护路由组件
@@ -42,6 +43,11 @@ export const router = createBrowserRouter([
   {
     path: '/login',
     element: <Login />,
+  },
+  // Embed routes — no MainLayout shell, auth via URL token or existing localStorage
+  {
+    path: '/embed/forms/ebom',
+    element: <EBOMEmbed />,
   },
   {
     path: '/',
