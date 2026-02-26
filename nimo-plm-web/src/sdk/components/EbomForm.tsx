@@ -11,7 +11,7 @@
 
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
-import { ConfigProvider, Button, Spin, Result, message, App } from 'antd'
+import { ConfigProvider, Button, Spin, Result, message, App, theme as antdTheme } from 'antd'
 import { SaveOutlined } from '@ant-design/icons'
 import zhCN from 'antd/locale/zh_CN'
 import enUS from 'antd/locale/en_US'
@@ -311,18 +311,30 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
 // ========== Wrapper: provides QueryClient + Antd ConfigProvider ==========
 
 const EbomForm: React.FC<EbomFormProps> = (props) => {
-  const locale = useMemo(() => {
+  const { locale, isDark } = useMemo(() => {
     try {
       const cfg = getConfig()
-      return cfg.locale === 'en-US' ? enUS : zhCN
+      return {
+        locale: cfg.locale === 'en-US' ? enUS : zhCN,
+        isDark: cfg.theme === 'dark',
+      }
     } catch {
-      return zhCN
+      return { locale: zhCN, isDark: false }
     }
   }, [])
 
+  const themeConfig = useMemo(() => isDark ? {
+    algorithm: antdTheme.darkAlgorithm,
+    token: {
+      colorBgContainer: '#141414',
+      colorBgElevated: '#1f1f1f',
+      borderRadius: 6,
+    },
+  } : undefined, [isDark])
+
   return (
     <QueryClientProvider client={sdkQueryClient}>
-      <ConfigProvider locale={locale}>
+      <ConfigProvider locale={locale} theme={themeConfig}>
         <App>
           <EbomFormInner {...props} />
         </App>

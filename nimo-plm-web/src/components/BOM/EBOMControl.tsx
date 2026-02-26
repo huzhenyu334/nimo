@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Typography, Tag, Empty, Space, Spin } from 'antd';
+import { Button, Typography, Tag, Empty, Space, Spin, theme } from 'antd';
 import {
   PlusOutlined,
   ExperimentOutlined,
@@ -42,16 +42,22 @@ export interface EBOMControlProps {
 
 // ========== Category icons ==========
 
-const CATEGORY_ICONS: Record<string, React.ReactNode> = {
-  electronic: <ExperimentOutlined style={{ color: '#595959' }} />,
-  structural: <BuildOutlined style={{ color: '#595959' }} />,
-  optical: <EyeOutlined style={{ color: '#595959' }} />,
+const CATEGORY_ICON_MAP: Record<string, typeof ExperimentOutlined> = {
+  electronic: ExperimentOutlined,
+  structural: BuildOutlined,
+  optical: EyeOutlined,
 };
 
-const CATEGORY_COLORS: Record<string, string> = {
+const CATEGORY_COLORS_LIGHT: Record<string, string> = {
   electronic: '#f0f5ff',
   structural: '#f6ffed',
   optical: '#fff7e6',
+};
+
+const CATEGORY_COLORS_DARK: Record<string, string> = {
+  electronic: '#111a2c',
+  structural: '#162312',
+  optical: '#2b2111',
 };
 
 // ========== Helpers ==========
@@ -77,6 +83,17 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
 }) => {
   const value = Array.isArray(rawValue) ? rawValue : [];
   const isMobile = useIsMobile();
+
+  // Design tokens for theme-aware colors
+  const { token } = theme.useToken();
+  const isDark = useMemo(() => {
+    const hex = (token.colorBgContainer || '#ffffff').replace('#', '');
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    return (r * 299 + g * 587 + b * 114) / 1000 < 128;
+  }, [token.colorBgContainer]);
+  const categoryColors = isDark ? CATEGORY_COLORS_DARK : CATEGORY_COLORS_LIGHT;
 
   // Fetch templates via react-query (cached globally, 5min staleTime)
   const { data: allTemplates = [], isLoading: templatesLoading } = useQuery({
@@ -210,8 +227,8 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
         {/* Sub-category header with "添加行" button on the right */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px',
-          background: '#fafafa', borderRadius: '4px 4px 0 0',
-          borderBottom: '1px solid #f0f0f0',
+          background: token.colorFillAlter, borderRadius: '4px 4px 0 0',
+          borderBottom: `1px solid ${token.colorSplit}`,
         }}>
           <Text style={{ fontSize: 13, fontWeight: 500 }}>{label}</Text>
           <Tag style={{ fontSize: 11 }}>{items.length} 项</Tag>
@@ -249,8 +266,9 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
   const renderCategorySection = (category: string) => {
     const subCategories = getSubCategoryOrder(category);
     const enabledSubs = getEnabledSubCategories(category);
-    const icon = CATEGORY_ICONS[category] || <ExperimentOutlined style={{ color: '#595959' }} />;
-    const bgColor = CATEGORY_COLORS[category] || '#fafafa';
+    const IconComp = CATEGORY_ICON_MAP[category] || ExperimentOutlined;
+    const icon = <IconComp style={{ color: token.colorTextSecondary }} />;
+    const bgColor = categoryColors[category] || token.colorFillAlter;
     const label = CATEGORY_LABELS[category] || category;
     const categoryItems = value.filter(item => item.category === category);
 
@@ -267,7 +285,7 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
         {/* Category header with download/import buttons */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-          background: bgColor, borderRadius: 6, borderBottom: '1px solid #e8e8e8',
+          background: bgColor, borderRadius: 6, borderBottom: `1px solid ${token.colorBorderSecondary}`,
         }}>
           {icon}
           <Text strong style={{ fontSize: 14 }}>{label}</Text>
@@ -317,7 +335,7 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
       {/* Top-level EBOM header */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0',
-        marginBottom: 8, borderBottom: '2px solid #1677ff',
+        marginBottom: 8, borderBottom: `2px solid ${token.colorPrimary}`,
       }}>
         <Text strong style={{ fontSize: 16 }}>EBOM</Text>
         <Tag color="blue">{value.length} 项</Tag>
@@ -337,8 +355,8 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
       {/* Cost summary */}
       {value.length > 0 && (
         <div style={{
-          display: 'flex', gap: 24, padding: '10px 16px', background: '#fafafa',
-          borderRadius: 6, border: '1px solid #f0f0f0', flexWrap: 'wrap', marginTop: 8,
+          display: 'flex', gap: 24, padding: '10px 16px', background: token.colorFillAlter,
+          borderRadius: 6, border: `1px solid ${token.colorSplit}`, flexWrap: 'wrap', marginTop: 8,
         }}>
           {visibleCategories.map(category => {
             const categoryItems = value.filter(item => item.category === category);
@@ -353,7 +371,7 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
             );
           })}
           <Text style={{ fontSize: 13 }}>
-            EBOM总成本: <Text strong style={{ color: '#1677ff' }}>{formatCurrency(totalCost)}</Text>
+            EBOM总成本: <Text strong style={{ color: token.colorPrimary }}>{formatCurrency(totalCost)}</Text>
           </Text>
           <Text type="secondary" style={{ fontSize: 12 }}>共 {value.length} 项</Text>
           {value.filter(item => item.unit_price == null || item.unit_price === 0).length > 0 && (

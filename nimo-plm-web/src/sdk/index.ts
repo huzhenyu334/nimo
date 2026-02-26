@@ -123,6 +123,45 @@ function render(
     activeRoots.delete(container)
   }
 
+  // Inject dark theme CSS overrides if configured
+  let darkStyleEl: HTMLStyleElement | null = null
+  if (sdkState.config?.theme === 'dark') {
+    darkStyleEl = document.createElement('style')
+    darkStyleEl.setAttribute('data-nimo-dark', 'true')
+    darkStyleEl.textContent = `
+      /* SDK dark theme overrides for BOM components */
+      [data-nimo-sdk] { color-scheme: dark; }
+      [data-nimo-sdk] .ant-table { background: #141414 !important; }
+      [data-nimo-sdk] .ant-table-thead > tr > th,
+      [data-nimo-sdk] .ant-table-thead > tr > td { background: #1d1d1d !important; color: rgba(255,255,255,0.85) !important; border-color: #303030 !important; }
+      [data-nimo-sdk] .ant-table-tbody > tr > td { border-color: #303030 !important; }
+      [data-nimo-sdk] .ant-table-tbody > tr:hover > td { background: #262626 !important; }
+      [data-nimo-sdk] .ant-table-tbody > tr.ant-table-row:hover > td { background: #262626 !important; }
+      [data-nimo-sdk] .ant-collapse > .ant-collapse-item > .ant-collapse-header { color: rgba(255,255,255,0.85) !important; }
+      [data-nimo-sdk] .ant-collapse-content { background: #141414 !important; border-color: #303030 !important; }
+      [data-nimo-sdk] .ant-btn-default { background: #1d1d1d !important; border-color: #424242 !important; color: rgba(255,255,255,0.85) !important; }
+      [data-nimo-sdk] .ant-select-selector { background: #1d1d1d !important; border-color: #424242 !important; color: rgba(255,255,255,0.85) !important; }
+      [data-nimo-sdk] .ant-input { background: #1d1d1d !important; border-color: #424242 !important; color: rgba(255,255,255,0.85) !important; }
+      [data-nimo-sdk] .ant-input-number { background: #1d1d1d !important; border-color: #424242 !important; color: rgba(255,255,255,0.85) !important; }
+      [data-nimo-sdk] .ant-tag { border-color: #424242 !important; }
+      [data-nimo-sdk] [style*="background: #fafafa"],
+      [data-nimo-sdk] [style*="background:#fafafa"],
+      [data-nimo-sdk] [style*="background: rgb(250"] { background: #1d1d1d !important; }
+      [data-nimo-sdk] [style*="background: #fff7e6"] { background: #2a2000 !important; }
+      [data-nimo-sdk] [style*="background: #f6ffed"] { background: #0a2000 !important; }
+      [data-nimo-sdk] [style*="background: #e6f7ff"],
+      [data-nimo-sdk] [style*="background: #e6f4ff"] { background: #001d3d !important; }
+      [data-nimo-sdk] [style*="background: #fff0f6"] { background: #2a0012 !important; }
+      [data-nimo-sdk] [style*="background: #f9f0ff"] { background: #1a002a !important; }
+      [data-nimo-sdk] [style*="background: #e6fffb"] { background: #002a20 !important; }
+      [data-nimo-sdk] [style*="background: #fff2e8"] { background: #2a1500 !important; }
+      [data-nimo-sdk] [style*="border-bottom: 1px solid #e8e8e8"],
+      [data-nimo-sdk] [style*="border-bottom: 1px solid rgb(232"] { border-color: #303030 !important; }
+    `
+    document.head.appendChild(darkStyleEl)
+    container.setAttribute('data-nimo-sdk', 'true')
+  }
+
   // Create React root and render
   const root = createRoot(container)
   root.render(React.createElement(Component, props))
@@ -133,7 +172,11 @@ function render(
     destroy() {
       root.unmount()
       activeRoots.delete(container)
-      // Clear container contents
+      if (darkStyleEl) {
+        darkStyleEl.remove()
+        darkStyleEl = null
+      }
+      container.removeAttribute('data-nimo-sdk')
       container.innerHTML = ''
     },
   }
