@@ -204,7 +204,7 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
           syncingRef.current = false;
           resolveSyncPromise();
         }
-      }, 1500);
+      }, 200);
     });
     syncPromiseRef.current = syncPromise;
 
