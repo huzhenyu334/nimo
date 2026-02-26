@@ -90,6 +90,10 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
   const [dirty, setDirty] = useState(false)
   const originalItemIdsRef = useRef<Set<string>>(new Set())
   const initializedRef = useRef(false)
+  const serverItemsRef = useRef<Record<string, any>[]>([])
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const syncingRef = useRef(false)
+  const syncPromiseRef = useRef<Promise<void> | null>(null)
 
   // ---- Fetch BOM detail ----
   const { data: bomDetail, isLoading, error } = useQuery({
@@ -103,6 +107,7 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
     if (bomDetail?.items) {
       setItems(bomDetail.items)
       originalItemIdsRef.current = new Set(bomDetail.items.map((item) => item.id))
+      serverItemsRef.current = bomDetail.items
 
       // Fire onReady callback once
       if (!initializedRef.current) {
@@ -137,74 +142,102 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
     [dirty, onChange],
   )
 
-  // ---- Submit: diff items → batch API calls → callback ----
+  // ---- Auto-save: debounced diff & sync ----
+  useEffect(() => {
+    if (!projectId || !bomId || isReadonly) return;
+    if (syncingRef.current) return;
+
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+
+    const syncPromise = new Promise<void>((resolveSyncPromise) => {
+      saveTimerRef.current = setTimeout(async () => {
+        if (syncingRef.current) { resolveSyncPromise(); return; }
+        syncingRef.current = true;
+
+        try {
+          const server = serverItemsRef.current;
+          const local = items;
+          const serverIds = new Set(server.map(i => i.id));
+          const localIds = new Set(local.map(i => i.id));
+
+          // No changes check
+          if (JSON.stringify(local) === JSON.stringify(server)) {
+            syncingRef.current = false;
+            resolveSyncPromise();
+            return;
+          }
+
+          // 1. Deleted items
+          const deletedIds = [...serverIds].filter(id => !localIds.has(id));
+          for (const id of deletedIds) {
+            await projectBomApi.deleteItem(projectId, bomId, id);
+          }
+
+          // 2. New items
+          const newItems = local.filter(i => typeof i.id === 'string' && i.id.startsWith('new-'));
+          const idMapping: Record<string, string> = {};
+          for (const item of newItems) {
+            const created = await projectBomApi.addItem(projectId, bomId, toBOMItemRequest(item));
+            idMapping[item.id] = created.id;
+          }
+
+          // 3. Updated items
+          const existingItems = local.filter(i =>
+            !(typeof i.id === 'string' && i.id.startsWith('new-')) && serverIds.has(i.id)
+          );
+          for (const item of existingItems) {
+            const serverItem = server.find(s => s.id === item.id);
+            if (!serverItem || JSON.stringify(item) === JSON.stringify(serverItem)) continue;
+            await projectBomApi.updateItem(projectId, bomId, item.id, toBOMItemRequest(item));
+          }
+
+          // Update refs
+          const updatedLocal = local.map(i => idMapping[i.id] ? { ...i, id: idMapping[i.id] } : i);
+          serverItemsRef.current = updatedLocal;
+          if (Object.keys(idMapping).length > 0) {
+            setItems(updatedLocal);
+            originalItemIdsRef.current = new Set(updatedLocal.map(i => i.id));
+          }
+        } catch (err) {
+          console.warn('[EbomForm] Auto-save failed:', err);
+        } finally {
+          syncingRef.current = false;
+          resolveSyncPromise();
+        }
+      }, 1500);
+    });
+    syncPromiseRef.current = syncPromise;
+
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [items, projectId, bomId, isReadonly]);
+
+  // ---- Submit: wait for auto-save → submit ----
   const handleSubmit = useCallback(async (): Promise<{ success: boolean; data: any; message?: string }> => {
     if (!projectId || !bomId) return { success: false, data: null, message: 'Missing projectId or bomId' }
 
     setSubmitting(true)
     try {
-      const originalIds = originalItemIdsRef.current
-      const currentIds = new Set(items.map((item) => item.id))
-
-      // Diff: deleted / new / updated
-      const deletedIds = [...originalIds].filter((id) => !currentIds.has(id))
-      const newItems = items.filter((item) => String(item.id).startsWith('new-'))
-      const updatedItems = items.filter(
-        (item) => !String(item.id).startsWith('new-') && originalIds.has(item.id),
-      )
-
-      const promises: Promise<any>[] = []
-
-      // Delete removed items
-      for (const id of deletedIds) {
-        promises.push(projectBomApi.deleteItem(projectId, bomId, id))
+      // Wait for any pending auto-save to complete
+      if (syncPromiseRef.current) {
+        await syncPromiseRef.current;
+      }
+      // If still syncing (edge case), wait a bit
+      if (syncingRef.current) {
+        await new Promise<void>(resolve => {
+          const check = setInterval(() => {
+            if (!syncingRef.current) { clearInterval(check); resolve(); }
+          }, 100);
+        });
       }
 
-      // Batch add new items
-      if (newItems.length > 0) {
-        promises.push(
-          projectBomApi.batchAddItems(
-            projectId,
-            bomId,
-            newItems.map(toBOMItemRequest),
-          ),
-        )
-      }
-
-      // Update existing items
-      for (const item of updatedItems) {
-        promises.push(
-          projectBomApi.updateItem(projectId, bomId, item.id, toBOMItemRequest(item)),
-        )
-      }
-
-      // Execute all save operations, collecting errors instead of failing fast
-      if (promises.length > 0) {
-        const results = await Promise.allSettled(promises)
-        const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
-        if (failures.length > 0) {
-          // Extract first meaningful error message from API response
-          const firstErr = failures[0].reason
-          const apiMsg = firstErr?.response?.data?.message || firstErr?.response?.data?.error || firstErr?.message || '保存数据失败'
-          throw new Error(`保存失败 (${failures.length}/${results.length} 项): ${apiMsg}`)
-        }
-      }
-
-      // Submit for review (with acpContext in request if provided)
-      await projectBomApi.submit(projectId, bomId)
+      // Single API call to submit
+      await projectBomApi.submit(projectId, bomId);
 
       message.success('BOM数据提交成功')
-
-      // Reset dirty state
       setDirty(false)
       onChange?.(false)
-
-      // Update original IDs to reflect new state
-      const refreshed = await projectBomApi.get(projectId, bomId)
-      if (refreshed?.items) {
-        setItems(refreshed.items)
-        originalItemIdsRef.current = new Set(refreshed.items.map((i) => i.id))
-      }
 
       const result = {
         success: true as const,
@@ -215,37 +248,22 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
         },
         message: 'BOM submitted successfully',
       }
-
-      // Fire onSubmit callback for backward compat
       onSubmit?.(result)
-
       return result
     } catch (err: any) {
       console.error('[EbomForm] Submit failed:', err)
-      // Extract meaningful error message from API response or Error object
       const apiMsg = err?.response?.data?.message || err?.response?.data?.error
       const errMsg = apiMsg || (err instanceof Error ? err.message : 'Submit failed')
       message.error(errMsg)
 
-      const result = {
-        success: false as const,
-        data: null,
-        message: errMsg,
-      }
-
-      // Fire onSubmit callback for backward compat
+      const result = { success: false as const, data: null, message: errMsg }
       onSubmit?.(result)
-
-      onError?.({
-        code: 'SUBMIT_ERROR',
-        message: errMsg,
-      })
-
+      onError?.({ code: 'SUBMIT_ERROR', message: errMsg })
       return result
     } finally {
       setSubmitting(false)
     }
-  }, [projectId, bomId, items, acpContext, onChange, onSubmit, onError])
+  }, [projectId, bomId, acpContext, onChange, onSubmit, onError])
 
   // ---- Register handle for external submit control ----
   useEffect(() => {
