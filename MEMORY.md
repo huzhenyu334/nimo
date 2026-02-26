@@ -28,12 +28,17 @@
 
 ACP驱动PLM/SRM自主开发到产品化，Agent自我进化。详见知识库。
 
-## 架构决策（2026-02-25新增）
+## 架构决策
 
-- **废弃inline steps嵌套** → 改用`group:"xxx"`标签，纯前端分组，引擎不处理
-- **统一assignee** → assignee_type(agent/user/role)+assignee_id，Step type只管结构
-- **Duration** → YAML用友好格式(5d)，存储转ms(duration_ms+duration_raw)，统一自然日
-- **甘特图** → 所有步骤≥1h显示宽度，时间尺度切换(月/周/天/时)
+- **v2.1 Step数据模型（2026-02-26最终定稿）**：form/output_schema/component三者平级
+  - form = 输入表单（fields+on_submit），收集人的输入
+  - output_schema = 输出约束+只读渲染，约束agent/引擎校验
+  - component = 外部SDK组件（旧名form），props支持`{{steps.xxx.output.field}}`
+  - structured_output/output_schema命名不变！不改名
+  - on_submit：表单提交调API，成功才完成step，output_mapping提取字段合并到structured_output
+- **废弃inline steps嵌套** → 改用`group:"xxx"`标签
+- **统一assignee** → assignee_type(agent/user/role)+assignee_id
+- **甘特图** → 所有步骤≥1h显示宽度
 
 ## 当前优先级
 
