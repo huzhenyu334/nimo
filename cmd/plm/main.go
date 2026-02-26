@@ -1044,6 +1044,7 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 		c.Next()
 	})
 	r.Static("/assets", "./web/plm/assets")
+	r.Static("/sdk", "./web/plm/sdk")
 	r.StaticFile("/logo.svg", "./web/plm/logo.svg")
 	r.StaticFile("/vite.svg", "./web/plm/vite.svg")
 

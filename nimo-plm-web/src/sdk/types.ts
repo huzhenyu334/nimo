@@ -10,8 +10,8 @@
 export interface SDKConfig {
   /** Application ID for identification */
   appId: string
-  /** Bearer token for PLM API authentication */
-  token: string
+  /** Bearer token for PLM API authentication (optional for cross-system callers) */
+  token?: string
   /** PLM API base URL, e.g. "https://plm.example.com" */
   baseUrl: string
   /** List of component names to enable, e.g. ["EbomForm"] */

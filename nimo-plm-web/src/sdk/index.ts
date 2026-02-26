@@ -55,7 +55,7 @@ const activeRoots: Map<HTMLElement, Root> = new Map()
 async function config(sdkConfig: SDKConfig): Promise<void> {
   // Validate required fields
   if (!sdkConfig.appId) throw new Error('[nimoComponent] config: appId is required')
-  if (!sdkConfig.token) throw new Error('[nimoComponent] config: token is required')
+  // token is optional — cross-system callers may use other auth mechanisms
   if (!sdkConfig.baseUrl) throw new Error('[nimoComponent] config: baseUrl is required')
   if (!sdkConfig.componentList || sdkConfig.componentList.length === 0) {
     throw new Error('[nimoComponent] config: componentList is required and must not be empty')
