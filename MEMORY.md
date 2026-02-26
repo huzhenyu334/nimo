@@ -16,6 +16,7 @@
 10. **subagent超时要长**：runTimeoutSeconds: 1800（2026-02-25）
 11. **CC修完必须commit**（2026-02-25）
 12. **subagent必须同步调CC**：task里写明"用claude_agent同步调用"（2026-02-25）
+13. **ACP工具=OpenClaw Plugin**：通过`extensions/acp/index.ts`注册为Tools，Tools调用ACP后端API。派CC加ACP工具时改的是Plugin文件（index.ts），如果API不存在才需要同时改ACP后端加API（2026-02-26）
 
 ## 核心洞察
 

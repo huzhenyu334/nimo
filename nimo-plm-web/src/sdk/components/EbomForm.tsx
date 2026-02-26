@@ -11,8 +11,7 @@
 
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
-import { ConfigProvider, Button, Spin, Result, message, App, theme as antdTheme } from 'antd'
-import { SaveOutlined } from '@ant-design/icons'
+import { ConfigProvider, Spin, Result, message, App, theme as antdTheme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import enUS from 'antd/locale/en_US'
 
@@ -82,6 +81,7 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
   onSubmit,
   onChange,
   onError,
+  onRegisterHandle,
 }) => {
   const isReadonly = mode === 'view'
 
@@ -138,8 +138,8 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
   )
 
   // ---- Submit: diff items → batch API calls → callback ----
-  const handleSubmit = useCallback(async () => {
-    if (!projectId || !bomId) return
+  const handleSubmit = useCallback(async (): Promise<{ success: boolean; data: any; message?: string }> => {
+    if (!projectId || !bomId) return { success: false, data: null, message: 'Missing projectId or bomId' }
 
     setSubmitting(true)
     try {
@@ -196,35 +196,53 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
         originalItemIdsRef.current = new Set(refreshed.items.map((i) => i.id))
       }
 
-      // Fire onSubmit callback
-      onSubmit?.({
-        success: true,
+      const result = {
+        success: true as const,
         data: {
           project_id: projectId,
           bom_id: bomId,
           ...(acpContext ? { acp_context: acpContext } : {}),
         },
         message: 'BOM submitted successfully',
-      })
+      }
+
+      // Fire onSubmit callback for backward compat
+      onSubmit?.(result)
+
+      return result
     } catch (err) {
       console.error('[EbomForm] Submit failed:', err)
       const errMsg = err instanceof Error ? err.message : 'Submit failed'
       message.error('提交失败，请重试')
 
-      onSubmit?.({
-        success: false,
+      const result = {
+        success: false as const,
         data: null,
         message: errMsg,
-      })
+      }
+
+      // Fire onSubmit callback for backward compat
+      onSubmit?.(result)
 
       onError?.({
         code: 'SUBMIT_ERROR',
         message: errMsg,
       })
+
+      return result
     } finally {
       setSubmitting(false)
     }
   }, [projectId, bomId, items, acpContext, onChange, onSubmit, onError])
+
+  // ---- Register handle for external submit control ----
+  useEffect(() => {
+    if (isReadonly) {
+      onRegisterHandle?.({ submit: async () => ({ success: true, data: {} }) })
+    } else {
+      onRegisterHandle?.({ submit: handleSubmit })
+    }
+  }, [isReadonly, handleSubmit, onRegisterHandle])
 
   // ========== Render ==========
 
@@ -268,7 +286,7 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
   }
 
   return (
-    <div style={{ padding: 16, paddingBottom: isReadonly ? 16 : 72 }}>
+    <div style={{ padding: 16 }}>
       <EBOMControl
         config={DEFAULT_EBOM_CONFIG}
         value={items}
@@ -276,34 +294,6 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
         readonly={isReadonly}
       />
 
-      {/* Fixed submit button bar (edit mode only) */}
-      {!isReadonly && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            padding: '12px 16px',
-            background: '#fff',
-            borderTop: '1px solid #f0f0f0',
-            boxShadow: '0 -2px 8px rgba(0, 0, 0, 0.06)',
-            display: 'flex',
-            justifyContent: 'flex-end',
-            zIndex: 100,
-          }}
-        >
-          <Button
-            type="primary"
-            icon={<SaveOutlined />}
-            loading={submitting}
-            onClick={handleSubmit}
-            size="large"
-          >
-            提交
-          </Button>
-        </div>
-      )}
     </div>
   )
 }

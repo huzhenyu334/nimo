@@ -54,10 +54,11 @@ const CATEGORY_COLORS_LIGHT: Record<string, string> = {
   optical: '#fff7e6',
 };
 
-const CATEGORY_COLORS_DARK: Record<string, string> = {
-  electronic: '#111a2c',
-  structural: '#162312',
-  optical: '#2b2111',
+// Category accent token keys for dark mode (resolved at runtime from antd tokens)
+const CATEGORY_TOKEN_KEYS: Record<string, 'colorPrimary' | 'colorSuccess' | 'colorWarning'> = {
+  electronic: 'colorPrimary',   // 蓝
+  structural: 'colorSuccess',   // 绿
+  optical: 'colorWarning',      // 黄
 };
 
 // ========== Helpers ==========
@@ -93,7 +94,7 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
     const b = parseInt(hex.substring(4, 6), 16);
     return (r * 299 + g * 587 + b * 114) / 1000 < 128;
   }, [token.colorBgContainer]);
-  const categoryColors = isDark ? CATEGORY_COLORS_DARK : CATEGORY_COLORS_LIGHT;
+  const categoryColors = CATEGORY_COLORS_LIGHT; // light mode: bg fill
 
   // Fetch templates via react-query (cached globally, 5min staleTime)
   const { data: allTemplates = [], isLoading: templatesLoading } = useQuery({
@@ -227,7 +228,11 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
         {/* Sub-category header with "添加行" button on the right */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px',
-          background: token.colorFillAlter, borderRadius: '4px 4px 0 0',
+          background: isDark
+            ? `color-mix(in srgb, ${token[CATEGORY_TOKEN_KEYS[category] || 'colorPrimary']} 10%, ${token.colorBgContainer})`
+            : token.colorFillAlter,
+          borderRadius: '4px 4px 0 0',
+          borderLeft: isDark ? `2px solid color-mix(in srgb, ${token[CATEGORY_TOKEN_KEYS[category] || 'colorPrimary']} 50%, transparent)` : 'none',
           borderBottom: `1px solid ${token.colorSplit}`,
         }}>
           <Text style={{ fontSize: 13, fontWeight: 500 }}>{label}</Text>
@@ -268,7 +273,13 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
     const enabledSubs = getEnabledSubCategories(category);
     const IconComp = CATEGORY_ICON_MAP[category] || ExperimentOutlined;
     const icon = <IconComp style={{ color: token.colorTextSecondary }} />;
-    const bgColor = categoryColors[category] || token.colorFillAlter;
+    // Resolve accent color from antd token
+    const tokenKey = CATEGORY_TOKEN_KEYS[category] || 'colorPrimary';
+    const accentColor = token[tokenKey];
+    // Dark: translucent accent overlay on dark bg; Light: soft colored bg
+    const bgColor = isDark
+      ? `color-mix(in srgb, ${accentColor} 18%, ${token.colorBgElevated})`
+      : (categoryColors[category] || token.colorFillAlter);
     const label = CATEGORY_LABELS[category] || category;
     const categoryItems = value.filter(item => item.category === category);
 
@@ -285,7 +296,9 @@ const EBOMControl: React.FC<EBOMControlProps> = ({
         {/* Category header with download/import buttons */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-          background: bgColor, borderRadius: 6, borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          background: bgColor, borderRadius: 6,
+          borderLeft: `3px solid ${accentColor}`,
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
         }}>
           {icon}
           <Text strong style={{ fontSize: 14 }}>{label}</Text>

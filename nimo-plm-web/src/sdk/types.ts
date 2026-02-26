@@ -50,11 +50,22 @@ export interface EbomFormProps {
   onChange?: (dirty: boolean) => void
   /** Called on error */
   onError?: (error: { code: string; message: string }) => void
+  /** Register a handle for external submit control (used by ACP) */
+  onRegisterHandle?: (handle: { submit: () => Promise<{ success: boolean; data: any; message?: string }> }) => void
 }
 
-// ========== Render Result ==========
+// ========== Render Result / Component Handle ==========
 
 export interface RenderResult {
+  /** Trigger form submission. Returns result object. */
+  submit: () => Promise<{ success: boolean; data: any; message?: string }>
+  /** Unmount and destroy the rendered component */
+  destroy: () => void
+}
+
+export interface ComponentHandle {
+  /** Trigger form submission. Returns result object. */
+  submit: () => Promise<{ success: boolean; data: any; message?: string }>
   /** Unmount and destroy the rendered component */
   destroy: () => void
 }

@@ -28,8 +28,8 @@
 
 import React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { setConfig, configureApiClient, isConfigured, isComponentEnabled } from './config'
-import type { SDKConfig, EbomFormProps, RenderResult } from './types'
+import { setConfig, getConfig, configureApiClient, isConfigured, isComponentEnabled } from './config'
+import type { SDKConfig, EbomFormProps, RenderResult, ComponentHandle } from './types'
 
 // SDK version — injected at build time or fallback
 const SDK_VERSION = '__SDK_VERSION__'
@@ -123,9 +123,12 @@ function render(
     activeRoots.delete(container)
   }
 
+  // Mutable ref to capture the component's submit handle
+  let handleRef: { submit: () => Promise<any> } | null = null
+
   // Inject dark theme CSS overrides if configured
   let darkStyleEl: HTMLStyleElement | null = null
-  if (sdkState.config?.theme === 'dark') {
+  if (getConfig()?.theme === 'dark') {
     darkStyleEl = document.createElement('style')
     darkStyleEl.setAttribute('data-nimo-dark', 'true')
     darkStyleEl.textContent = `
@@ -162,13 +165,23 @@ function render(
     container.setAttribute('data-nimo-sdk', 'true')
   }
 
-  // Create React root and render
+  // Create React root and render with onRegisterHandle to capture the submit function
   const root = createRoot(container)
-  root.render(React.createElement(Component, props))
+  const enhancedProps = {
+    ...props,
+    onRegisterHandle: (h: { submit: () => Promise<any> }) => {
+      handleRef = h
+    },
+  }
+  root.render(React.createElement(Component, enhancedProps))
   activeRoots.set(container, root)
 
-  // Return destroy handle
+  // Return ComponentHandle with submit + destroy
   return {
+    async submit() {
+      if (handleRef) return handleRef.submit()
+      return { success: false, data: null, message: 'Component not ready' }
+    },
     destroy() {
       root.unmount()
       activeRoots.delete(container)
@@ -206,4 +219,4 @@ const nimoComponent: NimoComponentSDK = {
 // Also export for ESM usage
 export default nimoComponent
 export { config, render }
-export type { SDKConfig, EbomFormProps, RenderResult }
+export type { SDKConfig, EbomFormProps, RenderResult, ComponentHandle }
