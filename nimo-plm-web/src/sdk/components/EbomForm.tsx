@@ -178,7 +178,17 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
         )
       }
 
-      await Promise.all(promises)
+      // Execute all save operations, collecting errors instead of failing fast
+      if (promises.length > 0) {
+        const results = await Promise.allSettled(promises)
+        const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        if (failures.length > 0) {
+          // Extract first meaningful error message from API response
+          const firstErr = failures[0].reason
+          const apiMsg = firstErr?.response?.data?.message || firstErr?.response?.data?.error || firstErr?.message || '保存数据失败'
+          throw new Error(`保存失败 (${failures.length}/${results.length} 项): ${apiMsg}`)
+        }
+      }
 
       // Submit for review (with acpContext in request if provided)
       await projectBomApi.submit(projectId, bomId)
@@ -210,10 +220,12 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
       onSubmit?.(result)
 
       return result
-    } catch (err) {
+    } catch (err: any) {
       console.error('[EbomForm] Submit failed:', err)
-      const errMsg = err instanceof Error ? err.message : 'Submit failed'
-      message.error('提交失败，请重试')
+      // Extract meaningful error message from API response or Error object
+      const apiMsg = err?.response?.data?.message || err?.response?.data?.error
+      const errMsg = apiMsg || (err instanceof Error ? err.message : 'Submit failed')
+      message.error(errMsg)
 
       const result = {
         success: false as const,
