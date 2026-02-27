@@ -213,7 +213,7 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
     };
   }, [items, projectId, bomId, isReadonly]);
 
-  // ---- Submit: wait for auto-save → submit ----
+  // ---- Submit: wait for auto-save → return data (no API call — ACP handles submission via on_submit) ----
   const handleSubmit = useCallback(async (): Promise<{ success: boolean; data: any; message?: string }> => {
     if (!projectId || !bomId) return { success: false, data: null, message: 'Missing projectId or bomId' }
 
@@ -223,7 +223,6 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
       if (syncPromiseRef.current) {
         await syncPromiseRef.current;
       }
-      // If still syncing (edge case), wait a bit
       if (syncingRef.current) {
         await new Promise<void>(resolve => {
           const check = setInterval(() => {
@@ -232,10 +231,7 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
         });
       }
 
-      // Single API call to submit
-      await projectBomApi.submit(projectId, bomId);
-
-      message.success('BOM数据提交成功')
+      // Return data only — ACP backend will call PLM submit API via on_submit
       setDirty(false)
       onChange?.(false)
 
@@ -246,16 +242,13 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
           bom_id: bomId,
           ...(acpContext ? { acp_context: acpContext } : {}),
         },
-        message: 'BOM submitted successfully',
+        message: 'Data ready for submission',
       }
       onSubmit?.(result)
       return result
     } catch (err: any) {
       console.error('[EbomForm] Submit failed:', err)
-      const apiMsg = err?.response?.data?.message || err?.response?.data?.error
-      const errMsg = apiMsg || (err instanceof Error ? err.message : 'Submit failed')
-      message.error(errMsg)
-
+      const errMsg = err instanceof Error ? err.message : 'Submit failed'
       const result = { success: false as const, data: null, message: errMsg }
       onSubmit?.(result)
       onError?.({ code: 'SUBMIT_ERROR', message: errMsg })

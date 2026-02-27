@@ -16,6 +16,10 @@
     "claude-code-orchestrator": {
       "version": "1.0.0",
       "installedAt": 1771936068565
+    },
+    "find-skills": {
+      "version": "0.1.0",
+      "installedAt": 1772122982936
     }
   }
 }

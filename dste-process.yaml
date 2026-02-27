@@ -1,0 +1,555 @@
+description: |
+  BitFantasy DSTE（从战略到执行）全流程。
+  基于华为BLM方法论，覆盖差距分析→五看→三定→业务设计→战略解码→BP年度计划。
+
+steps:
+  # ========== 阶段一：差距分析 ==========
+  - id: gap_analysis
+    name: "1.差距分析"
+    prompt: |
+      你是BitFantasy的战略分析师。请进行差距分析，这是整个战略规划的起点。
+
+      【背景信息】
+      公司：BitFantasy，主营智能眼镜（品牌nimo），团队约20人
+      {{input}}
+
+      【任务要求】
+
+      一、业绩差距分析（Performance Gap）
+      业绩差距=目标vs实际的偏差，根因指向"执行层面"问题。
+      从以下维度逐一分析：收入/营收目标达成、毛利率/利润率、客户数/订单量、产品交付/项目进度、团队效率
+      每个差距给出：指标名称、目标值、实际值（或预估）、差距幅度、根因分析
+
+      二、机会差距分析（Opportunity Gap）
+      机会差距=市场机会vs我们的捕获能力，根因指向"战略层面"缺失。
+      思考：智能眼镜行业有哪些我们没抓住的机会？AI+眼镜、AR企业应用、健康监测等赛道？竞争对手在做而我们没做的？
+      每个差距给出：机会描述、潜在市场规模、未捕获原因、战略层面根因
+
+      三、优先级排序
+      所有差距按"影响程度(1-5)×可行性(1-5)"排序，标注P0/P1/P2
+
+      【输出格式】严格按output_schema的JSON结构输出。
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        performance_gaps:
+          type: array
+          description: "业绩差距列表"
+        opportunity_gaps:
+          type: array
+          description: "机会差距列表"
+        priority_ranking:
+          type: array
+          description: "差距优先级排序"
+        executive_summary:
+          type: string
+          description: "差距分析核心结论（3句话内）"
+      required: ["performance_gaps", "opportunity_gaps", "priority_ranking", "executive_summary"]
+
+  # ========== 阶段二：五看（并行）==========
+  - id: look_industry
+    name: "2a.看行业"
+    group: market_insight
+    prompt: |
+      你是行业分析师。请对智能眼镜/AR眼镜行业进行深度分析。
+      差距分析供参考：{{steps.gap_analysis.output}}
+
+      分析要求：
+      1. 市场规模：TAM/SAM/SOM，数据来源必须标注
+      2. 增长率：近3年CAGR、未来3-5年预测、增长驱动因素
+      3. 生命周期：导入期/成长期/成熟期/衰退期？依据？
+      4. 价值链：上游(芯片/光学)→中游(整机)→下游(品牌/渠道)，各环节利润池分布
+      5. 行业关键成功因素Top3
+
+      要求用具体数字，没有确切数据标注"预估"。用web搜索获取最新数据。
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        market_size: { type: object, description: "含tam/sam/som" }
+        growth: { type: object, description: "含historical_cagr/forecast_cagr/drivers" }
+        lifecycle: { type: object, description: "含stage和reasoning" }
+        value_chain: { type: object, description: "含upstream/midstream/downstream" }
+        key_success_factors: { type: array, description: "行业KSF Top3" }
+        conclusion: { type: string, description: "行业分析核心结论" }
+      required: ["market_size", "growth", "lifecycle", "value_chain", "key_success_factors"]
+
+  - id: look_trends
+    name: "2b.看趋势"
+    group: market_insight
+    prompt: |
+      你是趋势研究员。分析影响智能眼镜行业的关键趋势。
+      差距分析：{{steps.gap_analysis.output}}
+
+      用PEST框架+技术趋势：
+      1. 技术趋势（至少5个）：端侧AI/大模型、显示技术(MicroLED/光波导)、芯片平台、交互方式(语音/手势/眼动)、通信技术
+      2. 政策趋势（至少2个）：AI监管、隐私法规对摄像头眼镜影响
+      3. 社会趋势（至少2个）：AR接受度、远程办公/元宇宙
+      4. 经济趋势（至少2个）：消费电子景气度、供应链成本
+
+      每个趋势输出：维度/描述/时间窗口/对我们的影响(机会or威胁)/影响程度(高/中/低)
+      最后给出Top3机会和Top3威胁。
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        technology_trends: { type: array, description: "技术趋势" }
+        policy_trends: { type: array, description: "政策趋势" }
+        social_trends: { type: array, description: "社会趋势" }
+        economic_trends: { type: array, description: "经济趋势" }
+        top_opportunities: { type: array, description: "Top3机会" }
+        top_threats: { type: array, description: "Top3威胁" }
+      required: ["technology_trends", "policy_trends", "top_opportunities", "top_threats"]
+
+  - id: look_customers
+    name: "2c.看客户"
+    group: market_insight
+    prompt: |
+      你是客户洞察分析师。分析nimo智能眼镜的客户群体。
+      差距分析：{{steps.gap_analysis.output}}
+
+      1. 客户分群（至少3个）：每群含画像/占比/特征/需求Top3/痛点Top3/替代方案/价格区间
+      2. 决策链：影响者/决策者/购买渠道/决策周期
+      3. $APPEALS评分(1-10)：Price/Availability/Packaging/Performance/Assurance/Lifecycle cost/Social，标注哪个维度影响最大
+      4. 未满足需求：现有产品都没满足的需求，价值多大？
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        segments: { type: array, description: "客户分群" }
+        decision_chain: { type: object, description: "决策链" }
+        appeals_score: { type: object, description: "$APPEALS评分" }
+        unmet_needs: { type: array, description: "未满足需求" }
+      required: ["segments", "decision_chain", "appeals_score", "unmet_needs"]
+
+  - id: look_competition
+    name: "2d.看竞争"
+    group: market_insight
+    prompt: |
+      你是竞争情报分析师。分析智能眼镜市场竞争格局。
+      差距分析：{{steps.gap_analysis.output}}
+
+      1. 竞争格局总览：市场集中度、竞争态势(蓝海/温和/激烈/红海)
+      2. Top5对手深度分析（Meta/华为/小米/XREAL/Rokid）：
+         每个含：战略定位、核心产品和价格带、市场份额、优势3个、劣势3个、近12月动作、技术路线、目标客群
+      3. 对标打分(1-10)：产品力/技术力/品牌力/渠道力/供应链/资金/团队
+      4. 竞争趋势：未来1-2年格局变化、新进入者、颠覆性威胁
+
+      用web搜索获取最新竞品信息。
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        landscape: { type: object, description: "竞争格局" }
+        competitors: { type: array, description: "Top5对手分析" }
+        benchmark: { type: object, description: "对标打分" }
+        future_outlook: { type: object, description: "竞争趋势" }
+      required: ["landscape", "competitors", "benchmark", "future_outlook"]
+
+  - id: look_self
+    name: "2e.看自己"
+    group: market_insight
+    prompt: |
+      你是组织诊断顾问。对BitFantasy进行全面自我评估。
+      差距分析：{{steps.gap_analysis.output}}
+
+      背景：BitFantasy约20人，主营nimo智能眼镜。技术栈Pure Go、已有PLM/ERP/ACP系统。
+
+      1. 核心能力评估(1-10分+理由)：产品定义/技术研发/供应链/品牌营销/渠道/组织效率/资金/人才
+      2. 独特优势(Unfair Advantage)：竞争对手短期无法复制的（ACP/Agent能力、敏捷性等）
+      3. 关键短板Top3：每个含改善方案和时间
+      4. 资源盘点：人力(各职能人数和缺口)/资金(可投入级别)/技术资产
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        capability_scores: { type: array, description: "能力评分" }
+        unfair_advantages: { type: array, description: "独特优势" }
+        key_weaknesses: { type: array, description: "关键短板" }
+        resource_inventory: { type: object, description: "资源盘点" }
+      required: ["capability_scores", "unfair_advantages", "key_weaknesses"]
+
+  # ========== 阶段三：五看汇总 ==========
+  - id: market_synthesis
+    name: "3.市场洞察汇总与SWOT"
+    prompt: |
+      你是战略顾问。汇总五看分析，输出SWOT和核心发现。
+
+      看行业：{{steps.look_industry.output}}
+      看趋势：{{steps.look_trends.output}}
+      看客户：{{steps.look_customers.output}}
+      看竞争：{{steps.look_competition.output}}
+      看自己：{{steps.look_self.output}}
+
+      任务：
+      1. SWOT：每象限3-5条，要具体
+      2. 交叉分析：SO策略/WO策略/ST策略/WT策略
+      3. 核心发现Top5
+      4. 战略启示（2-3段话）
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        swot: { type: object, description: "含strengths/weaknesses/opportunities/threats" }
+        cross_analysis: { type: object, description: "含so/wo/st/wt策略" }
+        key_findings_top5: { type: array, description: "核心发现Top5" }
+        strategic_implications: { type: string, description: "战略启示" }
+      required: ["swot", "cross_analysis", "key_findings_top5", "strategic_implications"]
+
+  # ========== 阶段四：CEO审阅洞察 ==========
+  - id: ceo_review_insight
+    name: "4.CEO审阅市场洞察"
+    prompt: "请CEO审阅市场洞察，补充一线体感和内部信息。"
+    assignee_type: user
+    assignee_id: "{{initiator}}"
+    form:
+      fields:
+        - key: insight_accuracy
+          label: "市场洞察整体准确度"
+          type: select
+          required: true
+          options:
+            - label: "基本准确，可继续"
+              value: "accurate"
+            - label: "部分需调整，但可继续"
+              value: "partial"
+            - label: "偏差较大，需重做"
+              value: "redo"
+        - key: ceo_supplements
+          label: "CEO补充信息"
+          type: textarea
+          required: false
+        - key: self_score_adjustments
+          label: "自我评估打分修正"
+          type: textarea
+          required: false
+        - key: strategic_hints
+          label: "CEO对战略方向的初步想法"
+          type: textarea
+          required: false
+    gate:
+      field: insight_accuracy
+      fail_value: "redo"
+      on_fail: restart
+      max_loops: 2
+      feedback_to: market_synthesis
+
+  # ========== 阶段五：三定 ==========
+  - id: define_control_points
+    name: "5a.定控制点"
+    prompt: |
+      你是战略规划师。为BitFantasy定义战略控制点（护城河）。
+
+      差距分析：{{steps.gap_analysis.output}}
+      洞察汇总：{{steps.market_synthesis.output}}
+      CEO补充：{{steps.ceo_review_insight.output}}
+
+      战略控制点=竞争对手短期无法复制的独特优势。类型：技术壁垒/品牌心智/生态锁定/成本优势/数据壁垒/组织能力(ACP)
+
+      任务：
+      1. 提出3-5个候选控制点
+      2. 每个评估：描述/构建路径/时间(乐观/中性/悲观)/投入/护城河深度(浅1年/中3年/深5年+)/可行性(1-10)
+      3. 推荐优先构建的2个，给出理由
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        candidates: { type: array, description: "候选控制点" }
+        recommended_top2: { type: array, description: "推荐Top2+reasoning" }
+      required: ["candidates", "recommended_top2"]
+
+  - id: define_objectives
+    name: "5b.定目标"
+    prompt: |
+      你是财务规划师。为BitFantasy制定3年战略目标矩阵。
+
+      差距分析：{{steps.gap_analysis.output}}
+      行业数据：{{steps.look_industry.output}}
+      竞争格局：{{steps.look_competition.output}}
+      CEO意见：{{steps.ceo_review_insight.output}}
+
+      制定Y1/Y2/Y3目标：
+      1. 财务：收入(万)/毛利率(%)/净利润(万)
+      2. 市场：市场份额(%)/品牌认知度
+      3. 客户：累计客户数/复购率/NPS
+      4. 产品：产品线数/核心产品迭代/新品类
+      5. 组织：团队规模/关键岗位到位率
+
+      每个目标含：设定依据、挑战性(保守/适中/激进)、达成前提条件
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        financial: { type: object, description: "财务目标" }
+        market: { type: object, description: "市场目标" }
+        customer: { type: object, description: "客户目标" }
+        product: { type: object, description: "产品目标" }
+        organization: { type: object, description: "组织目标" }
+        prerequisites: { type: array, description: "前提条件" }
+      required: ["financial", "market", "customer", "product", "prerequisites"]
+
+  - id: define_strategies
+    name: "5c.定策略"
+    prompt: |
+      你是战略顾问。制定BitFantasy核心策略组合。
+
+      洞察：{{steps.market_synthesis.output}}
+      控制点：{{steps.define_control_points.output}}
+      目标：{{steps.define_objectives.output}}
+      CEO想法：{{steps.ceo_review_insight.output}}
+
+      每个策略维度填"因为(洞察)→所以(决策)→预期(目标)"：
+      1. 产品策略：产品路标Y1/Y2/Y3
+      2. 市场策略：先打哪个市场？进入顺序？
+      3. 渠道策略：线上vs线下、直销vs分销、海外
+      4. 技术策略：自研vs采购vs合作的边界
+      5. 合作策略：需要什么合作伙伴？模式？
+      6. 定价策略：价格带、定价逻辑
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        product_strategy: { type: object, description: "含because/therefore/expect/roadmap" }
+        market_strategy: { type: object, description: "含because/therefore/expect/entry_sequence" }
+        channel_strategy: { type: object, description: "渠道策略" }
+        technology_strategy: { type: object, description: "技术策略" }
+        partnership_strategy: { type: object, description: "合作策略" }
+        pricing_strategy: { type: object, description: "定价策略" }
+      required: ["product_strategy", "market_strategy", "technology_strategy", "pricing_strategy"]
+
+  # ========== 阶段六：业务设计 ==========
+  - id: business_design
+    name: "6.业务设计（BLM六要素）"
+    prompt: |
+      你是商业模式设计师。完成BitFantasy业务设计。
+
+      控制点：{{steps.define_control_points.output}}
+      目标：{{steps.define_objectives.output}}
+      策略：{{steps.define_strategies.output}}
+      客户：{{steps.look_customers.output}}
+
+      BLM六要素：
+      一、客户选择：目标客户画像/放弃客户/理由
+      二、价值主张：一句话说清"客户为什么买nimo"/3个差异化点/为什么选我们不选Meta华为XREAL
+      三、盈利模式：收入结构(硬件/软件/服务)/定价/成本结构(BOM/制造/研发/营销)/目标毛利/盈亏平衡
+      四、活动范围：自做vs外包（核心能力绝不外包）/合作伙伴
+      五、战略控制点在业务中的体现
+      六、风险Top5：概率/影响/应对/预警指标
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        customer_selection: { type: object, description: "客户选择" }
+        value_proposition: { type: object, description: "价值主张" }
+        profit_model: { type: object, description: "盈利模式" }
+        activity_scope: { type: array, description: "活动范围" }
+        strategic_control: { type: object, description: "战略控制点" }
+        risk_management: { type: array, description: "风险Top5" }
+      required: ["customer_selection", "value_proposition", "profit_model", "risk_management"]
+
+  # ========== 阶段七：CEO审批战略 ==========
+  - id: ceo_approve_strategy
+    name: "7.CEO审批战略方向"
+    prompt: "请CEO审批三定+业务设计。这是SP最关键的决策点。"
+    assignee_type: user
+    assignee_id: "{{initiator}}"
+    approval:
+      title: "BitFantasy 3年战略方向审批"
+      description: "审批控制点、3年目标、策略组合、业务设计。通过后进入解码。"
+      approvers:
+        - type: feishu_user
+          open_id: "ou_e229cd56698a8e15e629af2447a8e0ed"
+      strategy: all
+      timeout: "72h"
+      on_reject: restart_step
+      restart_step: define_strategies
+      max_rejects: 3
+      context: [define_control_points, define_objectives, define_strategies, business_design]
+
+  # ========== 阶段八：战略解码 ==========
+  - id: decode_csf
+    name: "8a.关键成功因素(CSF)"
+    prompt: |
+      你是战略解码专家。将已审批战略转化为CSF。
+
+      控制点：{{steps.define_control_points.output}}
+      目标：{{steps.define_objectives.output}}
+      策略：{{steps.define_strategies.output}}
+      业务设计：{{steps.business_design.output}}
+
+      提取3-5个CSF：每个含name/description/why_critical(不做会怎样)/linked_objective/success_criteria/priority(P0/P1)
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        csf_list: { type: array, description: "CSF列表" }
+      required: ["csf_list"]
+
+  - id: decode_initiatives
+    name: "8b.关键举措与KPI"
+    prompt: |
+      你是执行规划师。为每个CSF制定举措和KPI。
+
+      CSF：{{steps.decode_csf.output}}
+      目标：{{steps.define_objectives.output}}
+      策略：{{steps.define_strategies.output}}
+
+      一、关键举措（每CSF 2-3个）：
+      名称/描述/对应CSF/负责角色/时间线(起止季度)/资源/依赖/产出物
+
+      二、KPI体系（每举措1-2个）：
+      指标/计算公式/Y1目标/数据来源/考核频率(月/季/年)/红黄绿灯标准
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        initiatives: { type: array, description: "关键举措" }
+        kpi_system: { type: array, description: "KPI体系" }
+      required: ["initiatives", "kpi_system"]
+
+  - id: decode_milestones
+    name: "8c.里程碑与资源计划"
+    prompt: |
+      你是项目规划师。制定里程碑和资源需求。
+
+      举措：{{steps.decode_initiatives.output}}
+      目标：{{steps.define_objectives.output}}
+
+      一、里程碑（Y1按季度Q1-Q4，Y2/Y3关键节点）：
+      每个含：时间/里程碑名/交付物/红黄绿灯标准/前置条件
+
+      二、资源需求：
+      人力（各职能人数+缺口+招聘时间）/预算(Y1按研发/市场/运营/人力分)/工具设备
+
+      三、风险预案：资源不足降级方案/关键人员离职应急/预算削减优先级
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        milestones: { type: array, description: "里程碑" }
+        resource_plan: { type: object, description: "资源计划" }
+        contingency: { type: array, description: "风险预案" }
+      required: ["milestones", "resource_plan", "contingency"]
+
+  # ========== 阶段九：BP年度计划 ==========
+  - id: annual_plan
+    name: "9.BP年度商业计划"
+    prompt: |
+      你是运营规划师。将SP解码为Y1年度商业计划。
+
+      目标：{{steps.define_objectives.output}}
+      策略：{{steps.define_strategies.output}}
+      举措：{{steps.decode_initiatives.output}}
+      里程碑：{{steps.decode_milestones.output}}
+
+      一、年度目标（取Y1）：收入分解(按产品线/季度/渠道)、利润、客户、产品
+      二、季度行动计划Q1-Q4：关键任务/负责人/预算/验收标准
+      三、年度预算：总额+按类别(研发/市场/人力/运营)+按季度+关键投入项
+      四、组织配套：招聘计划/架构调整/绩效与BP挂钩
+    assignee_type: agent
+    assignee_id: main
+    output_schema:
+      type: object
+      properties:
+        annual_targets: { type: object, description: "Y1目标分解" }
+        quarterly_plans: { type: array, description: "Q1-Q4计划" }
+        budget: { type: object, description: "预算" }
+        org_plan: { type: object, description: "组织配套" }
+      required: ["annual_targets", "quarterly_plans", "budget"]
+
+  # ========== 阶段十：CEO最终审批 ==========
+  - id: ceo_final_approval
+    name: "10.CEO审批BP"
+    prompt: "请CEO审批年度商业计划。通过后为公司正式年度执行计划。"
+    assignee_type: user
+    assignee_id: "{{initiator}}"
+    approval:
+      title: "BitFantasy 年度商业计划(BP)审批"
+      description: "审批Y1年度目标、季度行动计划、预算分配、组织配套。通过后生成正式报告。"
+      approvers:
+        - type: feishu_user
+          open_id: "ou_e229cd56698a8e15e629af2447a8e0ed"
+      strategy: all
+      timeout: "72h"
+      on_reject: restart_step
+      restart_step: annual_plan
+      max_rejects: 3
+      context: [define_objectives, decode_initiatives, decode_milestones, annual_plan]
+
+  # ========== 阶段十一：生成报告（并行）==========
+  - id: generate_sp_report
+    name: "11a.生成SP报告"
+    group: final_reports
+    prompt: |
+      你是文档撰写专家。汇总全部分析生成正式SP战略规划报告。
+
+      差距分析：{{steps.gap_analysis.output}}
+      看行业：{{steps.look_industry.output}}
+      看趋势：{{steps.look_trends.output}}
+      看客户：{{steps.look_customers.output}}
+      看竞争：{{steps.look_competition.output}}
+      看自己：{{steps.look_self.output}}
+      洞察汇总：{{steps.market_synthesis.output}}
+      控制点：{{steps.define_control_points.output}}
+      目标：{{steps.define_objectives.output}}
+      策略：{{steps.define_strategies.output}}
+      业务设计：{{steps.business_design.output}}
+      CSF：{{steps.decode_csf.output}}
+      举措+KPI：{{steps.decode_initiatives.output}}
+      里程碑：{{steps.decode_milestones.output}}
+
+      报告结构：
+      1. 执行摘要（核心结论3句+关键数字5个+重大决策3个）
+      2. 差距分析 3. 市场洞察(五看+SWOT) 4. 战略方向(三定)
+      5. 业务设计(六要素) 6. 战略解码(CSF+举措+KPI+里程碑)
+      7. 资源计划 8. 风险管理 9. 附录
+
+      要求：专业严谨、数据支撑、每章开头有核心结论、Markdown表格、5000-8000字
+    assignee_type: agent
+    assignee_id: main
+
+  - id: generate_bp_report
+    name: "11b.生成BP报告"
+    group: final_reports
+    prompt: |
+      你是文档撰写专家。生成正式年度商业计划报告。
+
+      年度计划：{{steps.annual_plan.output}}
+      目标：{{steps.define_objectives.output}}
+      举措：{{steps.decode_initiatives.output}}
+      里程碑：{{steps.decode_milestones.output}}
+
+      结构：1.年度目标总览 2.季度行动计划(Q1-Q4详细) 3.预算分配 4.组织与人力 5.KPI考核 6.风险预案
+      要求简洁可操作，每个任务有明确负责人和完成标准。
+    assignee_type: agent
+    assignee_id: main
+
+  # ========== 阶段十二：归档 ==========
+  - id: archive_to_knowledge
+    name: "12.归档知识库"
+    prompt: |
+      请将SP和BP报告存入企业知识库。
+
+      SP报告：{{steps.generate_sp_report.output}}
+      BP报告：{{steps.generate_bp_report.output}}
+
+      使用acp_knowledge_write工具分别存入：
+      - SP标题：「BitFantasy SP 2026-2028 战略规划」domain:product tags:SP,DSTE,战略
+      - BP标题：「BitFantasy BP 2026 年度商业计划」domain:product tags:BP,DSTE,年度计划
+    assignee_type: agent
+    assignee_id: main
