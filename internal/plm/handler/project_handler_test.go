@@ -45,7 +45,6 @@ func setupProjectTest(t *testing.T) (*testutil.TestEnv, *ProjectHandler) {
 		repos.Task,
 		repos.Product,
 		nil, // feishuSvc
-		repos.TaskForm,
 	)
 	handler := NewProjectHandler(projectSvc)
 

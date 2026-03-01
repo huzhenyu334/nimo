@@ -108,21 +108,9 @@ export const projectApi = {
     return response.data.data;
   },
 
-  // 完成任务
-  completeTask: async (projectId: string, taskId: string): Promise<Task> => {
-    const response = await apiClient.post<ApiResponse<Task>>(`/projects/${projectId}/tasks/${taskId}/complete`);
-    return response.data.data;
-  },
-
   // 删除项目
   delete: async (id: string): Promise<void> => {
     await apiClient.delete(`/projects/${id}`);
-  },
-
-  // 获取我的任务
-  myTasks: async (params?: { status?: string; page?: number; page_size?: number }): Promise<PaginatedResponse<Task>> => {
-    const response = await apiClient.get<ApiResponse<PaginatedResponse<Task>>>('/my/tasks', { params });
-    return response.data.data;
   },
 
   // 批量角色分配

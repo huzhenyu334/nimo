@@ -15,7 +15,7 @@ import {
   Tooltip,
 } from 'antd';
 import { DeleteOutlined, PlusOutlined, UploadOutlined, CloseCircleOutlined, EyeOutlined, LoadingOutlined, EyeTwoTone, SearchOutlined } from '@ant-design/icons';
-import { taskFormApi } from '@/api/taskForms';
+import { uploadApi } from '@/api/upload';
 import type { ColumnsType } from 'antd/es/table';
 import type { CategoryAttrTemplate } from '@/api/projectBom';
 import STLViewer from './STLViewer';
@@ -375,7 +375,7 @@ const BOMEditableTable: React.FC<BOMEditableTableProps> = ({
           showUploadList={false}
           customRequest={() => {}}
           beforeUpload={(file) => {
-            taskFormApi.uploadFile(file).then((result) => {
+            uploadApi.uploadFile(file).then((result) => {
               const updateFields: Record<string, any> = {
                 [fileIdField]: result.id,
                 [fileNameField]: result.filename,

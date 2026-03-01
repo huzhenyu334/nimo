@@ -24,8 +24,6 @@ type Services struct {
 	ECN        *ECNService
 	Document   *DocumentService
 	Feishu     *FeishuIntegrationService
-	Template   *TemplateService
-	Automation *AutomationService
 	// V2 新增
 	ProjectBOM *ProjectBOMService
 	// V13 CMF
@@ -62,20 +60,16 @@ func NewServices(repos *repository.Repositories, rdb *redis.Client, cfg *config.
 		}
 	}
 
-	templateSvc := NewTemplateService(repos.Template, repos.Project, repos.TaskForm)
-
 	return &Services{
 		Auth:       NewAuthService(repos.User, rdb, cfg),
 		User:       NewUserService(repos.User, rdb),
 		Product:    NewProductService(repos.Product, repos.ProductCategory, rdb),
 		Material:   NewMaterialService(repos.Material, repos.MaterialCategory, rdb),
 		BOM:        NewBOMService(repos.BOM, repos.Material, rdb),
-		Project:    NewProjectService(repos.Project, repos.Task, repos.Product, feishuSvc, repos.TaskForm),
+		Project:    NewProjectService(repos.Project, repos.Task, repos.Product, feishuSvc),
 		ECN:        NewECNService(repos.ECN, repos.Product, feishuSvc),
 		Document:   NewDocumentService(repos.Document, repos.DocumentCategory, minioClient, cfg.MinIO.Bucket),
 		Feishu:     feishuSvc,
-		Template:   templateSvc,
-		Automation: nil, // Will be initialized with logger later if needed
 		// V2 新增
 		ProjectBOM: NewProjectBOMService(repos.ProjectBOM, repos.Project, repos.Deliverable, repos.Material, repos.PartDrawing),
 		// V13 CMF

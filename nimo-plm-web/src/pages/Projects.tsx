@@ -15,7 +15,6 @@ import {
   Spin,
 } from 'antd';
 import {
-  PlusOutlined,
   DeleteOutlined,
   ExclamationCircleOutlined,
   SearchOutlined,
@@ -106,13 +105,7 @@ const Projects: React.FC = () => {
               style={{ width: 240 }}
               allowClear
             />
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => navigate('/templates')}
-            >
-              创建项目
-            </Button>
+            {/* TODO: Add direct project creation flow (templates removed, delegated to ACP) */}
           </div>
         </div>
       )}
@@ -230,12 +223,7 @@ const Projects: React.FC = () => {
         </div>
       )}
 
-      {/* Mobile FAB for creating project */}
-      {isMobile && (
-        <div className="ds-fab" onClick={() => navigate('/templates')}>
-          <PlusOutlined />
-        </div>
-      )}
+      {/* TODO: Add direct project creation FAB (templates removed, delegated to ACP) */}
     </div>
   );
 };

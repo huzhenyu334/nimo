@@ -16,7 +16,6 @@ import (
 	"github.com/bitfantasy/nimo/internal/plm/handler"
 	"github.com/bitfantasy/nimo/internal/plm/repository"
 	"github.com/bitfantasy/nimo/internal/plm/service"
-	"github.com/bitfantasy/nimo/internal/shared/engine"
 	"github.com/bitfantasy/nimo/internal/shared/feishu"
 	srmentity "github.com/bitfantasy/nimo/internal/srm/entity"
 	srmhandler "github.com/bitfantasy/nimo/internal/srm/handler"
@@ -65,15 +64,6 @@ func main() {
 	db, err := initDatabase(cfg.Database)
 	if err != nil {
 		zapLogger.Fatal("Failed to connect to database", zap.Error(err))
-	}
-
-	// AutoMigrate for task form tables
-	if err := db.AutoMigrate(
-		&entity.TaskForm{},
-		&entity.TaskFormSubmission{},
-		&entity.TemplateTaskForm{},
-	); err != nil {
-		zapLogger.Warn("AutoMigrate task form tables warning", zap.Error(err))
 	}
 
 	// V13: project_boms 增加 task_id 列
@@ -702,14 +692,7 @@ func main() {
 	repos := repository.NewRepositories(db)
 	services := service.NewServices(repos, rdb, cfg)
 
-	// 初始化状态机引擎 (Phase 3)
-	stateEngine := engine.NewEngine(db, nil)
-	plmTaskMachine := engine.NewPLMTaskMachine()
-	if err := stateEngine.RegisterMachine(plmTaskMachine); err != nil {
-		zapLogger.Warn("Failed to register PLM task state machine", zap.Error(err))
-	}
-
-	// 初始化飞书客户端 (Phase 3 — 工作流用)
+	// 初始化飞书客户端
 	var feishuWorkflowClient *feishu.FeishuClient
 	feishuAppID := cfg.Feishu.AppID
 	feishuAppSecret := cfg.Feishu.AppSecret
@@ -721,50 +704,29 @@ func main() {
 	}
 	if feishuAppID != "" && feishuAppSecret != "" {
 		feishuWorkflowClient = feishu.NewClient(feishuAppID, feishuAppSecret)
-		zapLogger.Info("Feishu workflow client initialized")
+		zapLogger.Info("Feishu client initialized")
 	}
 
-	// 初始化工作流服务 (Phase 3)
-	workflowSvc := service.NewWorkflowService(db, stateEngine, feishuWorkflowClient, repos.Project, repos.Task)
-
-	// 初始化审批服务 (V4)
-	approvalSvc := service.NewApprovalService(db, feishuWorkflowClient)
-
-	// 初始化通讯录同步服务 (V4)
+	// 初始化通讯录同步服务
 	contactSyncSvc := service.NewContactSyncService(db, feishuWorkflowClient)
 
-	handlers := handler.NewHandlers(services, repos, cfg, workflowSvc)
+	handlers := handler.NewHandlers(services, repos, cfg)
 
-	// V4: 设置审批和管理员处理器
-	handlers.Approval = handler.NewApprovalHandler(approvalSvc)
+	// 管理员处理器
 	handlers.Admin = handler.NewAdminHandler(contactSyncSvc)
 
-	// V5: 审批定义服务
-	approvalDefSvc := service.NewApprovalDefinitionService(db, feishuWorkflowClient, approvalSvc)
-	handlers.ApprovalDef = handler.NewApprovalDefinitionHandler(approvalDefSvc)
-
-	// V8: 角色管理 + 注入审批服务到项目服务
+	// V8: 角色管理
 	handlers.Role = handler.NewRoleHandler(db, feishuWorkflowClient)
-	services.Project.SetApprovalService(approvalSvc)
-	services.Project.SetBOMService(services.ProjectBOM)
-	services.Project.SetFeishuClient(feishuWorkflowClient, repos.User)
-	approvalSvc.SetProjectService(services.Project)
-	services.Template.SetProjectService(services.Project)
 
-	// V9: 智能路由 (Phase 4)
+	// V9: 智能路由
 	routingSvc := service.NewRoutingService(db)
 	handlers.Routing = handler.NewRoutingHandler(routingSvc)
-	workflowSvc.SetRoutingService(routingSvc)
-	workflowSvc.SetTaskFormRepo(repos.TaskForm)
-	workflowSvc.SetBOMRepo(repos.ProjectBOM)
 
 	// Backfill: 为已有BOM items自动创建缺失的物料
 	services.ProjectBOM.BackfillMaterials(context.Background())
 
 	// Seed: BOM属性模板
 	services.ProjectBOM.SeedDefaultTemplates(context.Background())
-
-	// V13: CMF控件 (now initialized in NewHandlers via service)
 
 	// === SRM模块初始化 ===
 	// AutoMigrate SRM实体
@@ -903,9 +865,6 @@ func main() {
 		srmCorrectiveActionSvc.SetFeishuClient(feishuWorkflowClient)
 		srmSamplingSvc.SetFeishuClient(feishuWorkflowClient)
 	}
-
-	// 工作流→SRM集成：采购控件自动创建PR
-	workflowSvc.SetSRMProcurementService(srmProcurementSvc)
 
 	// 设置Gin模式
 	if cfg.Server.Mode == "release" {
@@ -1113,37 +1072,6 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				admin.POST("/sync-contacts", h.Admin.SyncContacts)
 			}
 
-			// V4: 审批
-			approvals := authorized.Group("/approvals")
-			{
-				approvals.POST("", h.Approval.Create)
-				approvals.GET("", h.Approval.List)
-				approvals.GET("/:id", h.Approval.Get)
-				approvals.POST("/:id/approve", h.Approval.Approve)
-				approvals.POST("/:id/reject", h.Approval.Reject)
-			}
-
-			// V5: 审批定义管理
-			approvalDefs := authorized.Group("/approval-definitions")
-			{
-				approvalDefs.GET("", h.ApprovalDef.ListDefinitions)
-				approvalDefs.POST("", h.ApprovalDef.CreateDefinition)
-				approvalDefs.GET("/:id", h.ApprovalDef.GetDefinition)
-				approvalDefs.PUT("/:id", h.ApprovalDef.UpdateDefinition)
-				approvalDefs.DELETE("/:id", h.ApprovalDef.DeleteDefinition)
-				approvalDefs.POST("/:id/publish", h.ApprovalDef.PublishDefinition)
-				approvalDefs.POST("/:id/unpublish", h.ApprovalDef.UnpublishDefinition)
-				approvalDefs.POST("/:id/submit", h.ApprovalDef.SubmitInstance)
-			}
-
-			// V5: 审批分组管理
-			approvalGroups := authorized.Group("/approval-groups")
-			{
-				approvalGroups.GET("", h.ApprovalDef.ListGroups)
-				approvalGroups.POST("", h.ApprovalDef.CreateGroup)
-				approvalGroups.DELETE("/:id", h.ApprovalDef.DeleteGroup)
-			}
-
 			// V8: 角色管理
 			roles := authorized.Group("/roles")
 			{
@@ -1277,15 +1205,6 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				projects.DELETE("/:id/tasks/:taskId/dependencies/:depId", h.Project.RemoveTaskDependency)
 				projects.GET("/:id/overdue-tasks", h.Project.GetOverdueTasks)
 
-				// V6: 任务表单
-				projects.GET("/:id/tasks/:taskId/form", h.TaskForm.GetTaskForm)
-				projects.PUT("/:id/tasks/:taskId/form", h.TaskForm.UpsertTaskForm)
-				projects.GET("/:id/tasks/:taskId/form/submission", h.TaskForm.GetFormSubmission)
-
-				// V6: 任务确认/驳回
-				projects.POST("/:id/tasks/:taskId/confirm", h.Project.ConfirmTask)
-				projects.POST("/:id/tasks/:taskId/reject", h.Project.RejectTask)
-
 				// V2: 项目BOM管理
 				projects.GET("/:id/bom-permissions", h.ProjectBOM.GetBOMPermissions)
 				projects.GET("/:id/boms", h.ProjectBOM.ListBOMs)
@@ -1377,25 +1296,10 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				projects.GET("/:id/phases/:phaseId/deliverables", h.Deliverable.ListByPhase)
 				projects.PUT("/:id/deliverables/:deliverableId", h.Deliverable.Update)
 
-				// V3: 工作流操作
-				if h.Workflow != nil {
-					projects.POST("/:id/tasks/:taskId/assign", h.Workflow.AssignTask)
-					projects.POST("/:id/tasks/:taskId/start", h.Workflow.StartTask)
-					projects.POST("/:id/tasks/:taskId/complete", h.Workflow.CompleteTask)
-					projects.POST("/:id/tasks/:taskId/review", h.Workflow.SubmitReview)
-					projects.POST("/:id/phases/:phase/assign-roles", h.Workflow.AssignPhaseRoles)
-					projects.GET("/:id/tasks/:taskId/history", h.Workflow.GetTaskHistory)
-				}
 			}
 
 			// V2: 代号管理
 			authorized.GET("/codenames", h.Codename.List)
-
-			// 我的任务
-			authorized.GET("/my/tasks", h.Project.GetMyTasks)
-			authorized.POST("/my/tasks/:taskId/complete", h.Project.CompleteMyTask)
-			authorized.PUT("/my/tasks/:taskId/form-draft", h.TaskForm.SaveFormDraft)
-			authorized.GET("/my/tasks/:taskId/form-draft", h.TaskForm.GetFormDraft)
 
 			// 文件上传
 			authorized.POST("/upload", h.Upload.Upload)
@@ -1458,32 +1362,6 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 
 			// 文档分类
 			authorized.GET("/document-categories", h.Document.ListCategories)
-
-			// 模板管理
-			templates := authorized.Group("/templates")
-			{
-				templates.GET("", h.Template.List)
-				templates.POST("", h.Template.Create)
-				templates.GET("/:id", h.Template.Get)
-				templates.PUT("/:id", h.Template.Update)
-				templates.DELETE("/:id", h.Template.Delete)
-				templates.POST("/:id/duplicate", h.Template.Duplicate)
-				templates.POST("/:id/tasks", h.Template.CreateTask)
-				templates.PUT("/:id/tasks/:taskCode", h.Template.UpdateTask)
-				templates.DELETE("/:id/tasks/:taskCode", h.Template.DeleteTask)
-				templates.PUT("/:id/tasks/batch", h.Template.BatchSaveTasks)
-				templates.POST("/:id/publish", h.Template.Publish)
-				templates.POST("/:id/upgrade", h.Template.UpgradeVersion)
-				templates.POST("/:id/revert", h.Template.Revert)
-				templates.GET("/:id/versions", h.Template.ListVersions)
-
-				// V7: 模板任务表单
-				templates.GET("/:id/task-forms", h.TaskForm.GetTemplateTaskForms)
-				templates.POST("/:id/task-forms", h.TaskForm.SaveTemplateTaskForm)
-			}
-
-			// 从模板创建项目
-			authorized.POST("/projects/create-from-template", h.Template.CreateProjectFromTemplate)
 
 			// === SRM模块路由 ===
 			srmGroup := authorized.Group("/srm")

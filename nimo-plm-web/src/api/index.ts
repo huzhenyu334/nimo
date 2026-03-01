@@ -1,7 +1,6 @@
 export * from './client';
 export * from './auth';
 export * from './products';
-export * from './templates';
 export * from './projects';
 export * from './materials';
 export * from './bom';
@@ -10,7 +9,5 @@ export * from './documents';
 export * from './projectBom';
 export * from './deliverables';
 export * from './codenames';
-export * from './approval';
 export * from './users';
-export * from './approvalDefinitions';
 export * from './srm';

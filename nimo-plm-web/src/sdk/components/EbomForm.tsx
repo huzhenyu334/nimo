@@ -11,7 +11,7 @@
 
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
-import { ConfigProvider, Spin, Result, message, App, theme as antdTheme } from 'antd'
+import { ConfigProvider, Spin, Result, App, theme as antdTheme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import enUS from 'antd/locale/en_US'
 
@@ -86,7 +86,7 @@ const EbomFormInner: React.FC<EbomFormProps> = ({
   const isReadonly = mode === 'view'
 
   const [items, setItems] = useState<Record<string, any>[]>([])
-  const [submitting, setSubmitting] = useState(false)
+  const [_submitting, setSubmitting] = useState(false)
   const [dirty, setDirty] = useState(false)
   const originalItemIdsRef = useRef<Set<string>>(new Set())
   const initializedRef = useRef(false)

@@ -17,23 +17,15 @@ type Handlers struct {
 	Material    *MaterialHandler
 	BOM         *OldBOMHandler
 	Project     *ProjectHandler
-	Task        *ProjectHandler  // Task methods are on ProjectHandler
 	ECN         *ECNHandler
 	Document    *DocumentHandler
-	Template    *TemplateHandler
 	// V2 新增
 	ProjectBOM  *BOMHandler
 	Deliverable *DeliverableHandler
 	Codename    *CodenameHandler
-	// V3 工作流
-	Workflow    *WorkflowHandler
-	// V4 审批 + 管理
+	// V4 管理
 	Admin       *AdminHandler
-	Approval    *ApprovalHandler
-	// V5 审批定义
-	ApprovalDef *ApprovalDefinitionHandler
-	// V6 任务表单 + 文件上传
-	TaskForm    *TaskFormHandler
+	// V6 文件上传
 	Upload      *UploadHandler
 	// V7 SSE
 	SSE         *SSEHandler
@@ -56,7 +48,7 @@ type Handlers struct {
 }
 
 // NewHandlers 创建处理器集合
-func NewHandlers(svc *service.Services, repos *repository.Repositories, cfg *config.Config, workflowSvc *service.WorkflowService) *Handlers {
+func NewHandlers(svc *service.Services, repos *repository.Repositories, cfg *config.Config) *Handlers {
 	projectHandler := NewProjectHandler(svc.Project)
 	h := &Handlers{
 		Auth:        NewAuthHandler(svc.Auth, cfg),
@@ -65,24 +57,16 @@ func NewHandlers(svc *service.Services, repos *repository.Repositories, cfg *con
 		Material:    NewMaterialHandler(svc.Material),
 		BOM:         &OldBOMHandler{},
 		Project:     projectHandler,
-		Task:        projectHandler,  // Reuse ProjectHandler for task routes
 		ECN:         NewECNHandler(svc.ECN),
 		Document:    NewDocumentHandler(svc.Document),
-		Template:    NewTemplateHandler(svc.Template),
 		// V2 新增
 		ProjectBOM:  NewBOMHandler(svc.ProjectBOM),
 		Deliverable: NewDeliverableHandler(repos.Deliverable),
 		Codename:    NewCodenameHandler(repos.Codename),
-		// V6 任务表单 + 文件上传
-		TaskForm:    NewTaskFormHandler(repos.TaskForm, repos.Project),
+		// V6 文件上传
 		Upload:      NewUploadHandler(),
 		// V7 SSE
 		SSE:         NewSSEHandler(),
-	}
-	// V3 工作流
-	if workflowSvc != nil {
-		h.Workflow = NewWorkflowHandler(workflowSvc)
-		h.TaskForm.SetProcurementTrigger(workflowSvc)
 	}
 	// V13 CMF
 	h.CMF = NewCMFHandler(svc.CMF)

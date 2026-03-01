@@ -1,7 +1,7 @@
 import React from 'react';
 import { Space, Typography, Spin, Empty, Tag, Button, Input, Select, Form, Popconfirm, Collapse, App, ColorPicker, Tooltip, Image, Upload } from 'antd';
 import { PlusOutlined, DeleteOutlined, EditOutlined, SaveOutlined, CloseOutlined, BgColorsOutlined, UploadOutlined, PaperClipOutlined } from '@ant-design/icons';
-import { taskFormApi } from '@/api/taskForms';
+import { uploadApi } from '@/api/upload';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cmfVariantApi, type CMFVariant, type AppearancePartWithCMF } from '@/api/cmfVariant';
 
@@ -175,7 +175,7 @@ const VariantEditCard: React.FC<{
   const handleRenderUpload = async (file: File) => {
     setRenderUploading(true);
     try {
-      const result = await taskFormApi.uploadFile(file);
+      const result = await uploadApi.uploadFile(file);
       setRenderImageId(result.id);
       setRenderImageUrlState(result.url);
     } catch { message.error('上传失败'); }
@@ -186,7 +186,7 @@ const VariantEditCard: React.FC<{
   const handleDrawingUpload = async (file: File) => {
     setDrawingUploading(true);
     try {
-      const result = await taskFormApi.uploadFile(file);
+      const result = await uploadApi.uploadFile(file);
       setDrawings(prev => [...prev, { file_id: result.id, file_name: result.filename || file.name, url: result.url }]);
     } catch { message.error('上传失败'); }
     finally { setDrawingUploading(false); }

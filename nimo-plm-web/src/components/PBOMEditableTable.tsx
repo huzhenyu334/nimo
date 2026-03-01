@@ -17,7 +17,7 @@ import {
   UploadOutlined,
   PaperClipOutlined,
 } from '@ant-design/icons';
-import { taskFormApi } from '@/api/taskForms';
+import { uploadApi } from '@/api/upload';
 import type { ColumnsType } from 'antd/es/table';
 
 const { Text } = Typography;
@@ -75,7 +75,7 @@ const FileCell: React.FC<{
   const handleUpload = async (file: File) => {
     setUploading(true);
     try {
-      const result = await taskFormApi.uploadFile(file);
+      const result = await uploadApi.uploadFile(file);
       onSave(record.id, 'design_file_id', result.id);
       onSave(record.id, 'design_file_name', result.filename || file.name);
     } catch { message.error('上传失败'); }

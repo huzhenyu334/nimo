@@ -24,7 +24,7 @@ import {
   ArrowLeftOutlined,
   RightOutlined,
 } from '@ant-design/icons';
-import { taskFormApi } from '@/api/taskForms';
+import { uploadApi } from '@/api/upload';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cmfVariantApi, type AppearancePartWithCMF } from '@/api/cmfVariant';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -108,7 +108,7 @@ const PartSection: React.FC<{
         return (
           <Upload showUploadList={false} accept="image/*"
             beforeUpload={(file) => {
-              taskFormApi.uploadFile(file).then((result) => {
+              uploadApi.uploadFile(file).then((result) => {
                 onVariantsChange(variants.map(v =>
                   v.id === record.id
                     ? { ...v, reference_image_file_id: result.id, reference_image_url: result.url }
@@ -144,7 +144,7 @@ const PartSection: React.FC<{
         return (
           <Upload showUploadList={false} accept=".pdf,.dwg,.dxf,.ai,.cdr,image/*"
             beforeUpload={(file) => {
-              taskFormApi.uploadFile(file).then((result) => {
+              uploadApi.uploadFile(file).then((result) => {
                 const newDrawings = [...drawings, { file_id: result.id, file_name: result.filename || file.name, url: result.url }];
                 onVariantsChange(variants.map(v =>
                   v.id === record.id
@@ -247,7 +247,7 @@ const CMFMobileEditPanel: React.FC<{
   const handleRenderUpload = async (file: File) => {
     setRenderUploading(true);
     try {
-      const result = await taskFormApi.uploadFile(file);
+      const result = await uploadApi.uploadFile(file);
       setRenderImageId(result.id);
       setRenderImageUrlState(result.url);
     } catch { message.error('上传失败'); }
@@ -258,7 +258,7 @@ const CMFMobileEditPanel: React.FC<{
   const handleDrawingUpload = async (file: File) => {
     setDrawingUploading(true);
     try {
-      const result = await taskFormApi.uploadFile(file);
+      const result = await uploadApi.uploadFile(file);
       setDrawings(prev => [...prev, { file_id: result.id, file_name: result.filename || file.name, url: result.url }]);
     } catch { message.error('上传失败'); }
     finally { setDrawingUploading(false); }

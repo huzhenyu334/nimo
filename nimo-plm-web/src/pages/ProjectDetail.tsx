@@ -38,7 +38,6 @@ import {
   RightOutlined,
   DownOutlined,
   PlusOutlined,
-  EyeOutlined,
   UploadOutlined,
   DownloadOutlined,
   FileExcelOutlined,
@@ -48,7 +47,6 @@ import {
   UserOutlined,
   AuditOutlined,
   CloseCircleOutlined,
-  HistoryOutlined,
   DeleteOutlined,
   SendOutlined,
   LockOutlined,
@@ -60,10 +58,8 @@ import { materialsApi, Material } from '@/api/materials';
 import { deliverablesApi } from '@/api/deliverables';
 import { ecnApi, ECN } from '@/api/ecn';
 import { documentsApi, Document } from '@/api/documents';
-import { workflowApi, TaskActionLog } from '@/api/workflow';
-import { approvalApi } from '@/api/approval';
-import { taskFormApi, ParsedBOMItem } from '@/api/taskForms';
-import { userApi } from '@/api/users';
+import apiClient from '@/api/client';
+import { uploadApi } from '@/api/upload';
 import { srmApi } from '@/api/srm';
 import { skuApi, ProductSKU, FullBOMItem } from '@/api/sku';
 import { cmfVariantApi, type AppearancePartWithCMF, type CMFVariant } from '@/api/cmfVariant';
@@ -73,7 +69,6 @@ import CMFEditControl from '@/components/CMFEditControl';
 import { EBOMControl, PBOMControl, MBOMControl, type BOMControlConfig } from '@/components/BOM';
 import { ROLE_CODES, taskRoleApi, TaskRole } from '@/constants/roles';
 import type { ColumnsType } from 'antd/es/table';
-import ProcurementControl from '@/components/ProcurementControl';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import dayjs from 'dayjs';
 
@@ -965,7 +960,7 @@ const BOMTab: React.FC<{ projectId: string }> = ({ projectId }) => {
   // 新版图纸上传：创建PartDrawing版本记录
   const handleDrawingVersionUpload = async (file: File) => {
     try {
-      const result = await taskFormApi.uploadFile(file);
+      const result = await uploadApi.uploadFile(file);
       await partDrawingApi.upload(projectId, drawingUploadItemId, {
         drawing_type: drawingUploadType,
         file_id: result.id,
@@ -1751,186 +1746,6 @@ const ECNTab: React.FC<{ projectId: string; productId?: string }> = ({ productId
 
 // ============ Task Actions Component ============
 
-// ============ BOM Submission Display (read-only) ============
-
-const BOMSubmissionDisplay: React.FC<{ data: { filename: string; items: ParsedBOMItem[]; item_count: number } }> = ({ data }) => {
-  const [expanded, setExpanded] = React.useState(false);
-
-  const categoryStats = React.useMemo(() => {
-    if (!data?.items?.length) return [];
-    const map: Record<string, number> = {};
-    for (const item of data.items) {
-      const cat = item.category || '未分类';
-      map[cat] = (map[cat] || 0) + 1;
-    }
-    return Object.entries(map).sort((a, b) => b[1] - a[1]);
-  }, [data?.items]);
-
-  const columns = [
-    { title: '序号', dataIndex: 'item_number', key: 'item_number', width: 50, align: 'center' as const },
-    { title: '位号', dataIndex: 'reference', key: 'reference', width: 80, ellipsis: true },
-    { title: '名称', dataIndex: 'name', key: 'name', width: 100, ellipsis: true },
-    { title: '规格', dataIndex: 'specification', key: 'specification', width: 120, ellipsis: true },
-    { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 50, align: 'center' as const },
-    { title: '单位', dataIndex: 'unit', key: 'unit', width: 45, align: 'center' as const },
-    { title: '类别', dataIndex: 'category', key: 'category', width: 70, ellipsis: true },
-    { title: '制造商', dataIndex: 'manufacturer', key: 'manufacturer', width: 90, ellipsis: true },
-  ];
-
-  return (
-    <div>
-      <Space size={8} style={{ marginBottom: 4 }}>
-        <FileExcelOutlined style={{ color: '#52c41a' }} />
-        <span style={{ fontSize: 13 }}>{data.filename}</span>
-        <Tag color="blue">{data.item_count} 项物料</Tag>
-        <Button type="link" size="small" onClick={() => setExpanded(!expanded)} style={{ padding: 0 }}>
-          {expanded ? '收起' : '展开明细'}
-        </Button>
-      </Space>
-      {expanded && (
-        <div style={{ marginTop: 8 }}>
-          {categoryStats.length > 0 && (
-            <div style={{ marginBottom: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-              {categoryStats.map(([cat, count]) => (
-                <Tag key={cat} style={{ fontSize: 11 }}>{cat}: {count}</Tag>
-              ))}
-            </div>
-          )}
-          <Table
-            columns={columns}
-            dataSource={data.items}
-            rowKey="item_number"
-            size="small"
-            pagination={data.items.length > 10 ? { pageSize: 10, size: 'small' } : false}
-            scroll={{ x: 600 }}
-          />
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ============ Form Submission Display ============
-
-const FormSubmissionDisplay: React.FC<{ projectId: string; taskId: string }> = ({ projectId, taskId }) => {
-  const [formDef, setFormDef] = useState<any>(null);
-  const [submission, setSubmission] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [userMap, setUserMap] = useState<Record<string, string>>({});
-  const isMobileForm = useIsMobile();
-
-  React.useEffect(() => {
-    Promise.all([
-      taskFormApi.getForm(projectId, taskId),
-      taskFormApi.getSubmission(projectId, taskId),
-    ]).then(([form, sub]) => {
-      setFormDef(form);
-      setSubmission(sub);
-      // If any field is of type 'user' or 'role_assignment', fetch user list to resolve names
-      if (form?.fields?.some((f: any) => f.type === 'user' || f.type === 'role_assignment')) {
-        userApi.list().then((users) => {
-          const map: Record<string, string> = {};
-          users.forEach((u) => { map[u.id] = u.name; });
-          setUserMap(map);
-        });
-      }
-    }).finally(() => setLoading(false));
-  }, [projectId, taskId]);
-
-  if (loading) return <div style={{ color: '#999', fontSize: 12 }}>加载表单数据...</div>;
-  if (!formDef || !submission) return null;
-
-  const fields = formDef.fields || [];
-  const data = submission.data || {};
-
-  const renderFieldValue = (field: any) => {
-    let value = data[field.key];
-    // Complex types: render as full-width blocks
-    if (field.type === 'bom_upload' && value && typeof value === 'object' && value.items) {
-      return { key: field.key, label: field.label, complex: true, node: <BOMSubmissionDisplay data={value} /> };
-    }
-    if (['ebom_control', 'pbom_control', 'mbom_control'].includes(field.type) && Array.isArray(value)) {
-      const BOMControl = field.type === 'ebom_control' ? EBOMControl : field.type === 'pbom_control' ? PBOMControl : MBOMControl;
-      return { key: field.key, label: field.label, complex: true, node: <BOMControl config={(field.config || {}) as BOMControlConfig} value={value} onChange={() => {}} readonly /> };
-    }
-    if ((field.type === 'tooling_list' || field.type === 'consumable_list') && value && typeof value === 'object' && value.items) {
-      const listTitle = field.type === 'tooling_list' ? '治具清单' : '组装辅料清单';
-      const listItems = (value.items || []) as Array<{ name: string; unit: string; quantity: number; unit_price: number }>;
-      return { key: field.key, label: field.label, complex: true, node: (
-        <div>
-          <Tag color="blue">{value.item_count || listItems.length} 项</Tag>
-          <Text type="secondary" style={{ fontSize: 12 }}>{listTitle}</Text>
-          {listItems.length > 0 && (
-            <Table size="small" dataSource={listItems} rowKey={(_, idx) => String(idx)} pagination={false} style={{ marginTop: 8 }}
-              columns={[
-                { title: '序号', width: 55, align: 'center' as const, render: (_, __, idx) => idx + 1 },
-                { title: '名称', dataIndex: 'name', width: 200 },
-                { title: '单位', dataIndex: 'unit', width: 80 },
-                { title: '数量', dataIndex: 'quantity', width: 100, align: 'right' as const },
-                { title: '单价', dataIndex: 'unit_price', width: 100, align: 'right' as const },
-              ]}
-            />
-          )}
-        </div>
-      )};
-    }
-    if (field.type === 'procurement_control' && value && typeof value === 'object') {
-      return { key: field.key, label: field.label, complex: true, node: <ProcurementControl value={value} /> };
-    }
-    // Simple types: format value string
-    if (value === undefined || value === null) value = '-';
-    else if (field.type === 'role_assignment' && typeof value === 'object' && !Array.isArray(value)) {
-      value = Object.entries(value as Record<string, string>).map(([code, uid]) => `${code}: ${userMap[uid] || uid}`).join('; ') || '-';
-    }
-    else if (field.type === 'user') value = userMap[value] || value;
-    else if (typeof value === 'boolean') value = value ? '是' : '否';
-    else if (Array.isArray(value)) {
-      value = value.length > 0 && typeof value[0] === 'object' && value[0].filename
-        ? value.map((f: any) => f.filename).join(', ') : value.join(', ');
-    }
-    return { key: field.key, label: field.label, complex: false, text: String(value) };
-  };
-
-  const renderedFields = fields.map(renderFieldValue);
-
-  if (isMobileForm) {
-    return (
-      <div className="ds-detail-section" style={{ marginTop: 8 }}>
-        <div className="ds-section-title">已提交的表单数据</div>
-        {renderedFields.map((f: any) => f.complex ? (
-          <div key={f.key} style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 12, color: 'var(--ds-text-secondary)', marginBottom: 4 }}>{f.label}</div>
-            {f.node}
-          </div>
-        ) : (
-          <div key={f.key} className="ds-info-row">
-            <span className="ds-info-label">{f.label}</span>
-            <span className="ds-info-value">{f.text}</span>
-          </div>
-        ))}
-        <div style={{ fontSize: 11, color: 'var(--ds-text-secondary)', marginTop: 8 }}>
-          提交时间: {submission.submitted_at ? dayjs(submission.submitted_at).format('YYYY-MM-DD HH:mm') : '-'}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ background: '#fafafa', padding: 12, borderRadius: 6, marginTop: 8 }}>
-      <Text strong style={{ fontSize: 13, marginBottom: 8, display: 'block' }}>已提交的表单数据</Text>
-      <Descriptions size="small" column={2} bordered>
-        {renderedFields.map((f: any) => f.complex ? (
-          <Descriptions.Item key={f.key} label={f.label} span={2}>{f.node}</Descriptions.Item>
-        ) : (
-          <Descriptions.Item key={f.key} label={f.label}>{f.text}</Descriptions.Item>
-        ))}
-      </Descriptions>
-      <Text type="secondary" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>
-        提交时间: {submission.submitted_at ? dayjs(submission.submitted_at).format('YYYY-MM-DD HH:mm') : '-'}
-      </Text>
-    </div>
-  );
-};
 
 const TaskActions: React.FC<{
   task: Task;
@@ -1938,17 +1753,8 @@ const TaskActions: React.FC<{
   onRefresh: () => void;
 }> = ({ task, projectId, onRefresh }) => {
   const [assignModalOpen, setAssignModalOpen] = useState(false);
-  const [rejectModalOpen, setRejectModalOpen] = useState(false);
-  const [approvalModalOpen, setApprovalModalOpen] = useState(false);
-  const [formDrawerOpen, setFormDrawerOpen] = useState(false);
-  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
-  const [historyData, setHistoryData] = useState<TaskActionLog[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [assigneeId, setAssigneeId] = useState('');
-  const [feishuUserId, setFeishuUserId] = useState('');
-  const [rejectComment, setRejectComment] = useState('');
-  const [reviewerIds, setReviewerIds] = useState<string[]>([]);
 
   const handleError = (err: unknown) => {
     const axiosErr = err as any;
@@ -1963,19 +1769,17 @@ const TaskActions: React.FC<{
 
   const handleAssign = async () => {
     if (!assigneeId.trim()) {
-      message.warning('请输入负责人ID');
+      message.warning('请选择负责人');
       return;
     }
     setLoading(true);
     try {
-      await workflowApi.assignTask(projectId, task.id, {
+      await apiClient.put(`/projects/${projectId}/tasks/${task.id}`, {
         assignee_id: assigneeId.trim(),
-        feishu_user_id: feishuUserId.trim() || undefined,
       });
       message.success('指派成功');
       setAssignModalOpen(false);
       setAssigneeId('');
-      setFeishuUserId('');
       onRefresh();
     } catch (err) {
       handleError(err);
@@ -1987,104 +1791,8 @@ const TaskActions: React.FC<{
   const handleStart = async () => {
     setLoading(true);
     try {
-      await workflowApi.startTask(projectId, task.id);
+      await projectApi.updateTaskStatus(projectId, task.id, 'in_progress');
       message.success('任务已开始');
-      onRefresh();
-    } catch (err) {
-      handleError(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSubmitApproval = async () => {
-    if (reviewerIds.length === 0) {
-      message.warning('请选择至少一位审批人');
-      return;
-    }
-    setLoading(true);
-    try {
-      await approvalApi.create({
-        project_id: projectId,
-        task_id: task.id,
-        title: `任务审批: ${task.title}`,
-        reviewer_ids: reviewerIds,
-      });
-      message.success('审批已提交');
-      setApprovalModalOpen(false);
-      setReviewerIds([]);
-      onRefresh();
-    } catch (err) {
-      handleError(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleReject = async () => {
-    setLoading(true);
-    try {
-      await workflowApi.submitReview(projectId, task.id, {
-        outcome_code: 'fail_rollback',
-        comment: rejectComment,
-      });
-      message.success('已驳回');
-      setRejectModalOpen(false);
-      setRejectComment('');
-      onRefresh();
-    } catch (err) {
-      console.error('Review reject failed:', err);
-      handleError(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadHistory = async () => {
-    setHistoryLoading(true);
-    try {
-      const data = await workflowApi.getTaskHistory(projectId, task.id);
-      setHistoryData(data);
-    } catch (err) {
-      handleError(err);
-    } finally {
-      setHistoryLoading(false);
-    }
-  };
-
-  const openHistory = () => {
-    setHistoryDrawerOpen(true);
-    loadHistory();
-  };
-
-  const actionNameMap: Record<string, string> = {
-    assign: '指派',
-    start: '开始',
-    complete: '完成',
-    review_pass: '审批通过',
-    review_reject: '审批驳回',
-    review: '评审',
-    rollback: '回退',
-  };
-
-  const handlePmConfirm = async () => {
-    setLoading(true);
-    try {
-      await taskFormApi.confirmTask(projectId, task.id);
-      message.success('任务已确认');
-      onRefresh();
-    } catch (err) {
-      handleError(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handlePmReject = async () => {
-    setLoading(true);
-    try {
-      await taskFormApi.rejectTask(projectId, task.id);
-      message.success('任务已驳回');
       onRefresh();
     } catch (err) {
       handleError(err);
@@ -2102,7 +1810,6 @@ const TaskActions: React.FC<{
           </Button>
         );
       case 'pending': {
-        // 检查是否有未完成的前置任务
         const hasUnfinishedDeps = task.dependencies?.some(
           d => d.depends_on_status !== 'completed'
         );
@@ -2118,28 +1825,9 @@ const TaskActions: React.FC<{
       case 'in_progress':
         return <Tag color="processing" icon={<ClockCircleOutlined />}>进行中</Tag>;
       case 'submitted':
-        // 非流程任务(requires_approval=false)：PM 显示通过/驳回 Popconfirm
-        if (!task.requires_approval) {
-          return (
-            <Space size={4}>
-              <Popconfirm title="确认通过该任务？" onConfirm={handlePmConfirm} okText="通过" cancelText="取消">
-                <Tooltip title="通过">
-                  <Button size="small" type="text" icon={<CheckCircleOutlined />} style={{ color: '#52c41a' }} loading={loading} />
-                </Tooltip>
-              </Popconfirm>
-              <Popconfirm title="确认驳回该任务？" onConfirm={handlePmReject} okText="驳回" cancelText="取消" okButtonProps={{ danger: true }}>
-                <Tooltip title="驳回">
-                  <Button size="small" type="text" icon={<CloseCircleOutlined />} style={{ color: '#ff4d4f' }} loading={loading} />
-                </Tooltip>
-              </Popconfirm>
-            </Space>
-          );
-        }
         return <Tag color="orange" icon={<CheckCircleOutlined />}>已提交</Tag>;
       case 'reviewing':
-        return (
-          <Tag color="warning" icon={<AuditOutlined />}>审批中</Tag>
-        );
+        return <Tag color="warning" icon={<AuditOutlined />}>审批中</Tag>;
       case 'completed':
         return <Tag color="green" icon={<CheckCircleOutlined />}>已完成</Tag>;
       case 'rejected':
@@ -2153,27 +1841,17 @@ const TaskActions: React.FC<{
     }
   };
 
-  const showFormDataButton = task.status === 'submitted' || task.status === 'completed' || task.status === 'reviewing';
-
   return (
     <>
       <Space size={4}>
         {renderActions()}
-        {showFormDataButton && (
-          <Tooltip title="查看表单">
-            <Button size="small" type="text" icon={<EyeOutlined />} onClick={() => setFormDrawerOpen(true)} style={{ color: '#1677ff' }} />
-          </Tooltip>
-        )}
-        <Tooltip title="操作历史">
-          <Button size="small" type="text" icon={<HistoryOutlined />} onClick={openHistory} style={{ color: '#999' }} />
-        </Tooltip>
       </Space>
 
       {/* Assign Modal */}
       <Modal
         title={`指派任务: ${task.title}`}
         open={assignModalOpen}
-        onCancel={() => { setAssignModalOpen(false); setAssigneeId(''); setFeishuUserId(''); }}
+        onCancel={() => { setAssignModalOpen(false); setAssigneeId(''); }}
         onOk={handleAssign}
         confirmLoading={loading}
         okText="确认指派"
@@ -2189,117 +1867,7 @@ const TaskActions: React.FC<{
             style={{ width: '100%' }}
           />
         </div>
-        <div>
-          <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>飞书用户 ID（可选）</Text>
-          <Input
-            placeholder="输入飞书 User ID（可选）"
-            value={feishuUserId}
-            onChange={(e) => setFeishuUserId(e.target.value)}
-          />
-        </div>
       </Modal>
-
-      {/* Reject Modal */}
-      <Modal
-        title="驳回任务"
-        open={rejectModalOpen}
-        onCancel={() => { setRejectModalOpen(false); setRejectComment(''); }}
-        onOk={handleReject}
-        confirmLoading={loading}
-        okText="确认驳回"
-        okButtonProps={{ danger: true }}
-        cancelText="取消"
-      >
-        <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>驳回原因</Text>
-        <Input.TextArea
-          rows={4}
-          placeholder="请输入驳回原因..."
-          value={rejectComment}
-          onChange={(e) => setRejectComment(e.target.value)}
-        />
-      </Modal>
-
-      {/* Approval Modal */}
-      <Modal
-        title="提交审批"
-        open={approvalModalOpen}
-        onCancel={() => { setApprovalModalOpen(false); setReviewerIds([]); }}
-        onOk={handleSubmitApproval}
-        confirmLoading={loading}
-        okText="提交审批"
-        cancelText="取消"
-      >
-        <div style={{ marginBottom: 8 }}>
-          <Text type="secondary">任务: {task.title}</Text>
-        </div>
-        <div>
-          <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>选择审批人 *</Text>
-          <UserSelect
-            value={reviewerIds}
-            onChange={(val) => setReviewerIds(val as string[])}
-            mode="multiple"
-            placeholder="选择审批人"
-            style={{ width: '100%' }}
-          />
-        </div>
-      </Modal>
-
-      {/* Form Data Drawer */}
-      <Drawer
-        title={`任务表单: ${task.title}`}
-        open={formDrawerOpen}
-        onClose={() => setFormDrawerOpen(false)}
-        width={520}
-      >
-        <FormSubmissionDisplay projectId={projectId} taskId={task.id} />
-      </Drawer>
-
-      {/* History Drawer */}
-      <Drawer
-        title={`操作历史: ${task.title}`}
-        open={historyDrawerOpen}
-        onClose={() => setHistoryDrawerOpen(false)}
-        width={480}
-      >
-        {historyLoading ? (
-          <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
-        ) : historyData.length === 0 ? (
-          <Empty description="暂无操作记录" />
-        ) : (
-          <Timeline
-            items={historyData.map((log) => ({
-              color: log.action.includes('reject') || log.action.includes('fail') ? 'red' :
-                     log.action.includes('pass') || log.action === 'complete' ? 'green' :
-                     log.action === 'start' ? 'blue' : 'gray',
-              children: (
-                <div>
-                  <div style={{ fontWeight: 500 }}>
-                    {actionNameMap[log.action] || log.action}
-                  </div>
-                  <div style={{ fontSize: 12, color: '#666' }}>
-                    {log.from_status && log.to_status && (
-                      <Tag style={{ fontSize: 11 }}>
-                        {(taskStatusConfig[log.from_status]?.text || log.from_status)} → {(taskStatusConfig[log.to_status]?.text || log.to_status)}
-                      </Tag>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
-                    <span>操作人: {log.operator_id}</span>
-                    <span style={{ marginLeft: 12 }}>
-                      {dayjs(log.created_at).format('YYYY-MM-DD HH:mm:ss')}
-                    </span>
-                  </div>
-                  {log.comment && (
-                    <div style={{ fontSize: 12, color: '#fa8c16', marginTop: 4 }}>
-                      备注: {log.comment}
-                    </div>
-                  )}
-                </div>
-              ),
-            }))}
-          />
-        )}
-      </Drawer>
     </>
   );
 };
@@ -2367,7 +1935,6 @@ const RoleAssignmentTab: React.FC<{ projectId: string }> = ({ projectId }) => {
       message.success('角色分配成功，已更新对应任务的负责人');
       queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
       queryClient.invalidateQueries({ queryKey: ['project', projectId] });
-      queryClient.invalidateQueries({ queryKey: ['my-tasks'] });
     } catch (err) {
       const axiosErr = err as any;
       const errMsg = axiosErr?.response?.data?.message || '分配失败';
@@ -2724,7 +2291,7 @@ const ProjectDetail: React.FC = () => {
 
   const completeTaskMutation = useMutation({
     mutationFn: ({ projectId, taskId }: { projectId: string; taskId: string }) =>
-      projectApi.completeTask(projectId, taskId),
+      projectApi.updateTaskStatus(projectId, taskId, 'completed'),
     onSuccess: () => {
       message.success('任务已完成');
       queryClient.invalidateQueries({ queryKey: ['project-tasks', id] });

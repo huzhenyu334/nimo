@@ -74,9 +74,4 @@ func (r *ProjectRepository) GetPhaseMilestoneTasks(ctx context.Context, projectI
 	return tasks, err
 }
 
-// CreateAutomationLog 创建自动化日志
-func (r *ProjectRepository) CreateAutomationLog(ctx context.Context, log *entity.AutomationLog) error {
-	return r.db.WithContext(ctx).Create(log).Error
-}
-
 // Note: GetByID, Create, Update methods are in project_repository.go

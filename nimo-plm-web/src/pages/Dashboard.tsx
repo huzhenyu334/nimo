@@ -1,9 +1,7 @@
 import React from 'react';
-import { Card, Row, Col, Statistic, Typography, List, Tag, Progress, Badge, Space, Button, Empty, Skeleton, theme } from 'antd';
+import { Card, Row, Col, Statistic, Typography, List, Tag, Progress, Space, Button, Empty, Skeleton, theme } from 'antd';
 import {
   ProjectOutlined,
-  AuditOutlined,
-  ClockCircleOutlined,
   CheckCircleOutlined,
   RightOutlined,
   ExperimentOutlined,
@@ -14,7 +12,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSSE } from '@/hooks/useSSE';
 import { projectApi, Project } from '@/api/projects';
 import { materialsApi } from '@/api/materials';
-import apiClient from '@/api/client';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
 
@@ -30,18 +27,6 @@ const phaseColors: Record<string, string> = {
   mp: 'green',
 };
 
-const priorityColors: Record<string, string> = {
-  low: 'default',
-  medium: 'blue',
-  high: 'orange',
-  urgent: 'red',
-};
-
-const taskTypeIcons: Record<string, React.ReactNode> = {
-  gate_review: <AuditOutlined style={{ color: '#faad14' }} />,
-  task: <ClockCircleOutlined style={{ color: '#1890ff' }} />,
-};
-
 const Dashboard: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -52,7 +37,6 @@ const Dashboard: React.FC = () => {
   useSSE({
     onTaskUpdate: React.useCallback(() => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['my-tasks'] });
     }, [queryClient]),
     onProjectUpdate: React.useCallback(() => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
@@ -65,15 +49,6 @@ const Dashboard: React.FC = () => {
     queryFn: () => projectApi.list({ page_size: 999 }),
   });
 
-  // Fetch my tasks
-  const { data: tasksData, isLoading: tasksLoading } = useQuery({
-    queryKey: ['my-tasks'],
-    queryFn: async () => {
-      const res = await apiClient.get<{ data: { items: any[]; total: number } }>('/my/tasks', { params: { page_size: 10 } });
-      return res.data.data;
-    },
-  });
-
   // Fetch materials count
   const { data: materialsData } = useQuery({
     queryKey: ['materials-count'],
@@ -83,7 +58,6 @@ const Dashboard: React.FC = () => {
   const projects = projectsData?.items || [];
   const activeProjects = projects.filter(p => p.status === 'active' || p.status === 'planning');
   const completedProjects = projects.filter(p => p.status === 'completed');
-  const todoItems = tasksData?.items || [];
   const materialsCount = materialsData?.total ?? '-';
 
   // Compute stats from real data
@@ -91,7 +65,6 @@ const Dashboard: React.FC = () => {
     totalProjects: projects.length,
     activeProjects: activeProjects.length,
     completedProjects: completedProjects.length,
-    pendingTodos: tasksData?.total ?? 0,
   };
 
   return (
@@ -108,7 +81,7 @@ const Dashboard: React.FC = () => {
 
       {/* Stats cards */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={8}>
           <Card hoverable onClick={() => navigate('/projects')}>
             <Statistic
               title="进行中项目"
@@ -118,17 +91,7 @@ const Dashboard: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card hoverable onClick={() => navigate('/my-tasks')}>
-            <Statistic
-              title="我的待办"
-              value={stats.pendingTodos}
-              prefix={<AuditOutlined style={{ color: '#faad14' }} />}
-              valueStyle={{ color: stats.pendingTodos > 0 ? '#faad14' : undefined }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={8}>
           <Card hoverable onClick={() => navigate('/projects?status=completed')}>
             <Statistic
               title="已完成项目"
@@ -137,7 +100,7 @@ const Dashboard: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={8}>
           <Card hoverable onClick={() => navigate('/materials')}>
             <Statistic
               title="物料选型库"
@@ -150,58 +113,8 @@ const Dashboard: React.FC = () => {
 
       {/* Main content */}
       <Row gutter={[16, 16]}>
-        {/* 我的待办 */}
-        <Col xs={24} lg={12}>
-          <Card
-            title={
-              <Space>
-                <AuditOutlined />
-                <span>我的待办</span>
-                <Badge count={stats.pendingTodos} style={{ backgroundColor: '#faad14' }} />
-              </Space>
-            }
-            extra={<Button type="link" size="small" onClick={() => navigate('/my-tasks')}>查看全部</Button>}
-          >
-            {tasksLoading ? (
-              <Skeleton active paragraph={{ rows: 4 }} />
-            ) : todoItems.length === 0 ? (
-              <Empty description="暂无待办" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-            ) : (
-              <List
-                dataSource={todoItems}
-                renderItem={(item: any) => (
-                  <List.Item
-                    style={{ cursor: 'pointer', padding: '10px 0' }}
-                    onClick={() => navigate(`/projects/${item.project_id}`)}
-                    actions={[
-                      <Tag color={priorityColors[item.priority] || 'default'} key="priority">
-                        {item.priority === 'urgent' ? '紧急' : item.priority === 'high' ? '高' : item.priority === 'medium' ? '中' : '低'}
-                      </Tag>,
-                    ]}
-                  >
-                    <List.Item.Meta
-                      avatar={taskTypeIcons[item.task_type] || <ClockCircleOutlined style={{ color: '#1890ff' }} />}
-                      title={item.title}
-                      description={
-                        <Space size={8}>
-                          {item.project?.name && <Tag style={{ fontSize: 11 }}>{item.project.name}</Tag>}
-                          {item.due_date && (
-                            <Text type="secondary" style={{ fontSize: 12 }}>
-                              截止: {dayjs(item.due_date).format('YYYY-MM-DD')}
-                            </Text>
-                          )}
-                        </Space>
-                      }
-                    />
-                  </List.Item>
-                )}
-              />
-            )}
-          </Card>
-        </Col>
-
         {/* 我参与的项目 */}
-        <Col xs={24} lg={12}>
+        <Col xs={24}>
           <Card
             title={
               <Space>

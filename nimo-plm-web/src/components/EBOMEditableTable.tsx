@@ -21,7 +21,7 @@ import {
   CloudServerOutlined,
   ExperimentOutlined,
 } from '@ant-design/icons';
-import { taskFormApi } from '@/api/taskForms';
+import { uploadApi } from '@/api/upload';
 import type { ColumnsType } from 'antd/es/table';
 
 const { Text } = Typography;
@@ -136,7 +136,7 @@ const AttachmentCell: React.FC<{
   const handleUpload = async (file: File) => {
     setUploading(true);
     try {
-      const result = await taskFormApi.uploadFile(file);
+      const result = await uploadApi.uploadFile(file);
       const newFile: AttachmentFile = {
         file_id: result.id,
         file_name: result.filename || file.name,

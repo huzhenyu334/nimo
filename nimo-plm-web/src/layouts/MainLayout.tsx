@@ -5,11 +5,8 @@ import {
   HomeOutlined,
   ProjectOutlined,
   ExperimentOutlined,
-  SnippetsOutlined,
   LogoutOutlined,
   UserOutlined,
-  AuditOutlined,
-  CheckSquareOutlined,
   TeamOutlined,
   DashboardOutlined,
   ShopOutlined,
@@ -33,11 +30,8 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 // Page title mapping for mobile header
 const pageTitles: Record<string, string> = {
   '/dashboard': '工作台',
-  '/my-tasks': '我的任务',
   '/projects': '研发项目',
-  '/approvals': '审批中心',
   '/materials': '物料选型库',
-  '/templates': '流程管理',
   '/roles': '角色管理',
   '/bom-management': 'BOM管理',
   '/documents': '文档管理',
@@ -59,7 +53,6 @@ const bottomTabs = [
   { path: '/dashboard', label: '工作台', icon: <HomeOutlined /> },
   { path: '/projects', label: '项目', icon: <ProjectOutlined /> },
   { path: '/bom-management', label: 'BOM', icon: <PartitionOutlined /> },
-  { path: '/my-tasks', label: '任务', icon: <CheckSquareOutlined /> },
   { path: '/__my__', label: '我的', icon: <UserOutlined /> },
 ];
 
@@ -69,7 +62,6 @@ const moreMenuGroups = [
     title: '项目管理',
     items: [
       { path: '/bom-management', label: 'BOM管理', icon: <PartitionOutlined /> },
-      { path: '/templates', label: '流程管理', icon: <SnippetsOutlined /> },
       { path: '/ecn', label: 'ECN变更管理', icon: <SwapOutlined /> },
     ],
   },
@@ -109,22 +101,16 @@ const MainLayout: React.FC = () => {
 
   React.useEffect(() => {
     if (isEmbed) {
-      const path = location.pathname;
-      if (path.includes('my-tasks')) document.title = 'nimo 任务';
-      else if (path.includes('approval')) document.title = 'nimo 审批';
-      else document.title = 'nimo PLM';
+      document.title = 'nimo PLM';
     }
   }, [isEmbed, location.pathname]);
 
   const menuItems = useMemo(() => {
     return [
       { path: '/dashboard', name: '工作台', icon: <HomeOutlined /> },
-      { path: '/my-tasks', name: '我的任务', icon: <CheckSquareOutlined /> },
       { path: '/projects', name: '项目管理', icon: <ProjectOutlined /> },
       { path: '/bom-management', name: 'BOM管理', icon: <PartitionOutlined /> },
       { path: '/materials', name: '物料选型库', icon: <ExperimentOutlined /> },
-      { path: '/templates', name: '流程管理', icon: <SnippetsOutlined /> },
-      { path: '/approvals', name: '审批管理', icon: <AuditOutlined /> },
       { path: '/documents', name: '文档管理', icon: <FolderOpenOutlined /> },
       { path: '/ecn', name: 'ECN变更管理', icon: <SwapOutlined /> },
       { path: '/roles', name: '角色管理', icon: <TeamOutlined /> },
@@ -176,9 +162,6 @@ const MainLayout: React.FC = () => {
     if (currentPath.startsWith('/projects/') && currentPath !== '/projects') {
       pageTitle = '项目详情';
     }
-    if (currentPath.startsWith('/templates/') && currentPath !== '/templates') {
-      pageTitle = '流程详情';
-    }
 
     // Active tab matching - special handling for /__my__ and /bom-management
     let activeTab = '';
@@ -224,26 +207,6 @@ const MainLayout: React.FC = () => {
               <div>
                 <div style={{ fontSize: 17, fontWeight: 600 }}>{user?.name || '用户'}</div>
                 <div style={{ fontSize: 13, color: '#999' }}>{user?.email || ''}</div>
-              </div>
-            </div>
-
-            {/* Quick entries */}
-            <div style={{ background: '#fff', marginBottom: 8 }}>
-              <div
-                className="mobile-my-menu-item"
-                onClick={() => navigate('/my-tasks')}
-              >
-                <CheckSquareOutlined style={{ fontSize: 20, color: '#1677ff' }} />
-                <span style={{ flex: 1 }}>我的任务</span>
-                <RightOutlined style={{ fontSize: 12, color: '#ccc' }} />
-              </div>
-              <div
-                className="mobile-my-menu-item"
-                onClick={() => navigate('/approvals')}
-              >
-                <AuditOutlined style={{ fontSize: 20, color: '#faad14' }} />
-                <span style={{ flex: 1 }}>审批中心</span>
-                <RightOutlined style={{ fontSize: 12, color: '#ccc' }} />
               </div>
             </div>
 

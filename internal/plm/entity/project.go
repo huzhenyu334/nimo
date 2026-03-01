@@ -161,6 +161,22 @@ func (TaskComment) TableName() string {
 	return "task_comments"
 }
 
+// ProjectRoleAssignment 项目角色分配
+type ProjectRoleAssignment struct {
+	ID         string    `json:"id" gorm:"primaryKey;size:36"`
+	ProjectID  string    `json:"project_id" gorm:"size:32;not null"`
+	Phase      string    `json:"phase" gorm:"size:20;not null"`
+	RoleCode   string    `json:"role_code" gorm:"size:50;not null"`
+	UserID     string    `json:"user_id" gorm:"size:32;not null"`
+	FeishuUserID string  `json:"feishu_user_id" gorm:"size:64"`
+	AssignedBy string    `json:"assigned_by" gorm:"size:32;not null"`
+	AssignedAt time.Time `json:"assigned_at" gorm:"autoCreateTime"`
+}
+
+func (ProjectRoleAssignment) TableName() string {
+	return "project_role_assignments"
+}
+
 // ProjectStatus 项目状态
 const (
 	ProjectStatusPlanning  = "planning"

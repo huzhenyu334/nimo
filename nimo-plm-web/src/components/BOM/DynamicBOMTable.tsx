@@ -12,7 +12,7 @@ import {
   CloseCircleOutlined,
   EyeOutlined,
 } from '@ant-design/icons';
-import { taskFormApi } from '@/api/taskForms';
+import { uploadApi } from '@/api/upload';
 import type { CategoryAttrTemplate } from '@/api/projectBom';
 import { COMMON_FIELDS } from './bomConstants';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -276,7 +276,7 @@ const DynamicBOMTable: React.FC<DynamicBOMTableProps> = ({
                   showUploadList={false}
                   customRequest={() => {}}
                   beforeUpload={(file) => {
-                    taskFormApi.uploadFile(file).then((result) => {
+                    uploadApi.uploadFile(file).then((result) => {
                       const fileData = { file_id: result.id, file_name: result.filename, file_size: file.size };
                       const newItems = items.map(it => {
                         if (it.id !== record.id) return it;

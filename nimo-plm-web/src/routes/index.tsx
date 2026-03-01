@@ -1,7 +1,7 @@
 import React from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import MainLayout from '@/layouts/MainLayout';
-import { Login, Dashboard, Templates, TemplateDetail, Projects, ProjectDetail, Materials, Approvals, ApprovalAdmin, ApprovalEditor, MyTasks, RoleManagement } from '@/pages';
+import { Login, Dashboard, Projects, ProjectDetail, Materials, RoleManagement } from '@/pages';
 import SRMDashboard from '@/pages/srm/SRMDashboard';
 import Suppliers from '@/pages/srm/Suppliers';
 import PurchaseRequests from '@/pages/srm/PurchaseRequests';
@@ -76,30 +76,6 @@ export const router = createBrowserRouter([
 {
         path: 'materials',
         element: <Materials />,
-      },
-      {
-        path: 'templates',
-        element: <Templates />,
-      },
-      {
-        path: 'templates/:id',
-        element: <TemplateDetail />,
-      },
-      {
-        path: 'approvals',
-        element: <Approvals />,
-      },
-      {
-        path: 'approval-admin',
-        element: <ApprovalAdmin />,
-      },
-      {
-        path: 'approval-editor/:id',
-        element: <ApprovalEditor />,
-      },
-      {
-        path: 'my-tasks',
-        element: <MyTasks />,
       },
       {
         path: 'roles',
