@@ -29,8 +29,6 @@ type Handlers struct {
 	Upload      *UploadHandler
 	// V7 SSE
 	SSE         *SSEHandler
-	// V8 角色
-	Role        *RoleHandler
 	// V9 智能路由
 	Routing     *RoutingHandler
 	// V13 CMF

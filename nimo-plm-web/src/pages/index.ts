@@ -7,4 +7,3 @@ export { default as Materials } from './Materials';
 export { default as BOM } from './BOM';
 export { default as ECN } from './ECN';
 export { default as Documents } from './Documents';
-export { default as RoleManagement } from './RoleManagement';

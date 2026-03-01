@@ -7,7 +7,6 @@ import {
   ExperimentOutlined,
   LogoutOutlined,
   UserOutlined,
-  TeamOutlined,
   DashboardOutlined,
   ShopOutlined,
   FileTextOutlined,
@@ -32,7 +31,6 @@ const pageTitles: Record<string, string> = {
   '/dashboard': '工作台',
   '/projects': '研发项目',
   '/materials': '物料选型库',
-  '/roles': '角色管理',
   '/bom-management': 'BOM管理',
   '/documents': '文档管理',
   '/ecn': 'ECN变更管理',
@@ -82,7 +80,6 @@ const moreMenuGroups = [
     title: '系统设置',
     items: [
       { path: '/materials', label: '物料选型库', icon: <ExperimentOutlined /> },
-      { path: '/roles', label: '角色管理', icon: <TeamOutlined /> },
     ],
   },
 ];
@@ -113,7 +110,6 @@ const MainLayout: React.FC = () => {
       { path: '/materials', name: '物料选型库', icon: <ExperimentOutlined /> },
       { path: '/documents', name: '文档管理', icon: <FolderOpenOutlined /> },
       { path: '/ecn', name: 'ECN变更管理', icon: <SwapOutlined /> },
-      { path: '/roles', name: '角色管理', icon: <TeamOutlined /> },
       {
         path: '/srm',
         name: 'SRM 采购管理',

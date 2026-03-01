@@ -715,9 +715,6 @@ func main() {
 	// 管理员处理器
 	handlers.Admin = handler.NewAdminHandler(contactSyncSvc)
 
-	// V8: 角色管理
-	handlers.Role = handler.NewRoleHandler(db, feishuWorkflowClient)
-
 	// V9: 智能路由
 	routingSvc := service.NewRoutingService(db)
 	handlers.Routing = handler.NewRoutingHandler(routingSvc)
@@ -1072,22 +1069,6 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				admin.POST("/sync-contacts", h.Admin.SyncContacts)
 			}
 
-			// V8: 角色管理
-			roles := authorized.Group("/roles")
-			{
-				roles.GET("", h.Role.List)
-				roles.POST("", h.Role.Create)
-				roles.GET("/:id", h.Role.Get)
-				roles.PUT("/:id", h.Role.Update)
-				roles.DELETE("/:id", h.Role.Delete)
-				roles.GET("/:id/members", h.Role.ListMembers)
-				roles.POST("/:id/members", h.Role.AddMembers)
-				roles.DELETE("/:id/members", h.Role.RemoveMembers)
-			}
-
-			// 部门树（角色成员选择用）
-			authorized.GET("/departments", h.Role.ListDepartments)
-
 			// V9: 智能路由
 			if h.Routing != nil {
 				routingRules := authorized.Group("/routing-rules")
@@ -1131,12 +1112,6 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				erp.GET("/bom-releases", h.ProjectBOM.ListBOMReleases)
 				erp.POST("/bom-releases/:id/ack", h.ProjectBOM.AckBOMRelease)
 			}
-
-			// 任务角色（用于模板任务分配）
-			authorized.GET("/task-roles", h.Role.ListTaskRoles)
-
-			// 飞书角色（部门列表）
-			authorized.GET("/feishu/roles", h.Role.ListFeishuRoles)
 
 			// 产品管理
 			products := authorized.Group("/products")

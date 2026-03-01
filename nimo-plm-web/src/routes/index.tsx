@@ -1,7 +1,7 @@
 import React from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import MainLayout from '@/layouts/MainLayout';
-import { Login, Dashboard, Projects, ProjectDetail, Materials, RoleManagement } from '@/pages';
+import { Login, Dashboard, Projects, ProjectDetail, Materials } from '@/pages';
 import SRMDashboard from '@/pages/srm/SRMDashboard';
 import Suppliers from '@/pages/srm/Suppliers';
 import PurchaseRequests from '@/pages/srm/PurchaseRequests';
@@ -76,10 +76,6 @@ export const router = createBrowserRouter([
 {
         path: 'materials',
         element: <Materials />,
-      },
-      {
-        path: 'roles',
-        element: <RoleManagement />,
       },
       {
         path: '__my__',

@@ -2,6 +2,16 @@
 
 > 内部AI Agent团队管理平台，泽斌发起，Lyra主导建设
 
+## 2026-02-28 更新
+
+- **DSTE实例ed5d9903**：pending任务prompt含未解析`{{steps.xxx.output}}`模板变量 — 引擎创建任务时未resolve，是ACP引擎bug
+- **cancelled/skipped颜色**：#faad14 (orange/yellow)，泽斌明确要求
+- **代码审计结果**：6P0(concurrent map panic/defer close closed channel等)/8P1/13P2，详见AUDIT_REPORT.md，修复延后
+- **Pipeline可视化**：≤20步用blocks，>20步用聚合进度条（hybrid方案），hover tooltip被否决
+- **Race condition防护**：用defensive DB writes（`AND status != 'cancelled'`），不kill goroutine
+- **YAML schema**：yaml.Unmarshal默认忽略未知字段，需注意字段名对齐
+- **Event Log PRD**：已提交知识库审批，CC实现中
+
 ## 基本信息
 - 技术栈：Go + React + SQLite，零依赖单二进制
 - 端口：3001 | 地址：http://43.134.86.237:3001
@@ -121,3 +131,22 @@
 - SIGUSR1热重载不加载新plugin，需完全重启服务器
 - 前端build需2048MB（需先kill CC僵尸进程释放内存）
 - 甘特图最小bar宽度：天级以上min 1h，hover显示真实耗时
+
+## 2026-02-27/28 重大变更
+
+### Task统一模型重构
+- StepExecution废弃→统一Task表（Camunda风格），延迟创建，3状态pending→running→completed
+- 前端路由：/my-tasks/:taskId
+
+### Agent实时状态
+- diagnostics.enabled → lifecycle事件 → 4档状态(idle/processing/responding/offline)
+
+### Bug修复
+- wake RPC方法名是`wake`不是`cron.wake`；CronWake无法定向agent→用SessionsSend
+- complete_step加前序依赖校验；取消加/stop强制中断
+
+### DSTE实例
+- `3ca28ee5`，已跑gap/industry/SWOT/plan，depends_on丢失需修复重跑
+
+### Trigger系统
+- P0已实现部署，API路由待注册到router

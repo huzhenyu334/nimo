@@ -1,67 +1,64 @@
 # MEMORY.md - Lyra 核心记忆
 
-> 上次整理：2026-02-25 (sleep consolidation) | 原则：只保留影响当前行为的信息，细节在bank/
+> 上次整理：2026-03-01 | 原则：只保留影响当前行为的信息，细节在bank/
 
 ## 泽斌的铁律
 
-1. **工作流纪律**：开发任务走Lyra调度→PM拆任务→CC开发（2026-02-20）
-2. **OpenClaw操作**：任何配置修改/重启必须先问泽斌（2026-02-17）
-3. **部署第三方**：先读README再动手，优先环境变量不改源码（2026-02-19）
-4. **编程铁律**：所有代码通过Claude Code，无例外（2026-02-11）
-5. **流程纪律**：Lyra是调度者不是执行者（2026-02-20）
-6. **PM第一守则**：先对齐再执行——不理解"做到什么程度"就不开工（2026-02-24）
-7. **DB是可选扩展**：ACP核心功能不能依赖DB（2026-02-24）
-8. **CC调用不阻塞**：用sessions_spawn调CC，不用同步claude_agent（2026-02-25）
-9. **先想再做**：上下文缺失时 memory_recall → 知识库 → 主动询问（2026-02-25）
-10. **subagent超时要长**：runTimeoutSeconds: 1800（2026-02-25）
-11. **CC修完必须commit**（2026-02-25）
-12. **subagent必须同步调CC**：task里写明"用claude_agent同步调用"（2026-02-25）
-13. **ACP工具=OpenClaw Plugin**：通过`extensions/acp/index.ts`注册为Tools，Tools调用ACP后端API。派CC加ACP工具时改的是Plugin文件（index.ts），如果API不存在才需要同时改ACP后端加API（2026-02-26）
+1. **编程全走CC**：必须通过sessions_spawn同步调用，禁止async+轮询（浪费context加速compaction）
+2. **Lyra=调度者**：开发走Lyra→PM→CC，不亲自写代码
+3. **CC调用前后必须写MEMORY.md**：调用前写"最近CC任务"（任务+状态running），完成后更新结果——保证compaction后永远记得最后CC干了什么
+4. **先对齐再执行**：不理解"做到什么程度"就不开工
+5. **先想再做**：上下文缺失→memory_recall→知识库→问泽斌
+6. **知识库铁律**：先搜后写，有则增量更新（append/section_write/patch）
+7. **ACP工具=Plugin**：改extensions/acp/index.ts，API不存在才改后端
+8. **DB是可选扩展**：ACP核心不能依赖DB
+9. **OpenClaw操作**：配置修改/重启先问泽斌
+10. **部署第三方**：先读README，优先环境变量不改源码
+11. **一次性给最优方案**：先调研行业做法再设计，不要先给次方案再改（2026-03-01）
 
 ## 核心洞察
 
-- **Agent框架无壁垒**，真正壁垒：①企业业务prompt ②给agent用的tool（2026-02-22）
-- **ACP = Agent的操作系统**，Gateway是runtime，ACP是用户空间（2026-02-25）
-- **不需要MCP**，原生Plugin最可靠，agent天生就会用（2026-02-25）
-
-## 泽斌终极目标
-
-ACP驱动PLM/SRM自主开发到产品化，Agent自我进化。详见知识库。
+- **Agent框架无壁垒**，真正壁垒：①企业业务prompt ②给agent用的tool
+- **ACP = Agent的操作系统**，Gateway是runtime，ACP是用户空间
+- **不需要MCP**，原生Plugin最可靠，agent天生就会用
+- **企业即求解器，一切皆计算**：流程=分治算法，知识=函数不是信息（详见知识库067dbaea）
+- **评估核心指标=人的修改率**：最小可行评估=token数+耗时+成功率+修改率
+- **context决定输出质量80%**，模板只占20%且价值递减
+- **历史消息是噪音不是记忆**：每个task冷启动+精准prompt注入（2026-03-01）
 
 ## 架构决策
 
-- **v2.2 Step数据模型（2026-02-26最终定稿）**：form/output_schema/component三者平级
-  - form = 输入表单（自定义fields数组+on_submit），收集人的输入
-  - output_schema = 纯JSON Schema标准格式（type/properties/required），约束agent输出
-  - component = 外部SDK组件，props支持`{{steps.xxx.output.field}}`
-  - **有form就不需要output_schema** — 从fields自动校验required
-  - form.fields.value支持模板变量预填（engine在dispatch时替换）
-  - field.readonly控制单个字段只读
-  - on_submit：表单提交调API，output_mapping提取字段合并到structured_output
-- **废弃inline steps嵌套** → 改用`group:"xxx"`标签
-- **统一assignee** → assignee_type(agent/user/role)+assignee_id
-- **甘特图** → 所有步骤≥1h显示宽度
+- **Task统一模型**：Step=YAML模板，Task=运行时单元（Camunda风格）
+- **7状态生命周期**：waiting→pending→running→completed/failed/cancelled/skipped（2026-02-28）
+- **动态指派方案C**：统一assignee结构体（type=agent|human + 寻址方式id/role/candidates/rules/relation），废弃旧assignee_type+assignee_id（PRD知识库00e7a2b9）
+- **三层分离**：ACP Tools(agent) / Backend API(数据层) / Web UI(人)
+- **Push+Pull双模式**：assignee=Push直接分配，candidates=Pull竞争claim
+- **Event Log单表设计**：一切皆事件，13种事件类型，workflow_events表（2026-03-01）
+- **每个task用sessions_spawn**：不用agent session中间层（2026-03-01）
+- **Task表仅加session_id**：审计数据全从event log查，trace内容不存ACP（2026-03-01）
+- **变量引用验证**：publish时BFS校验模板变量引用在上游可达集内
+- **知识库=纯存储层**，审批走ACP流程
 
-## 当前优先级
+## 当前状态
 
-1. **🔴 ACP↔PLM集成** — Phase 1进行中（Plugin+表单嵌入+webhook回调）
-2. **PLM产品化** — 代码审计完成，差距分析→路线图
-3. **ACP持续演进** — 子流程v4+甘特图已上线，统一资源调度PRD待实现
-
-## 进行中
-
-- **EBOM嵌入模式** — CC已完成前端改造，待build部署+ACP侧集成
-- **ACP↔PLM架构** — 纲领v1.1已更新，含任务集成+表单嵌入设计（详见知识库）
-
-## 基础设施
-
-- 知识管理三层：shared-bootstrap(宪法) → 知识库(制度) → AGENTS.md(个性化)
-- embedding: 智谱embedding-3, memory-lancedb-pro已部署
-- Catherine: 43.156.133.145, GLM5, Node已连接(需检查稳定性)
+1. **ACP引擎** — 7状态+统一Task已部署，Event Log CC实现中，待做：任务调度PRD（候选池/级联通知/SLA）
+2. **ACP前端** — 卡片redesign进行中（Vercel风格+Pipeline可视化），审计bug修复27项已部署
+3. **Agent进化体系** — 知识库eda4fb31 v2（搁置中）
 
 ## 重要教训
 
 - compaction后必须memory_search再回答
+- **派CC前必须grep验证功能是否已存在**——summary的"待做"不可信（2026-03-01 event log事件）
 - 飞书open_id跨应用不通用（ACP ou_e229cd ≠ OpenClaw ou_5b159fc）
-- CC僵尸进程占大量资源注意清理；前端build需2048MB
 - SIGUSR1热重载不加载新plugin，需完全重启
+- CC commit经常漏文件（git add不完整），需检查
+- CronWake无法定向agent，用SessionsSend传具体内容
+- complete_step后必须主动调acp_list_tasks，不能只看返回值
+- 引擎wake：去掉agent-busy检查，始终wake（commit 030b7fe）
+
+## 最近CC任务
+- **任务**: ACP审批节点重构——激活审批引擎，支持Agent+Human混合审批
+- **PRD**: 知识库 f28a5a61（审批节点重构PRD）
+- **时间**: 2026-03-01 18:25 启动
+- **状态**: 🔄 running
+- **上一个CC**: 结构化日志 ✅ 完成（238处log全部迁移slog）
