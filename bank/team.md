@@ -34,6 +34,12 @@
 - Feishu open_id: ou_3ee5f5cfefb6f57c6e6cd7fffda1bfe1
 - Discord ID: 1473763559312724210
 - 用GLM5模型
+- **机器信息**：IP 10.3.4.16 (VM-4-16-opencloudos)
+- **Gateway token**: f567cb6b4ee877b078d5feae78a19cabbaea4349fe592b28
+- **openclaw-node服务**：systemctl --user start/stop/restart openclaw-node
+- **连接方式**：`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 OPENCLAW_GATEWAY_TOKEN=<token> openclaw node run --host 10.3.0.10 --port 18789`
+- **ACP源码**：/home/claw/.openclaw/workspace/agent-control-panel（已clone）
+- **待解决**：Catherine Gateway bind在127.0.0.1，ACP无法直连（需改0.0.0.0，等泽斌确认）
 
 ## 协作方式
 - Lyra通过ACP工作流调度PM/UX/Alice

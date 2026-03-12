@@ -1,64 +1,54 @@
 # MEMORY.md - Lyra 核心记忆
 
-> 上次整理：2026-03-01 | 原则：只保留影响当前行为的信息，细节在bank/
+> 上次整理：2026-03-10 | 细节见 bank/acp.md
 
 ## 泽斌的铁律
 
-1. **编程全走CC**：必须通过sessions_spawn同步调用，禁止async+轮询（浪费context加速compaction）
-2. **Lyra=调度者**：开发走Lyra→PM→CC，不亲自写代码
-3. **CC调用前后必须写MEMORY.md**：调用前写"最近CC任务"（任务+状态running），完成后更新结果——保证compaction后永远记得最后CC干了什么
-4. **先对齐再执行**：不理解"做到什么程度"就不开工
-5. **先想再做**：上下文缺失→memory_recall→知识库→问泽斌
-6. **知识库铁律**：先搜后写，有则增量更新（append/section_write/patch）
-7. **ACP工具=Plugin**：改extensions/acp/index.ts，API不存在才改后端
-8. **DB是可选扩展**：ACP核心不能依赖DB
-9. **OpenClaw操作**：配置修改/重启先问泽斌
-10. **部署第三方**：先读README，优先环境变量不改源码
-11. **一次性给最优方案**：先调研行业做法再设计，不要先给次方案再改（2026-03-01）
+1. **编程全走CC**：claude_agent SDK，修完必须commit
+2. **Lyra=调度者**：不亲自写代码，派CC
+3. **先对齐再执行**：不理解"做到什么程度"就不开工
+4. **知识库铁律**：先搜后写，有则增量更新（append/section_write/patch）
+5. **ACP工具=Plugin**：改extensions/acp/index.ts，API不存在才改后端
+6. **所有事情走流程**：不做一次性操作，可复用流程优先
+7. **Executor选择层级**：原子 > llm > agent > cc（能用简单的绝不用复杂的）
+8. **派CC前确认需求范围**：已修好的bug不要继续扩散，不脑补需求
+9. **API key换了必须同步所有agent**：把main的auth-profiles.json同步到所有agent（3/10）
+10. **Context注入=流程编排**：前置步骤拉数据→变量注入（不是executor职责）
+11. **复用→独立子流程**：可复用流程做成独立流程，不内联
+12. **部署ACP前查running实例**：有运行中→等完成或确认
+
+## ACP API Key
+`ak_d9d31c3f27a92d796765c831f701c8d566994314faec3e1174c4459f0bdb07e1`
 
 ## 核心洞察
+- **Executor口诀**：CRUD→nocodb/http；文本生成→llm；推理+工具→agent；改代码→cc
+- **flow-reference**：GET /api/flow-reference，~880 tokens（比Schema省84%）
+- **context决定输出质量80%**，冷启动+精准prompt注入
 
-- **Agent框架无壁垒**，真正壁垒：①企业业务prompt ②给agent用的tool
-- **ACP = Agent的操作系统**，Gateway是runtime，ACP是用户空间
-- **不需要MCP**，原生Plugin最可靠，agent天生就会用
-- **企业即求解器，一切皆计算**：流程=分治算法，知识=函数不是信息（详见知识库067dbaea）
-- **评估核心指标=人的修改率**：最小可行评估=token数+耗时+成功率+修改率
-- **context决定输出质量80%**，模板只占20%且价值递减
-- **历史消息是噪音不是记忆**：每个task冷启动+精准prompt注入（2026-03-01）
+## 架构决策（最新）
+- **LLM Executor已上线**（3/10, 755c4c0）：直接调Anthropic API，2.3秒完成 vs agent的30秒+；从credentials store读anthropic-api-key
+- **SQLite→PG迁移完成**（3/10）：ACP用PostgreSQL，30+表
+- **Output统一**：human→output.form.xxx，agent→output.structured_output.xxx；assignee=必填plain string
+- **知识库审批bypass**（3/10, 6ec0925）：approval状态自动转allow
+- **Session永不重置**：session.reset.mode="never"
+- **Bob=流程设计专家**：workspace-Bob/，写YAML前必须acp_get_executor_schema确认字段
 
-## 架构决策
-
-- **Task统一模型**：Step=YAML模板，Task=运行时单元（Camunda风格）
-- **7状态生命周期**：waiting→pending→running→completed/failed/cancelled/skipped（2026-02-28）
-- **动态指派方案C**：统一assignee结构体（type=agent|human + 寻址方式id/role/candidates/rules/relation），废弃旧assignee_type+assignee_id（PRD知识库00e7a2b9）
-- **三层分离**：ACP Tools(agent) / Backend API(数据层) / Web UI(人)
-- **Push+Pull双模式**：assignee=Push直接分配，candidates=Pull竞争claim
-- **Event Log单表设计**：一切皆事件，13种事件类型，workflow_events表（2026-03-01）
-- **每个task用sessions_spawn**：不用agent session中间层（2026-03-01）
-- **Task表仅加session_id**：审计数据全从event log查，trace内容不存ACP（2026-03-01）
-- **变量引用验证**：publish时BFS校验模板变量引用在上游可达集内
-- **知识库=纯存储层**，审批走ACP流程
+## PRD标准化（3/10）
+双轨输出：JSON元数据（引擎校验+doc_id引用）+ Markdown全文（知识库）；structured_output字段加maxLength，总量<5KB
 
 ## 当前状态
-
-1. **ACP引擎** — 7状态+统一Task已部署，Event Log CC实现中，待做：任务调度PRD（候选池/级联通知/SLA）
-2. **ACP前端** — 卡片redesign进行中（Vercel风格+Pipeline可视化），审计bug修复27项已部署
-3. **Agent进化体系** — 知识库eda4fb31 v2（搁置中）
+1. **ACP引擎** 🎉 重构完成：8770→3945行(-55%)，全流程验证通过（3/10里程碑）
+2. **流程体系**：需求收集(82866aeb)、立项(80f6194e)、代码扫描(9286f334)、文档创建(80d2f70d)、cc-dev-task(3fcff09c)
+3. **NocoDB**：项目表(mk4cbfl27dbfhlu)+文档注册表(mjap0r8h9nxrb67)+ACP需求管理(m0e7hp5d77pczt9)
+4. **LLM Executor**已上线，flow-reference API已上线
+5. **Debug Mock已上线**（3/11，969bbd3/46ef434/12a75ea）：output_schema生成mock；agent mock包AgentStandardOutput信封；**待实现**：loop限1轮、断点suffix匹配、断点优先于mock、inspect显示mock_preview
 
 ## 重要教训
-
-- compaction后必须memory_search再回答
-- **派CC前必须grep验证功能是否已存在**——summary的"待做"不可信（2026-03-01 event log事件）
+- **派CC前必须grep验证**：summary的"待做"不可信，功能可能已存在
+- **go build正确命令**：`go build -o bin/acp ./cmd/acp/`（go build ./... 不更新指定binary）
+- **Bob model需anthropic/前缀**：openclaw.json的model必须="anthropic/claude-opus-4-6"
+- **Bob 100秒TTFT正常**：claude-opus-4-6+thinking模式，非故障
 - 飞书open_id跨应用不通用（ACP ou_e229cd ≠ OpenClaw ou_5b159fc）
-- SIGUSR1热重载不加载新plugin，需完全重启
-- CC commit经常漏文件（git add不完整），需检查
-- CronWake无法定向agent，用SessionsSend传具体内容
-- complete_step后必须主动调acp_list_tasks，不能只看返回值
-- 引擎wake：去掉agent-busy检查，始终wake（commit 030b7fe）
-
-## 最近CC任务
-- **任务**: ACP审批节点重构——激活审批引擎，支持Agent+Human混合审批
-- **PRD**: 知识库 f28a5a61（审批节点重构PRD）
-- **时间**: 2026-03-01 18:25 启动
-- **状态**: 🔄 running
-- **上一个CC**: 结构化日志 ✅ 完成（238处log全部迁移slog）
+- 泽斌不喜欢§符号，引用章节用中文或数字编号
+- **Agent mock必须包AgentStandardOutput信封**，否则structured_output路径找不到
+- **Loop body=独立执行路径**（executeBodyStep），hook/mock必须在此单独加
