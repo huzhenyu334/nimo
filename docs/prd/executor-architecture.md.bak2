@@ -1,0 +1,2318 @@
+# ACP 执行器架构设计 — 统一计算单元模型
+
+> 版本：v2.0 | 日期：2026-03-02 | 来源：泽斌 + Lyra 架构讨论
+> v1.0 → v2.0 核心变化：type字段消失，一切皆executor
+
+## 1. 核心洞察
+
+### 1.1 本质定义
+
+**Executor = f(input) → output**
+
+任何能接收输入、产生输出的东西，都是执行器。这不是类比，是数学定义。
+
+| 执行器 | input | output | 投递方式 | 回收方式 |
+|---|---|---|---|---|
+| OpenClaw Agent | prompt | text + data | sessions_spawn | session完成回调 |
+| Human（飞书） | 表单/描述 | 表单提交 | 飞书消息 | complete_step API |
+| Claude Code直驱 | prompt + 项目路径 | code + commit | CLI/SDK | stdout解析 |
+| HTTP Agent | JSON payload | JSON response | HTTP POST | webhook/轮询 |
+| Shell脚本 | 命令+参数 | stdout + exit code | exec | 进程退出 |
+| 飞书审批 | 审批表单 | approved/rejected | 飞书审批API | 回调webhook |
+
+每一行都是同一个接口的不同实现。引擎不需要知道"谁在执行"，只关心"任务投递了没、结果回来了没"。
+
+### 1.2 当前问题
+
+现在ACP的step有type区分：
+
+```yaml
+- type: agent      # OpenClaw agent
+- type: human      # 人工任务
+- type: approval   # 审批
+- type: condition  # 条件分支
+- type: expand     # 数据展开
+```
+
+前三个（agent、human、approval）本质上都是"有个东西接收input，产出output"——区别只是投递方式和收集方式不同。引擎里有大量if/switch分支处理不同type：
+
+```go
+// 现在：每种type一套逻辑
+switch step.Type {
+case "agent":    executeAgentStep(...)
+case "human":    executeHumanStep(...)
+case "approval": executeApprovalBranch(...)
+case "expand":   executeExpandStep(...)
+...
+}
+```
+
+**这是枚举思维，不是抽象思维。**
+
+### 1.3 统一后的视角
+
+引擎只关心一件事：**把input交给executor，拿回output。**
+
+至于executor是人、AI、API、脚本、还是飞书审批流——引擎不care。
+
+```go
+// 统一后：引擎只做调度
+executor := registry.Get(step.Executor) // 从注册表取executor
+handle, err := executor.Dispatch(ctx, task)  // 统一投递
+result, err := executor.Wait(ctx, handle)    // 统一等结果
+```
+
+引擎核心代码变成：**一个DAG调度器 + executor注册表。** 所有复杂性下沉到executor adapter层。
+
+## 2. 两个正交维度：Executor × Control
+
+### 2.1 分类标准：有没有IO？
+
+判断一个节点是Executor还是Control，标准很简单：**有没有"派出去等结果"这个动作？**
+
+- **有IO（派出去，等结果回来）→ Executor**
+- **无IO（纯逻辑判断，零IO）→ Control**
+
+| 维度 | 是什么 | 例子 | IO行为 |
+|---|---|---|---|
+| **Executor** | 派任务出去，等结果回来 | agent, human, subprocess, http, shell | CALL → 等返回 |
+| **Control** | 纯路由决策，不执行任何东西 | condition(分支), gate(循环), expand(并行展开) | 无IO，只看数据做判断 |
+
+### 2.2 所有Executor本质都是CALL
+
+```
+subprocess: CALL 另一个流程  → 等结果
+agent:      CALL Gateway     → 等结果
+human:      CALL 人          → 等结果
+http:       CALL 外部API     → 等结果
+shell:      CALL 脚本进程    → 等结果
+```
+
+全是CALL，区别只是CALL的目标不同。subprocess之前归类为Control是不准确的——它有明确的IO行为（启动子流程、等待完成、收集输出），和agent/human本质一样。
+
+### 2.3 Control是纯逻辑
+
+```
+condition: 看数据 → 决定走A还是走B（不执行任何东西）
+gate:      看数据 → 决定放行还是回跳（不执行任何东西）
+expand:    看数据 → 把1份拆成N份（不执行任何东西）
+```
+
+Control节点就像CPU的控制单元——只做路由决策，不做计算。
+
+### 2.4 YAML语法
+
+```yaml
+# 执行节点：有executor，无control
+- id: dev
+  executor: openclaw_agent
+  input: { prompt: "..." }
+
+- id: review
+  executor: subprocess
+  input: { process: "code-review-flow", data: "{{steps.dev.output}}" }
+
+# 控制节点：有control，无executor
+- id: check
+  control: condition
+  conditions:
+    - when: "{{steps.dev.data.passed}}"
+      then: [deploy]
+    - default:
+      loop_to: dev
+```
+
+## 3. type字段消失
+
+不再需要 `type: agent/human/approval`——这些都是executor的不同实现：
+
+```yaml
+steps:
+  - id: write_prd
+    executor: openclaw_agent       # OpenClaw agent执行
+    input: { prompt: "写PRD..." }
+
+  - id: implement
+    executor: claude_code          # CC直驱
+    input: { prompt: "实现...", workdir: "/path" }
+
+  - id: review
+    executor: feishu_approval      # 飞书审批
+    input: { title: "审批", approvers: [zebin] }
+
+  - id: deploy
+    executor: shell                # 脚本执行
+    input: { command: "make deploy" }
+
+  - id: notify
+    executor: feishu_message       # 发消息（也是executor）
+    input: { to: [team], message: "已上线" }
+
+  - id: check_quality
+    executor: http                 # 第三方API
+    input: { url: "https://sonar.api/scan", body: {...} }
+```
+
+六个step，六种完全不同的"计算单元"，但对引擎来说是同一个东西。
+
+## 4. 业界调研
+
+### 4.1 完全做到统一执行器的
+
+**Kestra — Runnable Task 插件体系（⭐⭐⭐⭐⭐）**
+
+明确分两类：
+- **Flowable Task**：控制流（Parallel、Switch、ForEach）— 对应我们的Control
+- **Runnable Task**：执行任务（Python/HTTP/SQL/Slack）— 对应Executor
+
+每种Runnable Task是一个Java插件，统一接口：输入→执行→输出。新增任务类型=写插件。700+官方插件。**目前业界最接近"一切皆执行器"的实现。**
+
+**Temporal — Activity（⭐⭐⭐⭐）**
+
+最接近的实现。Activity就是 `f(input) → output`，引擎完全不关心Activity内部做什么：
+
+```go
+workflow.ExecuteActivity(ctx, SendEmail, emailParams)
+workflow.ExecuteActivity(ctx, ChargeCard, paymentParams)
+workflow.ExecuteActivity(ctx, TranscodeVideo, videoParams)
+```
+
+Worker注册Activity实现，引擎只做调度。**但——Temporal把人工任务（Signal/Update）作为另一套原语，没有统一到Activity里。**
+
+**Windmill — Script即执行器（⭐⭐⭐⭐）**
+
+一切step都是"脚本"（TypeScript/Python/Go/Bash/SQL），审批也是——审批步骤就是一个带Suspend功能的普通脚本，等外部resume。统一度很高。
+
+**Hatchet — Task（⭐⭐⭐⭐）**
+
+"The fundamental unit of invocable work is a Task. Each task is an atomic function." 从Day 1就是这个设计。
+
+### 4.2 部分做到的
+
+**Airflow — Operator（⭐⭐⭐）**：每种任务是一个Operator，接口统一，但人工审批不在体系内——Airflow根本不支持human-in-the-loop。
+
+**n8n — Node（⭐⭐⭐）**：所有节点都是 input → output，但"节点"混合了控制流和执行，不如Kestra分得清。
+
+### 4.3 没做到的
+
+**BPMN (Camunda)**：Service Task、User Task、Script Task、Send Task是不同的BPMN元素类型，引擎内部用不同代码处理。统一度低。
+
+**AWS Step Functions**：Task状态只能调Lambda/ECS/API。人工审批要用回调token模式，不是原生统一。
+
+### 4.4 总结对比
+
+| 引擎 | 执行统一度 | 人类也是执行器？ | 插件化？ | Control/Executor分离？ |
+|---|---|---|---|---|
+| **Kestra** | ⭐⭐⭐⭐⭐ | ✅ Pause task | ✅ 700+插件 | ✅ Flowable vs Runnable |
+| **Temporal** | ⭐⭐⭐⭐ | ⚠️ Signal另一套 | ✅ Activity Worker | ⚠️ 隐式 |
+| **Windmill** | ⭐⭐⭐⭐ | ✅ Suspend/Resume | ✅ 多语言脚本 | ❌ |
+| **Hatchet** | ⭐⭐⭐⭐ | ⚠️ 有限 | ✅ Task函数 | ⚠️ |
+| **Airflow** | ⭐⭐⭐ | ❌ | ✅ Operator | ❌ |
+| **ACP（目标）** | ⭐⭐⭐⭐⭐ | ✅ 原生统一 | ✅ Go插件 | ✅ Control × Executor |
+
+### 4.5 ACP的创新空间
+
+**没有人在AI Agent场景下做这个统一。**
+
+现有引擎的执行器都是**确定性的**（脚本、API、SQL）。ACP要统一的是**非确定性执行器**（AI Agent、人类），这在以下方面有本质不同：
+
+- **输出格式**：确定性执行器有固定schema，AI Agent输出需要约束+验证
+- **超时策略**：脚本秒级，Agent分钟级，人类小时/天级
+- **重试语义**：脚本幂等重试，Agent重试可能产生完全不同的输出
+- **可观测性**：需要追踪token用量、思考过程、中间产物
+- **对话性**：Agent执行过程中可能需要与人交互（human-in-the-loop嵌套）
+
+这是ACP相比Kestra/Temporal的差异化价值。
+
+## 5. 统一执行器协议
+
+### 5.1 核心接口
+
+```go
+// executor/executor.go — 统一执行器接口（v4.4）
+type Executor interface {
+    // 元信息
+    Type() string
+
+    // 三层Schema（Go struct反射 → JSON Schema自动生成）
+    InputType()  reflect.Type   // 输入参数定义（含data_schema字段）
+    OutputType() reflect.Type   // 标准输出信封定义
+    ContextType()   reflect.Type   // executor私有持久化数据（无状态executor返回nil）
+
+    // 生命周期
+    Execute(ctx context.Context, task *Task) (*Result, error)
+}
+
+// 控制节点接口（无IO，在引擎内部执行）
+type ControlExecutor interface {
+    Type() string
+    ExecuteControl(ctx context.Context, rc *RunContext, adapter EngineAdapter) error
+}
+```
+
+详见 §16（Runtime接口）、§18（三层Schema模型）。
+
+### 5.2 统一数据结构（v4.3 — 两层Output + data_schema in input）
+
+> **核心决策（泽斌 2026-03-02）**：
+> 1. Executor的Output分两层——**标准信封**（executor级，固定结构）+ **业务Data**（step级）
+> 2. data_schema**放在input里**——它是executor的输入参数，executor通过InputType()声明此字段
+> 3. 引擎通过executor的InputType()知道input里有data_schema，publish时从input读取做跨步骤类型检查
+
+#### YAML语法
+
+```yaml
+- id: write_prd
+  executor: openclaw_agent
+  input:
+    prompt: "根据需求写PRD..."
+    assignee: pm
+    data_schema:                    # ← executor的输入参数之一
+      prd_content: string
+      features:
+        type: array
+        items: { title: string, priority: string }
+
+- id: code_review
+  executor: openclaw_agent
+  input:
+    prompt: "审查代码..."
+    assignee: dev
+    data_schema:                    # ← 同一种executor，不同的data_schema
+      passed: boolean
+      issues:
+        type: array
+        items: { file: string, line: number, message: string }
+```
+
+#### 输入结构
+
+```go
+type ExecutorTask struct {
+    ID           string            // 任务唯一标识
+    Input        map[string]any    // 执行输入（模板渲染后，含data_schema）
+    Context      map[string]any    // 上游步骤输出
+    Constraints  TaskConstraints   // 超时、token上限、工具白名单等
+}
+// 注意：data_schema在Input里面，不再单独传
+// executor从Input["data_schema"]取，引擎从InputType()声明知道这个key存在
+```
+
+#### 输出结构：信封 + Data
+
+```go
+// ExecutorResult 是所有executor的标准输出"信封"
+type ExecutorResult struct {
+    // === 标准字段（executor级，由OutputType()定义，所有同类step一致）===
+    Status      string            // completed / failed
+    Output      string            // 文本输出（human-readable摘要）
+    Duration    time.Duration     // 执行耗时
+    Error       string            // 失败原因（失败时）
+    
+    // === 业务Data（step级，由input.data_schema约束，每个step可不同）===
+    Data        map[string]any    // 结构化业务数据
+}
+```
+
+#### 各Executor的标准Output信封
+
+| Executor | 标准信封字段（固定） | data字段（由input.data_schema定义） |
+|----------|---------------------|-----------------------------------|
+| **Agent** | status, output, token_usage, session_key, model, duration | `{prd_content, features[]}` 或 `{passed, issues[]}` |
+| **Human** | status, output, submitter, submitted_at, response_time, channel | 表单数据（每个step不同） |
+| **HTTP** | status, output, status_code, resp_headers, duration, attempts | response body解析结果 |
+| **Shell** | status, output, exit_code, duration | stdout解析结果（如有） |
+| **Subprocess** | status, output, instance_id, step_count, duration | 子流程output映射 |
+| **Calculator** | status, output, expression, result, duration | 无（result即全部） |
+
+```go
+// Agent Executor 的标准输出（继承ExecutorResult）
+type AgentResult struct {
+    ExecutorResult                    // 嵌入通用字段（含Data）
+    TokenUsage  TokenUsage `json:"token_usage"`
+    SessionKey  string     `json:"session_key"`
+    Model       string     `json:"model"`
+}
+
+// Human Executor 的标准输出
+type HumanResult struct {
+    ExecutorResult
+    Submitter    string        `json:"submitter"`
+    SubmittedAt  time.Time     `json:"submitted_at"`
+    ResponseTime time.Duration `json:"response_time"`
+    Channel      string        `json:"channel"`
+}
+```
+
+#### 三方共用一个位置
+
+data_schema放在input里，三方都能用：
+
+| 使用方 | 怎么用 | 什么时候 |
+|--------|--------|---------|
+| **Executor** | 从input取data_schema，agent注入prompt / http解析body / shell解析stdout | Runtime执行时 |
+| **引擎** | 通过executor InputType()知道input有data_schema字段，读取后做跨步骤引用类型检查 | Publish验证时 |
+| **前端Monaco** | InputType()声明data_schema是Schema类型，编辑器自动提示schema子字段 | YAML编辑时 |
+
+#### 跨步骤引用与验证
+
+```yaml
+# 引用标准信封字段 → 引擎查executor的OutputType()
+prompt: "上一步耗时 {{steps.dev.duration}}，用了 {{steps.dev.token_usage.total}} token"
+
+# 引用业务data字段 → 引擎查上游step的input.data_schema
+prompt: "PRD内容: {{steps.write_prd.data.prd_content}}"
+prompt: "审查是否通过: {{steps.review.data.passed}}"
+```
+
+Publish时的链式类型检查：
+1. **标准字段验证**：`{{steps.X.token_usage}}` → 查上游executor的OutputType()，agent有，shell没有 → 报错
+2. **Data字段验证**：`{{steps.X.data.passed}}` → 查上游step的input.data_schema，有passed字段且是boolean → 通过
+3. **类型匹配**：下游input期望number，上游data_schema声明string → 类型不匹配警告
+
+#### 输入
+
+```go
+type ExecutorTask struct {
+    ID           string            // 任务唯一标识
+    Input        map[string]any    // 执行输入（模板渲染后）
+    Context      map[string]any    // 上游步骤输出
+    Constraints  TaskConstraints   // 超时、token上限、工具白名单等
+    DataSchema   *jsonschema.Schema // 期望的data字段格式（来自YAML output_schema）
+}
+```
+
+#### 输出：信封 + Data
+
+```go
+// ExecutorResult 是所有executor的标准输出"信封"——引擎可靠读取标准字段
+type ExecutorResult struct {
+    // === 标准字段（executor级，由OutputType()定义，所有同类step一致）===
+    Status      string            // completed / failed
+    Output      string            // 文本输出（human-readable摘要）
+    Duration    time.Duration     // 执行耗时
+    Error       string            // 失败原因（失败时）
+    
+    // === 业务Data（step级，由YAML output_schema定义，每个step可不同）===
+    Data        map[string]any    // 结构化业务数据
+    
+    // === Executor专属标准字段（每种executor不同，但同类executor一致）===
+    // 通过类型断言或嵌入实现，见下方各executor定义
+}
+```
+
+#### 各Executor的标准Output信封
+
+| Executor | 标准信封字段（固定） | data字段（step级别自定义） |
+|----------|---------------------|--------------------------|
+| **Agent** | status, output, token_usage, session_key, model, duration | YAML output_schema定义（如 `{prd_content, features[]}` 或 `{passed, issues[]}`） |
+| **Human** | status, output, submitter, submitted_at, response_time, channel | 表单schema定义（每个step不同） |
+| **HTTP** | status, output, status_code, resp_headers, duration, attempts | response body的解析schema |
+| **Shell** | status, output, exit_code, duration | stdout的解析schema（如有） |
+| **Subprocess** | status, output, instance_id, step_count, duration | 子流程output映射 |
+| **Calculator** | status, output, expression, result, duration | 无（result即全部） |
+
+```go
+// 示例：Agent Executor 的完整标准输出
+type AgentResult struct {
+    ExecutorResult                    // 嵌入通用字段
+    TokenUsage  TokenUsage `json:"token_usage"`
+    SessionKey  string     `json:"session_key"`
+    Model       string     `json:"model"`
+}
+
+// 示例：Human Executor 的完整标准输出
+type HumanResult struct {
+    ExecutorResult                    // 嵌入通用字段
+    Submitter    string    `json:"submitter"`
+    SubmittedAt  time.Time `json:"submitted_at"`
+    ResponseTime time.Duration `json:"response_time"`
+    Channel      string    `json:"channel"`
+}
+```
+
+#### 跨步骤引用
+
+```yaml
+# 引用标准信封字段（executor级，一定存在）
+prompt: "上一步耗时 {{steps.dev.duration}}，用了 {{steps.dev.token_usage.total}} token"
+
+# 引用业务data字段（step级，由output_schema定义）
+prompt: "PRD内容: {{steps.write_prd.data.prd_content}}"
+prompt: "审查是否通过: {{steps.review.data.passed}}"
+```
+
+#### 验证分两层
+
+1. **引擎验证信封**：步骤完成时，引擎验证 `ExecutorResult` 的标准字段完整性（由executor的 `OutputType()` 定义）
+2. **Executor验证data**：executor内部验证 `Data` 字段是否符合step的 `output_schema`（来自YAML定义）
+
+这样 `OutputType()` 返回的是**信封结构**（executor级固定），`output_schema` 定义的是**data内容**（step级灵活）。两者正交，互不干扰。
+
+### 5.3 执行器注册表
+
+```go
+// 引擎启动时注册所有可用执行器
+var registry = map[string]Executor{
+    "openclaw_agent":  &OpenClawExecutor{},
+    "claude_code":     &ClaudeCodeExecutor{},
+    "feishu_approval": &FeishuApprovalExecutor{},
+    "feishu_message":  &FeishuMessageExecutor{},
+    "http":            &HTTPExecutor{},
+    "shell":           &ShellExecutor{},
+    "human":           &HumanExecutor{},
+}
+
+// 新增执行器 = 实现Executor接口 + 注册到表里
+// 引擎一行代码不用改
+```
+
+### 5.4 各执行器实现要点
+
+| 执行器 | Dispatch | Wait | 特殊处理 |
+|---|---|---|---|
+| `openclaw_agent` | sessions_spawn | session完成回调 | token追踪、agent_context |
+| `claude_code` | CLI/SDK启动 | stdout/进程退出 | commit检查、workdir隔离 |
+| `feishu_approval` | 创建飞书审批实例 | 审批回调webhook | 多人审批策略 |
+| `human` | 飞书消息/Web通知 | complete_step API | 表单schema验证 |
+| `http` | HTTP POST | 响应/webhook | 重试、幂等key |
+| `shell` | exec.Command | 进程退出 | 超时kill、stdout capture |
+| `feishu_message` | 发送消息API | 立即完成（fire & forget） | 无需Wait |
+
+## 6. 引擎核心简化
+
+### 6.1 统一后的引擎伪代码
+
+```go
+func (e *Engine) executeStep(ctx context.Context, instance *Instance, step *StepDef) error {
+    // 控制节点：引擎自己处理
+    if step.Control != "" {
+        return e.executeControl(ctx, instance, step)
+    }
+
+    // 执行节点：统一投递
+    executor := e.registry.Get(step.Executor)
+    if executor == nil {
+        return fmt.Errorf("unknown executor: %s", step.Executor)
+    }
+
+    // 1. 渲染输入模板
+    input := e.renderInput(step.Input, instance)
+
+    // 2. 构造统一任务
+    task := ExecutorTask{
+        ID:          fmt.Sprintf("%s/%s", instance.ID, step.ID),
+        Input:       input,
+        Context:     e.getUpstreamOutputs(instance, step),
+        Constraints: step.Constraints,
+        OutputSchema: step.OutputSchema,
+    }
+
+    // 3. 投递
+    handle, err := executor.Dispatch(ctx, task)
+    if err != nil {
+        return e.handleStepFailure(instance, step, err)
+    }
+
+    // 4. 等结果（异步回调或轮询，由executor内部决定）
+    result, err := executor.Wait(ctx, handle)
+    if err != nil {
+        return e.handleStepFailure(instance, step, err)
+    }
+
+    // 5. 验证输出schema
+    if step.OutputSchema != nil {
+        if err := validateOutput(result.Data, step.OutputSchema); err != nil {
+            return e.handleStepFailure(instance, step, err)
+        }
+    }
+
+    // 6. 写结果、推进DAG
+    return e.completeStep(instance, step, result)
+}
+```
+
+### 6.2 控制节点处理
+
+```go
+func (e *Engine) executeControl(ctx context.Context, instance *Instance, step *StepDef) error {
+    switch step.Control {
+    case "condition":
+        return e.evaluateCondition(instance, step)
+    case "gate":
+        return e.evaluateGate(instance, step)
+    case "expand":
+        return e.executeExpand(ctx, instance, step)
+    case "loop":
+        return e.executeLoop(ctx, instance, step)
+    }
+    return fmt.Errorf("unknown control type: %s", step.Control)
+}
+```
+
+控制节点是有限枚举（condition/gate/expand/loop），不会无限增长——因为流程编排的基本模式就这几种。而executor是开放集合，会不断新增。
+
+
+## 7. 执行器数据存储（v4.5 — Event Sourcing模型）
+
+> **核心决策（泽斌 2026-03-02）**：
+> 1. 审计 = 三层Schema的自然副产品，不是独立功能
+> 2. Data不是一个大JSON对象，是一系列有序条目（Event Sourcing）
+> 3. 统一的 `executor_context` 表，所有executor共用，天然支持分页和搜索
+> 4. executor运行时流式append，不需要完成时dump
+
+### 7.1 核心洞察：审计不是功能，是Schema的副产品
+
+三层Schema天然覆盖审计的全部需求：
+
+| 层 | 写入时机 | 审计场景 |
+|---|---|---|
+| **InputType()** | 引擎调用前组装 | 审计看"给了executor什么" |
+| **OutputType()** | executor返回时 | 审计看"executor返回了什么"（标准信封+data） |
+| **ContextType()** | executor运行过程中流式写入 | 审计看"executor内部发生了什么" |
+
+不需要FetchDetail()、AuditDetail struct、Timeline模型。**三层加起来就是完整审计。**
+
+### 7.2 Event Sourcing：Data是有序条目流
+
+**核心问题**：Agent Executor的完整session对话可能有上千条消息、几百KB甚至更大。一个大JSON存文件或数据库都有问题——无法分页、无法搜索、无法实时查看。
+
+**答案：Data不是一个大对象，是一系列有序条目。**
+
+```sql
+CREATE TABLE executor_context (
+    instance_id  TEXT NOT NULL,
+    step_id      TEXT NOT NULL,
+    seq          INTEGER NOT NULL,     -- 序号（自增）
+    entry_type   TEXT NOT NULL,        -- message / tool_call / vote / request...
+    content      TEXT NOT NULL,        -- 单条JSON（几KB）
+    summary      TEXT,                 -- 摘要（搜索+列表展示用）
+    created_at   TIMESTAMP,
+    PRIMARY KEY (instance_id, step_id, seq)
+);
+CREATE INDEX idx_search ON executor_context(instance_id, step_id, summary);
+```
+
+每条数据独立一行，单行几KB，上千条也就几MB。数据库零压力。
+
+#### Storage接口
+
+```go
+type Storage interface {
+    // 流式写入单条数据条目
+    Append(instanceID, stepID string, entry ContextEntry) error
+    
+    // 分页读取
+    List(instanceID, stepID string, offset, limit int) ([]ContextEntry, int, error)
+    
+    // 搜索
+    Search(instanceID, stepID string, query string, limit int) ([]ContextEntry, error)
+}
+
+type ContextEntry struct {
+    Seq       int            `json:"seq"`
+    Type      string         `json:"type"`       // entry类型
+    Content   map[string]any `json:"content"`    // 单条完整数据
+    Summary   string         `json:"summary"`    // 搜索用摘要
+    CreatedAt time.Time      `json:"created_at"`
+}
+```
+
+#### 写入方式：流式append
+
+```go
+// Agent Executor — 每产生一条数据就append一行
+func (a *AgentExecutor) Execute(ctx context.Context, task *Task) (*Result, error) {
+    // system prompt
+    storage.Append(runID, stepID, ContextEntry{
+        Type: "system_prompt", 
+        Content: map[string]any{"text": fullSystemPrompt},
+        Summary: "System prompt (2.1KB)",
+    })
+    
+    // 每条对话消息
+    for msg := range sessionMessages {
+        storage.Append(runID, stepID, ContextEntry{
+            Type: "message",
+            Content: map[string]any{"role": msg.Role, "content": msg.Content},
+            Summary: fmt.Sprintf("%s: %s", msg.Role, truncate(msg.Content, 100)),
+        })
+    }
+    
+    // 每个tool call
+    for tc := range toolCalls {
+        storage.Append(runID, stepID, ContextEntry{
+            Type: "tool_call",
+            Content: map[string]any{"name": tc.Name, "input": tc.Input, "output": tc.Output},
+            Summary: fmt.Sprintf("call: %s(%s)", tc.Name, truncate(tc.Input, 50)),
+        })
+    }
+    
+    return result, nil
+}
+```
+
+**关键优势：不需要等executor完成才写入。** agent还在运行中，已经产生的对话消息已经在数据库里了——实时审计天然支持。
+
+### 7.3 各Executor的Entry Types
+
+| Executor | Entry Types | 说明 |
+|----------|------------|------|
+| **Agent** | `system_prompt`, `message`, `tool_call`, `token_snapshot` | 每条对话消息一行，完整保留system prompt |
+| **Human** | `notification`, `form_submit`, `vote`, `reminder` | 每个动作一行，表单可能多次提交 |
+| **HTTP** | `request`, `response`, `retry` | 每次请求/响应一行 |
+| **Shell** | `start`, `stdout_chunk`, `stderr_chunk`, `exit` | 流式输出分chunk存储 |
+| **Subprocess** | `start`, `step_completed`, `step_failed`, `finish` | 子流程事件流 |
+| **Calculator** | `evaluate` | 单条：expression + result |
+
+#### Agent Executor 数据示例
+
+```
+seq=0  type=system_prompt  summary="System prompt (2.1KB)"
+       content: {"text": "你是BitFantasy的产品经理..."}
+
+seq=1  type=message         summary="user: 根据以下需求写PRD..."
+       content: {"role": "user", "content": "根据以下需求写PRD..."}
+
+seq=2  type=tool_call       summary="call: web_search('智能眼镜竞品')"
+       content: {"name": "web_search", "input": "智能眼镜竞品", "output": "...结果...", "duration_ms": 1200}
+
+seq=3  type=message         summary="assistant: # nimo X1 产品需求文档..."
+       content: {"role": "assistant", "content": "# nimo X1 产品需求文档\n\n## 1. 背景..."}
+
+seq=4  type=token_snapshot   summary="tokens: 12000 in / 8000 out"
+       content: {"input": 12000, "output": 8000, "cache_read": 3000, "model": "opus"}
+```
+
+1200条消息 → 1200行 → 每行~2KB → 总计~2.4MB → 数据库无压力。
+
+#### Human Executor 数据示例
+
+```
+seq=0  type=notification    summary="飞书通知发送给张三 om_xxx"
+       content: {"channel": "feishu", "to": "ou_xxx", "message_id": "om_xxx", "sent_at": "..."}
+
+seq=1  type=form_submit     summary="张三提交表单 v1"
+       content: {"submitter": "张三", "version": 1, "data": {"prd_content": "...", "score": 8}}
+
+seq=2  type=reminder        summary="催办：已等待2小时"
+       content: {"reminder_num": 1, "wait_duration": "2h", "sent_at": "..."}
+
+seq=3  type=form_submit     summary="张三修改表单 v2"
+       content: {"submitter": "张三", "version": 2, "data": {"prd_content": "...(修改)", "score": 9}}
+```
+
+审批场景：
+
+```
+seq=0  type=notification    summary="审批通知发送给3人"
+seq=1  type=vote            summary="张三: approved"
+       content: {"voter": "张三", "decision": "approved", "comment": "同意", "response_time": "15m"}
+seq=2  type=vote            summary="李四: rejected"  
+       content: {"voter": "李四", "decision": "rejected", "comment": "需要修改第3章", "response_time": "2h"}
+seq=3  type=vote            summary="王五: approved"
+       content: {"voter": "王五", "decision": "approved", "comment": "", "response_time": "30m"}
+```
+
+### 7.4 审计API：按需加载 + 搜索
+
+审计不需要单独的接口或数据结构——就是读 `executor_context` 表。
+
+#### 分页加载
+
+```
+GET /api/instances/{id}/steps/{stepID}/data?offset=0&limit=50
+→ {
+    "entries": [...前50条...],
+    "total": 1200,
+    "step_id": "write_prd",
+    "executor": "openclaw_agent"
+  }
+
+GET /api/instances/{id}/steps/{stepID}/data?offset=50&limit=50
+→ 返回第51-100条
+```
+
+SQL: `SELECT * FROM executor_context WHERE instance_id=? AND step_id=? ORDER BY seq LIMIT ? OFFSET ?`
+
+#### 搜索
+
+```
+GET /api/instances/{id}/steps/{stepID}/data?q=竞品分析
+→ 返回summary或content包含"竞品分析"的条目
+```
+
+SQL: `WHERE instance_id=? AND step_id=? AND (summary LIKE ? OR content LIKE ?)`
+
+需要全文搜索时：SQLite用FTS5，PostgreSQL用tsvector。先用LIKE够用。
+
+#### 按类型过滤
+
+```
+GET /api/instances/{id}/steps/{stepID}/data?type=tool_call
+→ 只返回tool call条目（排除普通消息）
+```
+
+#### 实时审计（agent运行中）
+
+agent还在执行时，已产生的消息已经在表里了。前端轮询最新seq：
+
+```
+GET /api/instances/{id}/steps/{stepID}/data?after_seq=150
+→ 返回seq>150的新增条目（增量拉取）
+```
+
+### 7.5 前端渲染：StepContextViewer
+
+一个通用的 `StepContextViewer` 组件，根据executor Type()选择渲染方式：
+
+```tsx
+function StepContextViewer({ instanceId, stepId, executorType }) {
+  const { entries, total, loadMore, search } = useStepData(instanceId, stepId);
+  
+  switch (executorType) {
+    case "openclaw_agent":
+      return <SessionViewer entries={entries} total={total} onLoadMore={loadMore} />
+      // 渲染为对话timeline：system prompt → user/assistant交替 → tool calls折叠
+      
+    case "human":
+      return <FormHistoryViewer entries={entries} />
+      // 渲染为表单提交历史 + 审批投票进度条
+      
+    case "http":
+      return <RequestViewer entries={entries} />
+      // 渲染为request/response对比面板
+      
+    case "shell":
+      return <TerminalViewer entries={entries} />
+      // 渲染为终端输出（黑底白字）
+      
+    case "subprocess":
+      return <SubflowLink entries={entries} instanceId={...} />
+      // 渲染为子流程步骤摘要 + 跳转链接
+      
+    default:
+      return <GenericEntryList entries={entries} />
+      // 通用JSON条目列表
+  }
+}
+```
+
+**关键**：所有渲染组件共用同一个数据源（`executor_context` 表的分页API），只是展示方式不同。新增executor只需新增一个渲染组件，数据层零改动。
+
+#### 虚拟滚动
+
+Agent对话上千条时，用虚拟滚动（`react-virtuoso` 或 `@tanstack/virtual`）：
+- 只渲染可视区域的条目
+- 滚动到底部自动loadMore
+- 搜索结果高亮并跳转到对应位置
+
+### 7.6 两层数据分离
+
+数据库存什么 vs executor_context存什么，职责清晰：
+
+| 数据 | 存储位置 | 大小 | 查询场景 |
+|------|---------|------|---------|
+| **标准信封**（OutputType()） | tasks表 | 几KB | 列表、仪表盘、状态查询 |
+| **完整私有数据**（ContextType()） | executor_context表 | 几KB~几MB | 审计详情、搜索、实时查看 |
+
+tasks表永远不膨胀（只存标准信封），executor_context表按需查询（分页+索引）。
+
+#### 数据流
+
+```
+executor运行中:
+  1. 每产生一条数据 → Storage.Append() → executor_context表（流式）
+  2. 执行完成 → 返回ExecutorResult → tasks表（一次性，标准信封）
+
+审计查看:
+  1. 进入实例详情 → 读tasks表的标准信封（瞬间）
+  2. 点击某步骤"查看详情" → 分页读executor_context表（按需）
+  3. 搜索关键词 → 查executor_context的summary字段（索引）
+```
+
+### 7.7 设计原则总结
+
+1. **审计不是功能，是三层Schema的副产品** — InputType() + OutputType() + ContextType() = 完整审计
+2. **Data是有序条目流，不是大JSON** — Event Sourcing模式，天然支持分页、搜索、实时查看
+3. **executor全自治** — 自己决定写什么条目、什么时候写，引擎不关心
+4. **统一表、统一API** — 所有executor共用 `executor_context` 表和同一套分页/搜索API
+5. **前端按executor类型选渲染** — 数据层统一，展示层差异化
+6. **流式写入** — 不需要等完成才dump，实时审计天然支持
+7. **零额外概念** — 不需要FetchDetail/AuditDetail/Timeline等独立抽象
+
+### 7.8 各Executor的ContextType()定义（v4.5）
+
+ContextType()不再定义一个大struct，而是定义这个executor可能产生的**entry types及其content结构**。
+
+```go
+// Agent Executor 的数据条目类型
+type AgentSystemPromptEntry struct {
+    Text         string `json:"text"`          // 完整system prompt
+    TokenCount   int    `json:"token_count"`   // prompt token数
+}
+
+type AgentMessageEntry struct {
+    Role    string `json:"role"`     // user / assistant
+    Content string `json:"content"`  // 完整消息内容
+}
+
+type AgentToolCallEntry struct {
+    Name       string         `json:"name"`        // 工具名
+    Input      map[string]any `json:"input"`       // 工具输入
+    Output     map[string]any `json:"output"`      // 工具输出
+    DurationMs int            `json:"duration_ms"` // 耗时
+}
+
+type AgentTokenSnapshot struct {
+    Input      int    `json:"input"`
+    Output     int    `json:"output"`
+    CacheRead  int    `json:"cache_read"`
+    CacheWrite int    `json:"cache_write"`
+    Model      string `json:"model"`
+}
+```
+
+```go
+// Human Executor 的数据条目类型
+type HumanNotificationEntry struct {
+    Channel    string `json:"channel"`     // feishu / email
+    To         string `json:"to"`          // 接收人ID
+    MessageID  string `json:"message_id"`  // 飞书消息ID（可追溯）
+}
+
+type HumanFormSubmitEntry struct {
+    Submitter  string         `json:"submitter"`
+    Version    int            `json:"version"`    // 第几次提交
+    Data       map[string]any `json:"data"`       // 表单数据
+}
+
+type HumanVoteEntry struct {
+    VoterID      string `json:"voter_id"`
+    VoterName    string `json:"voter_name"`
+    Decision     string `json:"decision"`      // approved / rejected
+    Comment      string `json:"comment"`
+    ResponseTime string `json:"response_time"` // 从通知到投票的耗时
+}
+```
+
+```go
+// HTTP Executor 的数据条目类型
+type HTTPRequestEntry struct {
+    Method  string            `json:"method"`
+    URL     string            `json:"url"`
+    Headers map[string]string `json:"headers"`  // 敏感头脱敏
+    Body    string            `json:"body"`
+}
+
+type HTTPResponseEntry struct {
+    StatusCode int               `json:"status_code"`
+    Headers    map[string]string `json:"headers"`
+    Body       string            `json:"body"`
+    DurationMs int               `json:"duration_ms"`
+}
+```
+
+```go
+// Shell Executor 的数据条目类型
+type ShellStartEntry struct {
+    Command string            `json:"command"`
+    WorkDir string            `json:"workdir"`
+    Env     map[string]string `json:"env"`  // 密钥脱敏
+}
+
+type ShellOutputChunk struct {
+    Stream string `json:"stream"`  // stdout / stderr
+    Data   string `json:"data"`    // 输出内容
+}
+
+type ShellExitEntry struct {
+    ExitCode   int `json:"exit_code"`
+    DurationMs int `json:"duration_ms"`
+}
+```
+
+这些struct同时服务于：
+1. **运行时类型安全** — executor写入时有编译检查
+2. **JSON Schema生成** — 通过反射自动生成，前端知道每种entry的content结构
+3. **审计渲染** — 前端根据entry_type选择渲染组件
+
+#### Agent Executor
+
+```go
+type AgentAuditDetail struct {
+    // Session信息
+    SessionKey    string        // Gateway session标识
+    SystemPrompt  string        // 完整system prompt（含注入的context/lessons/schema指令）
+    Messages      []Message     // 完整对话记录（user/assistant/tool交替）
+    
+    // Token明细
+    TokenUsage    TokenBreakdown // input/output/cache_read/cache_write
+    ModelUsed     string         // 实际使用的模型
+    
+    // 工具调用
+    ToolCalls     []ToolCallRecord // 每次tool call的name/input/output/耗时
+    
+    // 输出验证
+    OutputSchemaValidation *SchemaValidationResult // 通过/失败/自动修正
+    
+    // 经验教训
+    LessonsInjected []string    // 注入的历史教训ID
+    LessonRecorded  *string     // 本次执行产生的新教训（如有）
+    
+    // 性能
+    SpawnLatency    time.Duration // 从dispatch到agent开始执行的延迟
+    ExecutionTime   time.Duration // agent执行总耗时
+    RetryCount      int           // 重试次数
+}
+```
+
+**审计卡片渲染**：展开显示完整对话timeline，折叠显示"Agent用了X token，调用了Y个工具，耗时Z"。
+
+#### Human Executor
+
+```go
+type HumanAuditDetail struct {
+    // 任务分配
+    AssignedTo    []string      // 被指派人（user ID列表）
+    AssignedAt    time.Time     // 分配时间
+    Channel       string        // 通知渠道（feishu/email/slack）
+    NotificationID string       // 飞书消息ID等，可追溯
+    
+    // 表单
+    FormSchema    map[string]any // 表单定义（期望人填什么）
+    FormSubmissions []FormSubmission // 提交历史（可能多次修改）
+    
+    // 审批场景（approval模式）
+    ApprovalStrategy string     // any/all/majority
+    Votes           []VoteRecord // 每个审批人的投票记录
+    
+    // 催办
+    Reminders       []ReminderRecord // 催办记录（时间、渠道）
+    
+    // 响应时间
+    ResponseTime    time.Duration // 从通知到首次提交的耗时
+    TotalTime       time.Duration // 从分配到最终完成的耗时（含多次修改）
+}
+
+type FormSubmission struct {
+    SubmittedBy   string         // 谁提交的
+    SubmittedAt   time.Time      // 什么时候
+    Data          map[string]any // 提交内容
+    Version       int            // 第几次提交（1=首次）
+}
+
+type VoteRecord struct {
+    VoterID    string    // 审批人
+    Decision   string    // approved/rejected
+    Comment    string    // 审批意见
+    VotedAt    time.Time // 投票时间
+    ResponseTime time.Duration // 从通知到投票的耗时
+}
+```
+
+**审计卡片渲染**：显示"张三在15分钟后提交了表单"，审批模式显示投票进度条（3/5通过）。
+
+#### HTTP Executor
+
+```go
+type HTTPAuditDetail struct {
+    // 请求
+    Method      string            // GET/POST/PUT/DELETE
+    URL         string            // 完整URL
+    Headers     map[string]string // 请求头（Authorization等敏感头用***脱敏）
+    RequestBody string            // 请求体（截断保留前10KB）
+    
+    // 响应
+    StatusCode  int               // HTTP状态码
+    RespHeaders map[string]string // 响应头
+    RespBody    string            // 响应体（截断保留前10KB）
+    
+    // 性能
+    DNSTime     time.Duration     // DNS解析耗时
+    ConnectTime time.Duration     // TCP连接耗时
+    TLSTime     time.Duration     // TLS握手耗时
+    TTFB        time.Duration     // 首字节时间
+    TotalTime   time.Duration     // 总耗时
+    
+    // 重试
+    Attempts    []HTTPAttempt     // 每次尝试的记录（含失败的）
+}
+
+type HTTPAttempt struct {
+    AttemptNum  int
+    StatusCode  int
+    Error       string        // 如果失败
+    Duration    time.Duration
+    Timestamp   time.Time
+}
+```
+
+**审计卡片渲染**：显示"POST https://api.example.com → 200 OK (340ms)"，展开看完整请求响应。
+
+#### Subprocess Executor
+
+```go
+type SubprocessAuditDetail struct {
+    // 子流程信息
+    ProcessID      string         // 子流程定义ID
+    ProcessName    string         // 子流程名称
+    ProcessVersion int            // 使用的版本号
+    InstanceID     string         // 子流程实例ID（可递归钻入查看）
+    
+    // 参数传递
+    InputMapping   map[string]any // 传入子流程的参数
+    OutputMapping  map[string]any // 子流程返回的输出
+    
+    // 执行概况
+    NestingDepth   int            // 嵌套深度（防止无限递归）
+    StepCount      int            // 子流程包含多少步骤
+    CompletedSteps int            // 已完成步骤数
+    FailedSteps    int            // 失败步骤数
+    
+    // 耗时
+    TotalTime      time.Duration  // 子流程总耗时
+    
+    // 子步骤摘要（不展开，点击跳转到子流程实例详情）
+    StepSummaries  []StepSummary
+}
+
+type StepSummary struct {
+    StepID   string
+    StepName string
+    Executor string        // 子步骤用的executor类型
+    Status   string        // completed/failed/skipped
+    Duration time.Duration
+}
+```
+
+**审计卡片渲染**：显示"子流程 code-review v3 → 5/5步骤完成 (12m30s)"，点击跳转到子流程实例详情页（递归审计）。
+
+#### Shell Executor
+
+```go
+type ShellAuditDetail struct {
+    // 命令
+    Command     string            // 完整命令行
+    WorkDir     string            // 工作目录
+    EnvVars     map[string]string // 环境变量（密钥类用***脱敏）
+    RunAsUser   string            // 执行用户
+    
+    // 输出
+    Stdout      string            // 标准输出（截断保留头5KB+尾5KB）
+    Stderr      string            // 标准错误（截断保留头5KB+尾5KB）
+    ExitCode    int               // 退出码
+    
+    // 如果stdout/stderr被截断，保留完整版的引用
+    StdoutBlobRef  string         // 完整stdout的blob存储引用
+    StderrBlobRef  string         // 完整stderr的blob存储引用
+    
+    // 性能
+    Duration    time.Duration     // 执行耗时
+    PeakMemory  int64             // 峰值内存（如可获取）
+}
+```
+
+**审计卡片渲染**：显示"$ make deploy → exit 0 (45s)"，展开看stdout/stderr。
+
+#### Calculator Executor（测试用）
+
+```go
+type CalculatorAuditDetail struct {
+    Expression  string        // 输入表达式
+    Result      float64       // 计算结果
+    Duration    time.Duration // 计算耗时（应该是微秒级）
+}
+```
+
+**审计卡片渲染**：显示"2 + 3 * 4 = 14 (0.01ms)"。
+
+#### 通用审计接口
+
+```go
+// 每个executor实现此接口
+type Auditable interface {
+    // FetchDetail 返回该executor的审计详情
+    // runID + stepID 定位到具体某次执行
+    FetchDetail(ctx context.Context, runID string, stepID string) (any, error)
+    
+    // AuditType 返回审计详情的类型标识，前端据此选择渲染组件
+    AuditType() string // "agent" / "human" / "http" / "subprocess" / "shell" / "calculator"
+}
+```
+
+引擎在步骤完成时自动调用 `FetchDetail` 存储审计快照（而非实时查询），确保即使外部系统不可用（如Gateway重启），审计数据也不丢失。
+
+## 8. YAML Schema验证
+
+### 8.1 验证策略
+
+YAML验证分两层：
+
+**第一层：引擎验证公共字段（KnownFields）**
+- `id` 必填，流程内唯一
+- `executor` 或 `control` 至少有一个（都没有默认 `openclaw_agent`）
+- `executor` 和 `control` 不能同时存在
+- `executor` 值必须在注册表中
+- `control` 值必须在已知列表中（condition/gate/expand/subprocess）
+- `depends_on` 引用的step必须存在
+- `timeout` 格式合法
+
+**第二层：Executor验证专属input**
+```go
+executor := registry.Get(step.Executor)
+if err := executor.ValidateConfig(step.Input); err != nil {
+    return fmt.Errorf("step %s: %w", step.ID, err)
+}
+```
+
+每个executor自己知道什么input合法：
+
+```go
+// OpenClawAgentExecutor
+func (e *OpenClawAgentExecutor) ValidateConfig(input map[string]any) error {
+    if _, ok := input["prompt"]; !ok {
+        if _, ok2 := input["assignee"]; !ok2 {
+            return fmt.Errorf("openclaw_agent requires 'prompt' or 'assignee'")
+        }
+    }
+    return nil
+}
+
+// ApprovalExecutor
+func (e *ApprovalExecutor) ValidateConfig(input map[string]any) error {
+    approval, ok := input["approval"]
+    if !ok {
+        return fmt.Errorf("approval executor requires 'approval' config")
+    }
+    // 验证approvers、strategy等
+    return nil
+}
+```
+
+### 8.2 新增executor的验证注册
+
+新增executor自带验证逻辑，引擎不用改：
+
+```go
+// 用户自定义的HTTP executor
+type MyCustomExecutor struct{}
+
+func (e *MyCustomExecutor) ValidateConfig(input map[string]any) error {
+    if _, ok := input["url"]; !ok {
+        return fmt.Errorf("http executor requires 'url'")
+    }
+    return nil
+}
+```
+
+注册到表里后，引擎的 `ValidateYAML` 自动调用它的验证。
+
+## 9. 通知架构
+
+### 9.1 核心原则
+
+**通知如果不影响流程走向，就不该是独立节点。**
+
+但通知也可以是executor——当你需要"发消息并确认送达"时，它就是一个fire-and-forget执行器。
+
+### 9.2 两层设计
+
+**步骤级通知 — 生命周期钩子（YAML配置）：**
+
+```yaml
+steps:
+  design:
+    executor: openclaw_agent
+    input: { prompt: "..." }
+    on_complete:
+      notify: [creator, reviewer]
+      channel: feishu
+    on_fail:
+      notify: [manager]
+      escalate: true
+```
+
+**全局通知规则 — 事件驱动（订阅Event Log）：**
+
+```
+workflow_events 表 → 通知服务（独立消费者）
+                   → 规则："任何P0任务失败 → 飞书通知泽斌"
+                   → 规则："任务超时 → 升级通知"
+```
+
+## 10. 行业标准对齐
+
+正在收敛的Agent互操作标准：
+
+| 标准 | 组织 | 状态 | 核心思想 |
+|---|---|---|---|
+| Agent Protocol | Anthropic | 草案 | 统一Agent任务接口 |
+| Responses API | OpenAI | 已发布 | Agent即函数调用 |
+| A2A Protocol | Google | 草案 | Agent-to-Agent通信 |
+| AI Agent标准 | NIST | 征求意见 | 互操作性、安全性、治理 |
+
+共同思想：**Agent是黑盒，只暴露 任务输入→结果输出 的接口。**
+
+ACP的Executor Interface与这些标准方向一致。等标准稳定后可直接对接。
+
+## 11. 实施路径
+
+### P0：接口抽象（不改行为）
+
+- 定义 `Executor` interface
+- 将现有 `executeAgentStep`/`executeHumanStep`/`executeApprovalBranch` 包装为 `OpenClawExecutor`/`HumanExecutor`
+- 引擎内部统一调用executor.Dispatch/Wait
+- **行为完全不变，只是代码结构重构**
+
+### P1：YAML格式迁移
+
+- Step定义从 `type: agent` 改为 `executor: openclaw_agent`
+- 控制节点从 `type: condition` 改为 `control: condition`
+- 兼容层：短期同时支持 `type` 和 `executor` 字段
+- 迁移工具：自动转换旧YAML
+
+### P2：新增执行器
+
+- `ShellExecutor`：直接执行命令
+- `HTTPExecutor`：调用第三方API/Agent
+- `ClaudeCodeExecutor`：CC直驱（不经过OpenClaw Agent中间层）
+- `FeishuApprovalExecutor`：飞书原生审批流
+
+### P3：生态扩展
+
+- Executor插件热加载
+- Agent Protocol标准对接
+- 第三方Agent marketplace
+- 自定义Executor SDK
+
+## 12. 战略意义
+
+> "企业即求解器，一切皆计算" — 泽斌
+
+**Executor就是计算单元，ACP就是调度器。**
+
+- Step定义从"告诉引擎做什么"变成"告诉引擎找谁算"
+- 新增执行器 = 实现一个Go接口 + 注册到表里，引擎一行代码不用改
+- ACP成为真正的**通用编排平台**——编排任何能接收input/返回output的东西
+- Human-in-the-loop自然落地——人和AI是同一接口的不同实现
+- 第三方Agent即插即用——Codex出了API？写个executor适配器就行
+
+这不是自嗨。这是业界最先进的引擎（Kestra/Temporal/Windmill）正在收敛的方向。但**没有人在AI Agent场景下做这个统一**。ACP的差异化在于：统一编排确定性执行器（脚本/API）和非确定性执行器（AI/人类）。
+
+> 补充第三条壁垒：Agent框架无壁垒，壁垒在①业务prompt ②给agent用的tool ③**编排能力**。谁能把任意Agent当计算单元调度，谁就是操作系统。
+
+## 13. 实现反思与补充（v4.1 — 2026-03-02）
+
+> 基于 executor 包实际抽取过程中的发现
+
+### 13.1 控制节点需要独立接口
+
+PRD第5章把所有节点统一成 `Dispatch → Wait` 模式，但实践中发现 condition/gate/expand 是**同步的DAG操作**——它们不"执行任务"，而是决定"下一步走哪"。强行套Dispatch/Collect反而增加复杂度。
+
+**实际方案**：两个接口——
+
+```go
+// 异步执行器（agent/human/shell/http）
+type Executor interface {
+    Dispatch(ctx, task) (*Handle, error)
+    Collect(ctx, handle) (*Result, error)
+    Cancel(ctx, handle) error
+}
+
+// 同步控制节点（condition/gate/expand/subprocess）
+type ControlExecutor interface {
+    ExecuteControl(ctx, adapter, rc *RunContext) error
+}
+```
+
+这与第2章的"正交维度"一致：Executor和Control在**接口层面**也应该正交。
+
+### 13.2 引擎内部状态传递：RunContext
+
+现有execute函数有**16个参数**（ctx, runID, workflowName, stepID, step, inputs, stepOutputs, mu, wg, stepStatus, downstream, inDegree, runOutcome, runError, stepTaskIDs, triggerStepFn）。这些是引擎运行时的DAG调度状态。
+
+**解决方案**：`RunContext` 结构体打包传递：
+
+```go
+type RunContext struct {
+    Ctx          context.Context
+    RunID        string
+    WorkflowName string
+    StepID       string
+    Step         interface{}       // *StepDef
+    Inputs       map[string]string
+    StepOutputs  interface{}       // map[string]*StepOutput
+    Mu           *sync.Mutex
+    StepStatus   map[string]string
+    Wg           *sync.WaitGroup
+    Downstream   map[string][]string
+    InDegree     map[string]int
+    RunOutcome   *string
+    RunError     *string
+    StepTaskIDs  map[string]string
+    TriggerStep  func(string)
+    StepMap      interface{}       // map[string]*StepDef
+}
+```
+
+PRD的伪代码过于理想化，实际引擎的DAG执行需要大量共享状态协调。
+
+### 13.3 错误恢复与幂等性
+
+PRD未覆盖的关键场景：
+
+| 场景 | 问题 | 需要的能力 |
+|------|------|-----------|
+| Dispatch成功，Collect前crash | 重启后如何恢复？ | Handle必须可序列化+持久化 |
+| Agent session已存在 | 重启后重新attach而非re-spawn | executor需要 `Resume(handle)` 方法 |
+| HTTP executor响应丢失 | 幂等重试还是标记失败？ | 需要幂等key机制 |
+| 审批已提交但回调丢失 | 重启后如何检测已完成的审批？ | executor需要 `Status(handle)` 查询 |
+
+**建议**：Executor接口增加 `Resume(ctx, handle) error` 方法，用于引擎重启后恢复已投递任务的状态。
+
+### 13.4 Executor生命周期管理
+
+PRD假设executor是无状态的（注册到Registry就完事），但实际：
+
+| Executor | 依赖 |
+|----------|------|
+| `openclaw_agent` | Gateway连接配置 |
+| `feishu_approval` | 飞书app credentials |
+| `shell` | sandbox/工作目录配置 |
+| `http` | TLS证书、代理配置 |
+
+**建议**：增加初始化接口：
+
+```go
+type Executor interface {
+    Init(config map[string]any) error  // 启动时注入依赖
+    Close() error                       // 优雅关闭
+    // ... 其他方法
+}
+```
+
+### 13.5 Human与Approval的边界（决策：方案A合并）
+
+**结论（2026-03-02 泽斌确认）：采用方案A——合并为单一HumanExecutor。**
+
+Approval本质是"需要多人投票的human task"，不是完全不同的执行模型。两者共享大量逻辑（任务创建、通知、表单schema验证），拆分会导致重复代码。
+
+#### 设计
+
+`HumanExecutor` 内部按 `mode` 分支：
+
+```
+executor: human
+input:
+  mode: form        # 普通表单任务（默认）
+  # mode: approval  # 审批投票任务
+```
+
+- **form模式**（默认）：单人任务，提交表单即完成
+- **approval模式**：多人投票，配置策略（unanimous/majority/any）和投票人列表
+
+#### 共享逻辑
+
+| 能力 | form | approval |
+|------|------|----------|
+| 任务创建与指派 | ✅ | ✅ |
+| 通知投递 | ✅ | ✅ |
+| 表单schema验证 | ✅ | ✅ |
+| 多人投票 | ❌ | ✅ |
+| 策略评估 | ❌ | ✅ |
+| on_submit回调 | ✅ | ✅ |
+
+#### 实现映射
+
+当前代码已是这个结构——`executeHumanStep`检测到approval配置走`executeApprovalBranch`。抽取为`HumanExecutor`时保持同样模式：
+
+```go
+func (e *HumanExecutor) Execute(ctx RunContext) error {
+    if ctx.StepDef.GetApproval() != nil {
+        return e.executeApproval(ctx)
+    }
+    return e.executeForm(ctx)
+}
+```
+
+不再需要独立的`ApprovalExecutor`。YAML里也不会出现`executor: approval`——统一用`executor: human` + `input.mode`区分。
+### 13.6 Executor级别可观测性
+
+PRD提到token追踪，但缺少统一的metrics标准。
+
+**建议**：Result增加Metrics字段：
+
+```go
+type Result struct {
+    Status  string
+    Output  string
+    Data    map[string]any
+    Error   string
+    Metrics map[string]any  // 新增：executor上报的指标
+}
+```
+
+各executor上报不同指标：
+
+| Executor | Metrics |
+|----------|---------|
+| `openclaw_agent` | token_input, token_output, cache_read, cost |
+| `human` | response_time_seconds |
+| `shell` | exit_code, stdout_bytes |
+| `http` | status_code, latency_ms |
+| `approval` | approve_count, reject_count, rounds |
+
+引擎统一收集写入event log，前端按executor_type渲染不同的metrics面板。
+
+### 13.7 优雅降级策略
+
+未注册的executor类型应有清晰的处理策略：
+
+1. **编译时**：`ValidateConfig` 在publish流程时检查executor类型是否已注册
+2. **运行时**：未知类型 → step标记failed + 清晰错误信息（"executor 'xxx' not registered, available: [...]"）
+3. **未来扩展**：未知executor → 自动fallback到HTTPExecutor（通用适配器），executor字段值作为URL endpoint
+
+## 14. 确定性光谱：ACP的哲学基础（v4.1 — 2026-03-02）
+
+> 来源：泽斌 + Lyra 架构讨论
+
+### 14.1 核心洞察：工具是确定性的，不确定性来自决策者
+
+PS的每个滤镜是确定性函数，但人选择哪个滤镜、怎么组合——这是不确定性。编译器完全确定，但程序员写什么代码——不确定。Agent调用的每个API是确定性的，但agent如何"思考"、选哪个tool、以什么顺序——不确定。
+
+```
+不确定性 = 决策者（人/agent） × 确定性工具
+```
+
+同一个PS软件，不同的人做出完全不同的作品。同一个编程工具，不同程序员写出天差地别的代码。**工具本身没有创造力，创造力来自使用工具的"谁"。**
+
+### 14.2 ACP编排的不是工具，是决策者
+
+每个executor节点的核心问题不是"用什么工具"，而是"**谁来做决策**"：
+
+| 决策者 | 不确定性 | 例子 | 约束手段 |
+|--------|---------|------|---------|
+| 无（直接映射） | 0% | http/shell — 输入直接映射到输出 | 无需约束 |
+| AI Agent | ~30-70% | 有思考过程，会选择tools | prompt + output_schema + tools白名单 |
+| 人类 | ~50-100% | 有判断、偏好、创造力 | 表单 + deadline + 审批规则 |
+
+ACP的流程设计本质上是在安排：**每个环节由谁来做决策，给他什么输入，期望什么输出，如何约束他的决策空间。**
+
+### 14.3 确定性光谱
+
+```
+完全确定性                                              完全不确定性
+[模板填充] → [API调用] → [Agent+严格schema] → [Agent自由] → [人类判断]
+   ↑             ↑              ↑                 ↑            ↑
+  http         shell         agent           agent          human
+  executor    executor     (constrained)   (creative)     executor
+```
+
+这不是"好vs坏"——是"成本vs灵活性"的权衡：
+
+| 确定性程度 | 成本 | 延迟 | 可审计 | 创造力 | 适用场景 |
+|-----------|------|------|--------|--------|---------|
+| 100%（http/shell） | ≈0 | ms级 | 完全可审计 | 无 | 数据转换、通知、部署 |
+| 70%（agent+约束） | 中等 | 秒~分钟 | 可追踪思考过程 | 中等 | 写报告、代码review、分析 |
+| 30%（agent自由） | 较高 | 分钟级 | 较难审计 | 高 | 创意设计、架构探索 |
+| 0%（人类） | 最高 | 小时~天 | 靠流程约束 | 最高 | 战略决策、最终审批 |
+
+### 14.4 output_schema = 不确定性的约束条件
+
+output_schema不只是"格式要求"——它是**缩小不确定性空间的约束条件**。
+
+```yaml
+# 不确定性空间 = 无穷大（agent可以输出任何东西）
+- id: free_write
+  executor: agent
+  input: { prompt: "分析竞品" }
+
+# 不确定性空间 = 被schema约束到有限维度
+- id: structured_analysis
+  executor: agent
+  input: { prompt: "分析竞品" }
+  output_schema:
+    fields:
+      - name: competitors    # 必须列出竞品
+      - name: strengths      # 必须分析优势
+      - name: risks          # 必须识别风险
+      - name: recommendation # 必须给出建议
+```
+
+schema越严格，agent自由度越低，结果越可预测。**流程设计者通过调节schema的严格程度，来控制每个步骤在确定性光谱上的位置。**
+
+### 14.5 为什么需要确定性executor
+
+既然agent能做shell/http能做的一切，为什么还要确定性executor？
+
+**因为当你明确知道要什么的时候，不确定性是浪费。**
+
+- 发一条飞书通知 → 不需要agent"思考"怎么发，直接HTTP调用
+- 跑一条SQL → 不需要agent"理解"SQL语义，直接执行
+- 调用部署脚本 → 不需要agent"判断"要不要部署，直接shell执行
+
+**确定性executor的价值 = 零决策成本 + 零延迟 + 完全可预测。** 这是agent做不到的。
+
+### 14.6 ACP vs n8n/Zapier：本质区别
+
+n8n/Zapier只能编排确定性executor（API→API→API）。ACP的差异化：**在同一个DAG里统一编排确定性和非确定性计算。**
+
+```yaml
+# ACP独有能力：确定性和非确定性在同一流程中无缝衔接
+steps:
+  - id: collect_data        # 100%确定性
+    executor: http
+    input: { url: "data-api/metrics" }
+
+  - id: analyze             # ~70%确定性（agent+schema约束）
+    executor: agent
+    input: { prompt: "分析数据趋势，给出建议" }
+    output_schema: { fields: [trends, risks, actions] }
+
+  - id: review              # ~0%确定性（人类判断）
+    executor: human
+    input: { prompt: "审核分析报告，决定是否执行建议" }
+
+  - id: execute_actions     # 100%确定性
+    executor: http
+    input: { url: "action-api/execute", body: "{{steps.review.data}}" }
+```
+
+**数据收集（确定）→ AI分析（受控不确定）→ 人类决策（不确定）→ 自动执行（确定）**
+
+这个流程在n8n里做不到（没有agent和human节点），在纯agent框架里也做不到（没有确定性执行器的效率优势）。ACP两者兼得。
+
+## 15. 企业即程序：ACP的产品叙事（v4.1 — 2026-03-02）
+
+> 来源：泽斌核心洞察
+
+### 15.1 企业 = 程序，员工 = 函数，管理 = 编程
+
+企业的流程编排本质上就是在写一个程序，只不过里面的函数是人。
+
+| 编程概念 | 企业对应 |
+|---------|---------|
+| 程序 | 企业/业务流程 |
+| 函数 | 员工/团队/AI Agent |
+| 函数调用 | 分配任务 |
+| 返回值 | 工作成果 |
+| 类型检查 | 岗位要求/output_schema |
+| 控制流 | 审批流/分支决策 |
+| 异常处理 | 问题升级/on_failure |
+| 并发 | 多团队并行工作 |
+| 子程序 | 子流程/部门内部流程 |
+| 编译器 | ACP引擎 |
+| IDE | ACP流程编辑器 |
+
+### 15.2 管理水平 = 约束调节能力
+
+企业经营的结果，取决于流程编排这个"程序"写得有多好——把各种不确定性很强的人进行约束，得到确定性的结果。
+
+```
+约束过多 → 官僚化（所有人变成shell executor，零创造力）
+约束过少 → 混乱（所有人变成无schema的自由agent，不可预测）
+刚好    → 高效组织（关键节点用人判断，其他确定性执行）
+```
+
+**麦当劳**：把做汉堡拆成完全确定性的步骤，任何人按流程走，品质一致。加盟费买的不是品牌，是这套"源码"。
+
+**顶级餐厅**：给大厨最大自由度，最少约束，靠人的不确定性产生创意和惊喜。
+
+两者都是好"程序"，区别在于**对不确定性的态度不同**。流程设计者（管理者）的核心能力，就是为每个环节调节正确的"约束旋钮"。
+
+### 15.3 ACP的使命
+
+让"企业编程"从手写汇编进化到高级语言：
+
+| 阶段 | 工具 | 类比 |
+|------|------|------|
+| 原始阶段 | 口头交代、邮件跟进 | 手写机器码 |
+| 当前阶段 | 飞书审批 + Excel + 会议 | 汇编语言 |
+| **ACP阶段** | **可视化流程编排 + AI Executor** | **高级语言** |
+| 未来阶段 | AI自动优化流程 | 编译器自动优化 |
+
+CEO写的不是代码，是流程——但本质是同一件事。**ACP = 企业操作系统的编程语言。**
+
+### 15.4 为什么AI Agent改变了游戏规则
+
+传统流程引擎（BPMN/Airflow）只能编排确定性函数（API、脚本）。人类作为"函数"必须在系统外执行，结果手动录入。
+
+ACP的突破：**人和AI Agent作为一等公民函数，直接参与程序执行。**
+
+```
+传统：程序调API → 结果确定
+ACP：程序调Agent → 结果受控不确定（通过prompt+schema约束）
+ACP：程序调Human → 结果不确定（通过表单+deadline约束）
+```
+
+这意味着以前只能靠"管理能力"协调的事情（让人做判断、让人做创造性工作），现在可以被**编程化**——写成流程，自动派发，自动收集，自动推进。
+
+**管理从艺术变成工程。**
+
+## 16. Executor Runtime：平台能力SDK（v4.2 — 2026-03-02）
+
+> 来源：泽斌 + Lyra 架构讨论
+
+### 16.1 问题：第三方executor需要什么？
+
+第三方开发一个executor部署到ACP，ACP应该提供什么能力？Executor不应该拿到裸DB或引擎内部接口，而是一套受控的运行时SDK。
+
+### 16.2 Runtime接口
+
+```go
+// executor/runtime.go — executor的运行时环境
+type Runtime interface {
+    // 数据存储（engine根据executor声明的Schema建表后提供）
+    Storage() Storage
+
+    // 日志
+    Logger() Logger            // 结构化日志（写入event log）
+
+    // 密钥/凭据（通过YAML注入，不是executor自己获取）
+    Credentials() map[string]string
+
+    // 通知
+    Notify(target string, message string) error // 发通知（飞书/邮件等）
+
+    // 配置
+    Config() map[string]any    // executor的全局配置（管理员设置的）
+}
+```
+
+**关键设计决策（2026-03-02 泽斌确认）：**
+
+Executor不主动获取任何资源。一切通过**声明+注入**：
+- 凭证：YAML里声明需要哪些凭证 → engine注入到Runtime.Credentials()
+- 数据：executor声明需要哪些字段 → engine建表后提供Storage
+- 配置：管理员在ACP后台配置 → engine注入到Runtime.Config()
+
+Executor是纯业务逻辑，完全不知道ACP内部怎么存数据、凭证从哪来。
+### 16.3 Runtime vs EngineAdapter 分工
+
+| EngineAdapter（引擎内部用） | Runtime（executor用） |
+|---|---|
+| 更新step状态 | Storage（数据存取） |
+| 触发下游步骤 | Logger（日志） |
+| 渲染模板 | Credentials（凭据） |
+| 管理DAG状态 | Notify（通知） |
+| 引擎**不暴露**给executor | Config（配置） |
+
+EngineAdapter是引擎的内部接口，executor不能碰。Runtime是executor的公共SDK。
+
+### 16.4 第三方executor示例
+
+```go
+// 第三方开发的executor
+type SonarExecutor struct {
+    rt executor.Runtime // ACP注入
+}
+
+func (s *SonarExecutor) Execute(ctx context.Context, task *Task) (*Result, error) {
+    // 拿凭据
+    creds, _ := s.rt.Credentials("sonar-token")
+
+    // 调外部API
+    result := callSonarAPI(creds["token"], task.Input["project"])
+
+    // 存大数据
+    s.rt.Storage().StoreBlob(task.RunID, task.StepID, "report", reportJSON)
+
+    // 写日志
+    s.rt.Logger().Info("scan completed", "issues", len(result.Issues))
+
+    return &Result{Output: "扫描完成", Data: result.Summary}, nil
+}
+```
+
+### 16.5 Storage方案选择（决策：方案A + 声明式Schema）
+
+**方案A：平台提供DB，executor建自己的表（✅ 采用）**
+**方案B：executor自己建独立DB（❌ 否决）**
+
+| 维度 | 方案A：平台DB | 方案B：独立DB |
+|---|---|---|
+| 运维 | 一个SQLite文件，统一备份 | N个DB，各自备份 |
+| 查询 | 跨executor JOIN查询（审计方便） | 无法跨executor查询 |
+| 隔离 | 弱（但用命名空间隔离） | 强（各自独立） |
+| 第三方开发 | 简单（拿到Storage就行） | 复杂（自己管连接、迁移） |
+| 数据生命周期 | 统一（删实例时级联清理） | 难（要通知每个executor清理自己的DB） |
+
+**选A的核心原因：**
+1. 数据生命周期统一管理 — 删流程实例时，一个 `DELETE WHERE run_id = ?` 搞定
+2. 审计查询 — "这个实例所有executor的数据"一个SQL
+3. 备份恢复 — 一个文件 vs N个文件
+4. 参照Kestra — 700+插件都不自己建DB
+
+**追加决策（2026-03-02 泽斌确认）：executor不直接拿DB，而是声明式Schema。**
+
+Executor不应该持有 `*gorm.DB` 直接操作ACP的数据库。正确做法：
+
+1. **Executor声明Schema** — 告诉engine"我需要哪些字段"
+2. **Engine根据Schema建表** — 自动创建 `exec_{type}_*` 前缀的表
+3. **Engine提供scoped Storage** — executor通过Storage接口读写自己的数据
+
+```go
+// executor声明自己需要的数据结构
+func (a *AgentExecutor) Schema() ExecutorSchema {
+    return ExecutorSchema{
+        // 声明需要的凭证（通过YAML注入）
+        Credentials: []string{"gateway_token"},
+        
+        // 声明需要的数据字段（engine帮建表）
+        Fields: []FieldDef{
+            {Name: "session_id", Type: "string"},
+            {Name: "token_usage", Type: "int"},
+            {Name: "agent_context", Type: "text"},
+        },
+    }
+}
+```
+
+这样executor是纯业务逻辑，不知道底层是SQLite还是PostgreSQL，不碰ACP的核心数据表。
+### 16.6 Storage接口：声明式Schema + 命名空间隔离
+
+**核心原则：executor不碰ACP的DB，只操作engine根据Schema声明创建的专属存储。**
+
+
+### 16.7 Executor双层Schema模型（决策 — 2026-03-02 泽斌确认）
+
+Executor有两层完全正交的Schema：
+
+#### 第一层：Config Schema（参数验证）
+
+YAML里配置的executor属性参数。executor提供Schema接口让engine验证配置是否合法，engine在构建executor时把验证通过的配置传入。
+
+**职责**：定义"executor接受什么配置参数"
+**时机**：流程发布时验证，executor构建时注入
+**类比**：函数的参数签名
+
+```yaml
+steps:
+  - id: dev
+    executor: openclaw_agent
+    config:                    # ← Config Schema验证的内容
+      model: claude-opus-4
+      max_tokens: 8000
+      timeout: 30m
+      tools: ["Read", "Write", "Bash"]
+    input:
+      prompt: "实现功能..."
+    credentials:
+      - github-token
+```
+
+```go
+// executor声明自己接受哪些配置参数
+func (a *AgentExecutor) ConfigSchema() ConfigSchema {
+    return ConfigSchema{
+        Fields: map[string]ConfigField{
+            "model":      {Type: "string", Required: false, Default: "claude-sonnet-4"},
+            "max_tokens": {Type: "int", Required: false, Default: 4096},
+            "timeout":    {Type: "duration", Required: false, Default: "30m"},
+            "tools":      {Type: "[]string", Required: false},
+        },
+    }
+}
+```
+
+Engine在流程publish时调用ConfigSchema()验证YAML中config字段。不合法直接拒绝发布。构建executor时，验证通过的config作为参数传入。
+
+#### 第二层：Context Schema（存储声明）
+
+Executor运行过程中需要持久化的业务数据。executor声明"我需要哪些字段"，engine帮建表，运行时通过Storage接口读写。
+
+**职责**：定义"executor需要存什么数据"
+**时机**：executor注册时建表，运行时通过Storage操作
+**类比**：函数内部的局部状态/持久化变量
+
+```go
+// executor声明自己需要持久化的数据字段
+func (a *AgentExecutor) DataSchema() DataSchema {
+    return DataSchema{
+        Fields: []FieldDef{
+            {Name: "session_id", Type: "string", Indexed: true},
+            {Name: "token_usage", Type: "int"},
+            {Name: "agent_context", Type: "text"},
+            {Name: "model_used", Type: "string"},
+        },
+    }
+}
+```
+
+Engine根据DataSchema创建表 `exec_agent_data`，executor通过 `rt.Storage()` 操作。
+
+#### 两层的关系
+
+```
+YAML 配置                    Executor                     ACP Engine
+─────────                    ────────                     ──────────
+config:                      ConfigSchema()               验证YAML → 拒绝/通过
+  model: opus          →     验证参数合法性         →     构建时注入config
+  timeout: 30m
+
+                             DataSchema()                 注册时建表
+                             声明存储需求           →     exec_{type}_data
+                                                          运行时提供Storage
+
+credentials:                                              从凭证管理器取出
+  - github-token       →     Runtime.Credentials()  ←    注入到Runtime
+```
+
+**Executor三件事：声明参数Schema + 声明数据Schema + 写Execute业务逻辑。其余全是engine的事。**
+
+#### 完整Executor接口
+
+```go
+type Executor interface {
+    // 元信息
+    Type() string                    // executor类型标识
+
+    // 第一层：参数Schema — engine验证YAML config
+    ConfigSchema() ConfigSchema
+
+    // 第二层：存储Schema — engine帮建数据表
+    DataSchema() DataSchema
+
+    // 初始化（engine注入config + runtime）
+    Init(config map[string]any, rt Runtime) error
+
+    // 执行
+    Execute(ctx context.Context, task *Task) (*Result, error)
+
+    // 关闭
+    Close() error
+}
+```
+
+不需要暴露Dispatch/Wait分离——Execute内部自己决定是同步等还是异步回调。Engine只关心Execute返回Result。
+
+#### 凭证注入：通过YAML声明
+
+```yaml
+steps:
+  - id: scan
+    executor: sonar
+    input:
+      project: "{{steps.dev.data.repo}}"
+    credentials:
+      - sonar-token    # YAML里声明需要的凭证
+```
+
+Engine从凭证管理器取出 `sonar-token`，注入到 Runtime.Credentials()。Executor不知道凭证怎么存的。
+
+#### 数据存储：executor声明字段，engine建表
+
+```go
+// Executor启动时声明自己需要的数据字段
+type ExecutorSchema struct {
+    Credentials []string    // 需要的凭证slug列表
+    Fields      []FieldDef  // 需要的数据字段
+}
+
+type FieldDef struct {
+    Name     string  // 字段名
+    Type     string  // "string", "int", "text", "json", "blob"
+    Indexed  bool    // 是否建索引
+}
+```
+
+Engine根据Schema自动创建表（表名前缀 `exec_{type}_`）：
+- SonarExecutor → `exec_sonar_data`
+- AgentExecutor → `exec_agent_data`
+- JiraExecutor → `exec_jira_data`
+
+Executor通过 Storage 接口读写：
+
+```go
+type Storage interface {
+    // KV存取（基于engine建的表）
+    Set(key string, value any) error
+    Get(key string) (any, error)
+    
+    // 按run/step维度存取
+    SetForStep(runID, stepID, key string, value any) error
+    GetForStep(runID, stepID, key string) (any, error)
+
+    // Blob存储（大数据/文件）
+    StoreBlob(runID, stepID, key string, data []byte) error
+    GetBlob(runID, stepID, key string) ([]byte, error)
+}
+```
+
+同一个SQLite文件，但表名隔离。各executor只能看到自己的数据。
+
+#### 生命周期联动
+
+Engine删除流程实例时，自动清理所有executor的关联数据：
+```sql
+DELETE FROM exec_agent_data WHERE run_id = ?;
+DELETE FROM exec_sonar_data WHERE run_id = ?;
+-- engine知道所有注册的executor类型，逐一清理
+```
+
+#### 第三方executor完整示例
+
+```go
+type SonarExecutor struct{}
+
+func (s *SonarExecutor) Schema() ExecutorSchema {
+    return ExecutorSchema{
+        Credentials: []string{"sonar-token"},
+        Fields: []FieldDef{
+            {Name: "scan_id", Type: "string", Indexed: true},
+            {Name: "issues_count", Type: "int"},
+            {Name: "report", Type: "blob"},
+        },
+    }
+}
+
+func (s *SonarExecutor) Execute(ctx context.Context, task *Task, rt Runtime) (*Result, error) {
+    // 凭证由engine从YAML注入
+    token := rt.Credentials()["sonar-token"]
+    
+    // 调外部API（纯业务逻辑）
+    result := callSonarAPI(token, task.Input["project"])
+    
+    // 存数据（engine建的表）
+    rt.Storage().SetForStep(task.RunID, task.StepID, "scan_id", result.ScanID)
+    rt.Storage().SetForStep(task.RunID, task.StepID, "issues_count", len(result.Issues))
+    rt.Storage().StoreBlob(task.RunID, task.StepID, "report", result.ReportJSON)
+    
+    // 写日志
+    rt.Logger().Info("scan completed", "issues", len(result.Issues))
+    
+    return &Result{Output: "扫描完成", Data: result.Summary}, nil
+}
+```
+
+开发者只需要：实现Schema()声明需求 + Execute()写业务逻辑。不需要知道ACP内部任何东西。
+## 17. Executor全自治重构方案（v4.2 — 2026-03-02 实施记录）
+
+> 来源：泽斌 + Lyra 代码分析 + 重构讨论
+
+### 17.1 重构前现状
+
+| 文件 | 行数 | 问题 |
+|---|---|---|
+| `workflow_engine.go` | 8432 | 混杂DAG调度+全部业务逻辑+63个adapter方法 |
+| `executor/executor.go` | 428 | EngineAdapter 63个方法的巨型接口 |
+| `executor/agent.go` | 474 | 无状态struct{}，所有DB操作通过adapter |
+| `executor/human.go` | 495 | 同上 |
+| `executor/condition.go` | 188 | Control节点不应在executor包 |
+| `executor/expand.go` | 485 | Control节点不应在executor包 |
+| `executor/subprocess.go` | 152 | 无状态，通过adapter |
+
+核心问题：**Executor不自治**。所有DB操作通过63个adapter方法中转，adapter成了业务逻辑的实际所在地，executor只是薄壳。
+
+### 17.2 重构目标架构
+
+```
+executor/
+├── executor.go      接口定义 + types + Registry（EngineAdapter瘦到~10方法）
+├── deps.go          依赖接口（CredentialService, FeishuService等，避免循环依赖）
+├── agent.go         Agent全自治（持有DB/Gateway，直接操作DB）
+├── human.go         Human+Approval全自治（持有DB/Gateway/FeishuSvc）
+├── subprocess.go    Subprocess全自治（持有DB）
+
+workflow_engine.go   引擎核心（~2500行）：
+├── DAG调度（execute主循环）
+├── Control处理（condition/expand/gate，引擎内部switch）
+├── 生命周期（startRun/cancelRun/retryStep）
+├── API入口（HandleStepCallback等）
+└── 精简EngineAdapter（~10方法，只服务引擎内存状态操作）
+```
+
+### 17.3 关键决策
+
+1. **Executor（有IO）= agent, human, subprocess** → 全自治，持有DB/Gateway（Phase 1过渡）
+2. **Control（无IO）= condition, expand, gate** → 留在引擎内部，不走executor registry
+3. **gate重试是Control逻辑** → ResetTaskForGateRetry等留在引擎，不属于agent executor
+4. **EngineAdapter从63→~10方法** → 只保留引擎内存状态操作（pendingCallbacks/runCancels map）+ 模板渲染 + DAG操作
+5. **（Phase 2目标）Executor不碰ACP的DB** → executor通过声明式Schema告诉engine需要什么字段，engine建表后提供scoped Storage（见§16.5-16.6）
+6. **凭证通过YAML注入** → executor不主动获取凭证，在YAML的credentials字段声明需要哪些凭证slug，engine从凭证管理器取出后注入Runtime
+
+**Phase 1 vs Phase 2 的关系：**
+- Phase 1（当前CC在做）：先把adapter业务逻辑搬进executor，executor暂时持有DB直接操作——目标是解耦
+- Phase 2（后续）：引入Runtime/Storage/Schema声明式模型，executor不再碰裸DB——目标是标准化executor开发体验
+### 17.4 EngineAdapter精简后
+
+```go
+type EngineAdapter interface {
+    // 引擎内存状态（pendingCallbacks map）
+    RegisterCallback(runID, stepID string) chan CallbackResult
+    UnregisterCallback(runID, stepID string)
+    WaitForCallback(ctx, ch, sessionKey, sentAt, timeout, poll) (CallbackResult, error)
+
+    // DAG状态操作
+    ExecuteLoopBack(rc *RunContext, loopTo string) error
+    UpdateStepStatus(runID, stepID, status, output string, errMsg *string)
+    FinalizeRun(runID, status, errMsg string)
+    WriteStepLog(runID, stepID, level, msg string, data map[string]any)
+
+    // 模板/表达式（共享引擎）
+    RenderPrompt(tmpl string, inputs map[string]string, stepOutputs interface{}) string
+    EvaluateConditionExpr(expr string) bool
+
+    // StepOutput操作
+    SetStepOutput(stepOutputs interface{}, stepID, output string, outputs map[string]string, data string)
+    CopyStepOutputs(stepOutputs interface{}) interface{}
+    ExtractOutputVars(output string) map[string]string
+    GetInputString(input map[string]any, key string) string
+}
+```
+
+### 17.5 Adapter方法归属
+
+**AgentExecutor 吸收（~20个方法）：**
+SpawnAgent, CompleteStepImmediate, CheckAndWaitCapacity, ReadRejectionFeedback, UpdateAttemptCount, FetchLessonsPrompt, UpdateStepDispatched, SaveStepCompletion, ValidateOutputSchema, RecordLesson, RecordPerformance, EmitStepCompletedEvent, ReadStepStartTime, UpdateStepOutputsJSON, UpdateStepTask, CreateStepTask, MarkTaskRunning, MarkTaskCompleted, UpdateTaskCompletion, BuildCredentialContext, SessionKeyFor, RenderAndSaveComponent, EscalateToAgent
+
+**HumanExecutor 吸收（~15个方法）：**
+PrepareHumanStep, UpdateTaskForHumanStart, SendHumanNotification, WaitForHumanCallback, UpdateTaskCompletedWithData, FindMainTaskID, MarkApprovalRunning, ResolveApprovers, CreateOrReuseVoteTask, SendVoteNotification, WaitForApprovalVotes, CollectVoteComments, CompleteApprovalStep, CancelPendingVotes, PrepareApprovalRestart
+
+**SubprocessExecutor 吸收（~5个方法）：**
+LookupProcessByNameOrID, CheckSubprocessDepth, StartSubprocessRun, PollSubprocessRun, CompleteSubprocessTask
+
+### 17.6 依赖接口化（解决循环依赖）
+
+executor包不能import service包。在executor/deps.go定义接口：
+
+```go
+package executor
+
+type CredentialService interface {
+    BuildCredentialContext(credentials []string) string
+}
+
+type FeishuService interface {
+    // 需要的飞书通知方法
+}
+
+type TriggerManager interface {
+    Emit(event TriggerEvent)
+}
+```
+
+service包的实现自动满足这些接口，通过initExecutors()注入。
+
+## 18. Step四层Schema模型与自动校验（v4.2 — 2026-03-02 泽斌确认）
+
+### 18.1 核心洞察
+
+**一个Step本质是一个函数调用。** 函数必须有参数签名、返回值类型、内部状态。
+
+Step包含三层Schema（v4.4 — 泽斌 2026-03-02 确认砍掉Config层）：
+
+| 层 | 名称 | 类比 | 说明 |
+|---|---|---|---|
+| **通用属性** | id, name, depends_on | 函数名+调用关系 | 引擎层面，所有step共有 |
+| **Input Schema** | 输入参数定义 | 函数参数签名 | executor声明"我接受什么输入"（含data_schema） |
+| **Output Schema** | 输出结构定义 | 函数返回值类型 | executor声明"我返回什么"（两层：标准信封 + 业务data） |
+| **Context Schema** | executor私有数据 | 函数内部局部变量 | executor声明"我需要持久化什么数据" |
+
+~~Config Schema~~ 已砍掉——所有"配置"都是input的一部分（model、timeout等），系统级配置走环境变量不走YAML。三层比四层更清晰。
+
+没有Input Schema = 函数没有参数定义 = 调用方盲猜 = 运行时才发现类型不匹配。
+
+#### Output Schema的两层分离（v4.3 — 泽斌 2026-03-02）
+
+**Executor的OutputType()定义标准信封，input里的data_schema定义data字段内容。**
+
+```
+OutputType() 返回的 → AgentResult struct（固定：status, token_usage, session_key...）
+                         └── Data field → 由input.data_schema约束（每个step不同）
+```
+
+同一个Agent Executor：
+- 写PRD的step: data = `{prd_content: string, features: Feature[]}`
+- 代码审查的step: data = `{passed: bool, issues: Issue[]}`
+
+信封一样，data不一样。**引擎看信封做调度，executor看data做验证。**
+
+Publish时的类型检查也分两层：
+1. 引擎检查：下游引用 `{{steps.X.token_usage}}` → 查上游executor的OutputType()，确认标准字段存在
+2. 业务检查：下游引用 `{{steps.X.data.passed}}` → 查上游step的input.data_schema，确认data字段存在且类型匹配
+
+#### Output Schema的两层分离（v4.3 — 泽斌 2026-03-02）
+
+**Executor的OutputType()定义标准信封，YAML的output_schema定义data字段内容。**
+
+```
+OutputType() 返回的 → AgentResult struct（固定：status, token_usage, session_key...）
+                         └── Data field → 由YAML output_schema约束（每个step不同）
+```
+
+同一个Agent Executor：
+- 写PRD的step: data = `{prd_content: string, features: Feature[]}`
+- 代码审查的step: data = `{passed: bool, issues: Issue[]}`
+
+信封一样，data不一样。**引擎看信封做调度，executor看data做验证。**
+
+Publish时的类型检查也分两层：
+1. 引擎检查：下游引用 `{{steps.X.token_usage}}` → 查上游executor的OutputType()，确认标准字段存在
+2. 业务检查：下游引用 `{{steps.X.data.passed}}` → 查上游step的output_schema，确认data字段存在且类型匹配
+
+### 18.2 业界对比
+
+| 平台 | Input Schema | Output Schema | Config Schema | Context Schema |
+|---|---|---|---|---|
+| **Kestra** | ✅ Java类属性+@Schema注解 | ✅ 强类型Output内部类 | ✅ pluginConfigurations | ❌ 无（KV凑合） |
+| **Temporal** | ✅ Go函数签名 | ✅ 函数返回值 | ❌ 配置在代码里 | ❌ 无 |
+| **Prefect** | ✅ Python type hints | ✅ 返回值type hint | ❌ | ❌ |
+| **Airflow** | ❌ 弱（XCom字典） | ❌ 弱 | ❌ | ❌ |
+| **n8n/Zapier** | ✅ JSON Schema表单 | ✅ JSON Schema | ❌ 内置 | ❌ |
+| **ACP目标** | ✅ Go struct反射 | ✅ Go struct反射 | ✅ Go struct反射 | ✅ Go struct反射 |
+
+**ACP是业界首个同时实现4层Schema的流程引擎。**
+
+### 18.3 Go Struct = Schema的唯一真相源
+
+不手写JSON Schema。用Go struct定义，反射自动生成：
+
+```go
+// executor/human_schema.go
+
+// 第一层：Input Schema — 这个executor接受什么输入
+type HumanInput struct {
+    Title    string `json:"title" jsonschema:"required" jsonschema_description:"任务标题"`
+    Assignee string `json:"assignee" jsonschema:"required" jsonschema_description:"处理人ID"`
+    Due      string `json:"due" jsonschema_description:"截止时间，如3d/1w"`
+    FormID   string `json:"form_id" jsonschema_description:"关联表单模板ID"`
+}
+
+// 第二层：Output Schema — 这个executor返回什么
+type HumanOutput struct {
+    Decision string         `json:"decision" jsonschema:"required,enum=approved|rejected|completed"`
+    Comment  string         `json:"comment"`
+    FormData map[string]any `json:"form_data"`
+}
+
+// 第三层：Config Schema — executor的配置参数
+type HumanConfig struct {
+    NotifyChannel string `json:"notify_channel" jsonschema_description:"通知渠道：feishu/email/slack"`
+    ReminderHours int    `json:"reminder_hours" jsonschema_description:"超时前提醒（小时）" default:"24"`
+}
+
+// 第四层：Context Schema — executor私有持久化数据
+type HumanData struct {
+    NotifiedAt  time.Time `json:"notified_at"`
+    ReminderSent bool     `json:"reminder_sent"`
+    ViewCount    int      `json:"view_count"`
+}
+```
+
+Executor接口声明类型：
+
+```go
+type Executor interface {
+    Type() string
+
+    // 四层Schema — 返回reflect.Type，engine自动转JSON Schema
+    InputType()  reflect.Type  // reflect.TypeOf(HumanInput{})
+    OutputType() reflect.Type  // reflect.TypeOf(HumanOutput{})
+    ConfigType() reflect.Type  // reflect.TypeOf(HumanConfig{})
+    ContextType()   reflect.Type  // reflect.TypeOf(HumanData{})
+
+    Init(config map[string]any, rt Runtime) error
+    Execute(ctx context.Context, task *Task) (*Result, error)
+    Close() error
+}
+```
+
+### 18.4 自动生成JSON Schema
+
+Engine注册executor时，一次反射：
+
+```go
+import "github.com/invopop/jsonschema"
+
+func (r *Registry) Register(exec Executor) {
+    info := ExecutorInfo{
+        Type:         exec.Type(),
+        InputSchema:  jsonschema.ReflectFromType(exec.InputType()),
+        OutputSchema: jsonschema.ReflectFromType(exec.OutputType()),
+        ConfigSchema: jsonschema.ReflectFromType(exec.ConfigType()),
+        DataSchema:   jsonschema.ReflectFromType(exec.ContextType()),
+    }
+    r.executors[exec.Type()] = info
+}
+```
+
+Go struct写一次，四处验证：
+1. **编译期** — Go编译器验证executor内部逻辑的类型安全
+2. **注册期** — 反射提取struct → 自动生成JSON Schema → 缓存
+3. **发布期** — publish时用Schema验证YAML配置的input/config字段
+4. **运行期** — 模板渲染后用Schema验证实际值
+
+### 18.5 统一Flow Schema API
+
+前端只需调一个API获取完整的YAML Schema：
+
+```
+GET /api/flow/schema
+```
+
+后端自动合并引擎通用schema + 所有executor的schema：
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "steps": {
+      "type": "array",
+      "items": {
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "depends_on": { "type": "array", "items": { "type": "string" } },
+          "executor": {
+            "enum": ["agent", "human", "subprocess", "sonar"]
+          },
+          "input": {
+            "oneOf": [
+              { "if": { "properties": { "executor": { "const": "human" }}},
+                "then": { "$ref": "#/$defs/human_input" }},
+              { "if": { "properties": { "executor": { "const": "agent" }}},
+                "then": { "$ref": "#/$defs/agent_input" }}
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "human_input": { /* 从HumanInput struct反射生成 */ },
+    "agent_input": { /* 从AgentInput struct反射生成 */ },
+    "sonar_input": { /* 从SonarInput struct反射生成 */ }
+  }
+}
+```
+
+### 18.6 Monaco编辑器自动校验
+
+前端Monaco Editor配合 `monaco-yaml` 插件，加载Flow Schema后自动获得：
+
+- **自动补全** — 输入 `executor: ` 弹出所有注册的executor类型
+- **字段校验** — 写了executor不支持的input字段立刻标红
+- **类型检查** — 字段期望string写了number标红
+- **必填提示** — 缺少required字段黄色警告
+- **文档悬停** — 鼠标悬停字段显示描述（来自Go struct的jsonschema_description tag）
+
+**新增一个executor → 重启engine → Schema API自动包含 → 前端编辑器自动能校验。前端零改动。**
+
+### 18.7 Publish时的链式验证
+
+流程发布时，engine可以做跨步骤验证：
+
+```
+Step A (agent) → output: AgentOutput{repo_url, branch}
+Step B (sonar) → input: SonarInput{repo_url, branch}  ← 引用 {{steps.A.data.repo_url}}
+
+Engine检查：
+1. A的OutputSchema有repo_url字段？ ✅
+2. repo_url类型是string？B的input期望string？ ✅ 类型匹配
+3. A的OutputSchema有foo字段？❌ → publish拒绝，报错"步骤A的输出没有foo字段"
+```
+
+现在ACP的变量引用 `{{steps.X.data.Y}}` 只在运行时才知道对不对。有了四层Schema，**发布时就能验证整个数据流的类型安全**。
+

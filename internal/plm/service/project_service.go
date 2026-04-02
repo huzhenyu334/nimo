@@ -42,6 +42,7 @@ type CreateProjectRequest struct {
 	OwnerID      string     `json:"owner_id"`
 	PlannedStart *time.Time `json:"planned_start"`
 	PlannedEnd   *time.Time `json:"planned_end"`
+	ACPProcessID string     `json:"acp_process_id"`
 }
 
 // UpdateProjectRequest 更新项目请求
@@ -52,6 +53,8 @@ type UpdateProjectRequest struct {
 	PlannedStart *time.Time `json:"planned_start"`
 	PlannedEnd   *time.Time `json:"planned_end"`
 	CurrentPhase string     `json:"current_phase"`
+	ACPProcessID string     `json:"acp_process_id"`
+	ACPInstanceID string    `json:"acp_instance_id"`
 }
 
 // CreateTaskRequest 创建任务请求
@@ -163,21 +166,26 @@ func (s *ProjectService) CreateProject(ctx context.Context, userID string, req *
 	if req.ProductID != "" {
 		productID = &req.ProductID
 	}
+	var acpProcessID *string
+	if req.ACPProcessID != "" {
+		acpProcessID = &req.ACPProcessID
+	}
 	project := &entity.Project{
-		ID:          uuid.New().String()[:32],
-		Code:        code,
-		Name:        req.Name,
-		ProductID:   productID,
-		Status:      entity.ProjectStatusPlanning,
-		Phase:       "evt",
-		Description: req.Description,
-		ManagerID:   ownerID,
-		StartDate:   req.PlannedStart,
-		PlannedEnd:  req.PlannedEnd,
-		Progress:    0,
-		CreatedBy:   userID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:           uuid.New().String()[:32],
+		Code:         code,
+		Name:         req.Name,
+		ProductID:    productID,
+		Status:       entity.ProjectStatusPlanning,
+		Phase:        "evt",
+		Description:  req.Description,
+		ManagerID:    ownerID,
+		StartDate:    req.PlannedStart,
+		PlannedEnd:   req.PlannedEnd,
+		Progress:     0,
+		ACPProcessID: acpProcessID,
+		CreatedBy:    userID,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	if err := s.projectRepo.Create(ctx, project); err != nil {
@@ -242,6 +250,12 @@ func (s *ProjectService) UpdateProject(ctx context.Context, id string, req *Upda
 	}
 	if req.CurrentPhase != "" {
 		project.Phase = req.CurrentPhase
+	}
+	if req.ACPProcessID != "" {
+		project.ACPProcessID = &req.ACPProcessID
+	}
+	if req.ACPInstanceID != "" {
+		project.ACPInstanceID = &req.ACPInstanceID
 	}
 
 	project.UpdatedAt = time.Now()

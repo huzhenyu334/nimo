@@ -23,6 +23,8 @@ type Project struct {
 	ActualEnd       *time.Time `json:"actual_end" gorm:"type:date"`
 	Progress        int        `json:"progress" gorm:"not null;default:0"`
 	FeishuProjectKey string    `json:"feishu_project_key" gorm:"size:64"`
+	ACPProcessID    *string    `json:"acp_process_id" gorm:"size:64"`
+	ACPInstanceID   *string    `json:"acp_instance_id" gorm:"size:64"`
 	TemplateID      *string    `json:"template_id" gorm:"size:36"`
 	AutoStartTasks  bool       `json:"auto_start_tasks" gorm:"default:true"`
 	CreatedBy       string     `json:"created_by" gorm:"size:32;not null"`

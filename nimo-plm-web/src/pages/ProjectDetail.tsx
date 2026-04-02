@@ -52,7 +52,7 @@ import {
   LockOutlined,
   ShoppingCartOutlined,
 } from '@ant-design/icons';
-import { projectApi, Project, Task } from '@/api/projects';
+import { projectApi, Project, Task, GanttNode } from '@/api/projects';
 import { projectBomApi, ProjectBOMItem, CreateProjectBOMRequest, BOMItemRequest } from '@/api/projectBom';
 import { materialsApi, Material } from '@/api/materials';
 import { deliverablesApi } from '@/api/deliverables';
@@ -154,6 +154,91 @@ const PhaseProgressBar: React.FC<{ currentPhase: string }> = ({ currentPhase }) 
           </React.Fragment>
         );
       })}
+    </div>
+  );
+};
+
+// ============ ACP Flow Gantt Component ============
+
+const ACPFlowGantt: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['project-acp-gantt', projectId],
+    queryFn: () => projectApi.getGantt(projectId),
+  });
+
+  if (isLoading) return <div style={{ textAlign: 'center', padding: 40 }}>加载流程甘特图...</div>;
+  if (error) return <Alert type="error" message="流程数据加载失败" description={String(error)} />;
+  if (!data || data.nodes.length === 0) return <Empty description="无流程数据" />;
+
+  const statusConfig: Record<string, { color: string; text: string }> = {
+    pending: { color: '#d9d9d9', text: '待开始' },
+    running: { color: '#1677ff', text: '进行中' },
+    completed: { color: '#52c41a', text: '已完成' },
+    failed: { color: '#ff4d4f', text: '失败' },
+    skipped: { color: '#8c8c8c', text: '已跳过' },
+  };
+
+  const renderNode = (node: GanttNode, index: number): React.ReactNode => {
+    const cfg = statusConfig[node.status] || statusConfig.pending;
+    const durationText = node.duration_ms
+      ? `${Math.round(node.duration_ms / 3600000)}h`
+      : node.planned_duration_ms
+      ? `计划 ${Math.round(node.planned_duration_ms / 86400000)}d`
+      : '';
+
+    return (
+      <div key={node.id} style={{ marginBottom: 4 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            padding: '6px 12px',
+            paddingLeft: 12 + node.depth * 20,
+            background: index % 2 === 0 ? '#fafafa' : '#fff',
+            borderRadius: 4,
+            opacity: node.status === 'skipped' ? 0.5 : 1,
+          }}
+        >
+          {node.isMilestone ? (
+            <span style={{ color: '#faad14', marginRight: 8, fontSize: 14 }}>◆</span>
+          ) : (
+            <span style={{ color: cfg.color, marginRight: 8, fontSize: 10 }}>●</span>
+          )}
+          <span style={{
+            flex: 1,
+            textDecoration: node.status === 'skipped' ? 'line-through' : undefined,
+            fontWeight: node.isMilestone ? 600 : 400,
+          }}>
+            {node.label}
+          </span>
+          {node.isConditional && <Tag color="orange" style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>条件</Tag>}
+          {node.isRepeating && <Tag color="purple" style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>循环</Tag>}
+          <Tag color={cfg.color} style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', marginLeft: 4 }}>{cfg.text}</Tag>
+          {durationText && <span style={{ color: '#8c8c8c', fontSize: 12, marginLeft: 8 }}>{durationText}</span>}
+        </div>
+        {node.children && node.children.length > 0 && (
+          <div>{node.children.map((child, ci) => renderNode(child, ci))}</div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Text strong>{data.process_name}</Text>
+        <Tag color={data.mode === 'execution' ? 'blue' : 'default'}>
+          {data.mode === 'execution' ? '执行中' : '计划视图'}
+        </Tag>
+        {data.instance_status && (
+          <Tag color={statusConfig[data.instance_status]?.color}>
+            {statusConfig[data.instance_status]?.text || data.instance_status}
+          </Tag>
+        )}
+      </div>
+      <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 8 }}>
+        {data.nodes.map((node, i) => renderNode(node, i))}
+      </div>
     </div>
   );
 };
@@ -2385,8 +2470,10 @@ const ProjectDetail: React.FC = () => {
             },
             {
               key: 'gantt',
-              label: `甘特图 (${tasks?.length || 0})`,
-              children: tasksLoading ? (
+              label: '甘特图',
+              children: project.acp_process_id ? (
+                <ACPFlowGantt projectId={project.id} />
+              ) : tasksLoading ? (
                 <div style={{ textAlign: 'center', padding: 40 }}>加载中...</div>
               ) : tasks && tasks.length > 0 ? (
                 <div style={{ height: 560 }}>

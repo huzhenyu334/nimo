@@ -9,12 +9,18 @@ import (
 
 // ProjectHandler 项目处理器
 type ProjectHandler struct {
-	svc *service.ProjectService
+	svc      *service.ProjectService
+	ganttSvc *service.GanttFilterService
 }
 
 // NewProjectHandler 创建项目处理器
 func NewProjectHandler(svc *service.ProjectService) *ProjectHandler {
 	return &ProjectHandler{svc: svc}
+}
+
+// SetGanttService 设置甘特图服务（可选，ACP 客户端不可用时不注入）
+func (h *ProjectHandler) SetGanttService(ganttSvc *service.GanttFilterService) {
+	h.ganttSvc = ganttSvc
 }
 
 // ============================================================
@@ -515,4 +521,41 @@ func (h *ProjectHandler) GetOverdueTasks(c *gin.Context) {
 	}
 
 	Success(c, tasks)
+}
+
+// GetProjectGantt 获取项目甘特图数据（从 ACP 流程读取并过滤）
+// GET /api/v1/projects/:id/gantt
+func (h *ProjectHandler) GetProjectGantt(c *gin.Context) {
+	if h.ganttSvc == nil {
+		InternalError(c, "gantt service not available")
+		return
+	}
+
+	projectID := c.Param("id")
+	project, err := h.svc.GetProject(c.Request.Context(), projectID)
+	if err != nil {
+		NotFound(c, "project not found")
+		return
+	}
+
+	if project.ACPProcessID == nil || *project.ACPProcessID == "" {
+		Success(c, &service.GanttResponse{
+			Nodes: []service.GanttNode{},
+			Mode:  "plan",
+		})
+		return
+	}
+
+	instanceID := ""
+	if project.ACPInstanceID != nil {
+		instanceID = *project.ACPInstanceID
+	}
+
+	resp, err := h.ganttSvc.BuildProjectGantt(*project.ACPProcessID, instanceID)
+	if err != nil {
+		InternalError(c, "failed to build gantt: "+err.Error())
+		return
+	}
+
+	Success(c, resp)
 }

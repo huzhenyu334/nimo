@@ -109,6 +109,10 @@ func main() {
 		zapLogger.Warn("AutoMigrate BOMItemLangVariant table warning", zap.Error(err))
 	}
 
+	// ACP 集成: 项目关联 ACP 流程
+	db.Exec("ALTER TABLE projects ADD COLUMN IF NOT EXISTS acp_process_id VARCHAR(64)")
+	db.Exec("ALTER TABLE projects ADD COLUMN IF NOT EXISTS acp_instance_id VARCHAR(64)")
+
 	// V16: STP缩略图URL字段
 	db.Exec("ALTER TABLE project_bom_items ADD COLUMN IF NOT EXISTS thumbnail_url VARCHAR(512)")
 
@@ -712,6 +716,21 @@ func main() {
 
 	handlers := handler.NewHandlers(services, repos, cfg)
 
+	// ACP 甘特图集成
+	acpBaseURL := os.Getenv("ACP_BASE_URL")
+	if acpBaseURL == "" {
+		acpBaseURL = "http://localhost:3001"
+	}
+	acpToken := os.Getenv("ACP_TOKEN")
+	if acpToken != "" {
+		acpClient := service.NewACPClient(acpBaseURL, acpToken)
+		ganttSvc := service.NewGanttFilterService(acpClient)
+		handlers.Project.SetGanttService(ganttSvc)
+		log.Println("[PLM] ACP Gantt integration enabled")
+	} else {
+		log.Println("[PLM] ACP Gantt integration disabled (ACP_TOKEN not set)")
+	}
+
 	// 管理员处理器
 	handlers.Admin = handler.NewAdminHandler(contactSyncSvc)
 
@@ -1179,6 +1198,7 @@ func registerRoutes(r *gin.Engine, h *handler.Handlers, svc *service.Services, c
 				projects.POST("/:id/tasks/:taskId/dependencies", h.Project.AddTaskDependency)
 				projects.DELETE("/:id/tasks/:taskId/dependencies/:depId", h.Project.RemoveTaskDependency)
 				projects.GET("/:id/overdue-tasks", h.Project.GetOverdueTasks)
+				projects.GET("/:id/gantt", h.Project.GetProjectGantt)
 
 				// V2: 项目BOM管理
 				projects.GET("/:id/bom-permissions", h.ProjectBOM.GetBOMPermissions)

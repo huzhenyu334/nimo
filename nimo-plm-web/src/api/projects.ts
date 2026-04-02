@@ -18,8 +18,36 @@ export interface Project {
   manager?: { id: string; name: string };
   product?: { id: string; name: string };
   template_id?: string;
+  acp_process_id?: string;
+  acp_instance_id?: string;
   created_at: string;
   updated_at: string;
+}
+
+// ACP 甘特图节点
+export interface GanttNode {
+  id: string;
+  label: string;
+  status: string;
+  depth: number;
+  children: GanttNode[];
+  started_at?: number;
+  completed_at?: number;
+  duration_ms?: number;
+  planned_duration_ms?: number;
+  isMilestone?: boolean;
+  isConditional?: boolean;
+  isRepeating?: boolean;
+  executor?: string;
+  assignee?: string;
+  step_type?: string;
+}
+
+export interface GanttResponse {
+  nodes: GanttNode[];
+  mode: 'plan' | 'execution';
+  process_name: string;
+  instance_status?: string;
 }
 
 // Extract flat fields from nested objects returned by API
@@ -116,5 +144,11 @@ export const projectApi = {
   // 批量角色分配
   assignRoles: async (projectId: string, assignments: { role: string; user_id: string }[]): Promise<void> => {
     await apiClient.post(`/projects/${projectId}/assign-roles`, { assignments });
+  },
+
+  // 获取 ACP 流程甘特图
+  getGantt: async (projectId: string): Promise<GanttResponse> => {
+    const response = await apiClient.get<ApiResponse<GanttResponse>>(`/projects/${projectId}/gantt`);
+    return response.data.data;
   },
 };
