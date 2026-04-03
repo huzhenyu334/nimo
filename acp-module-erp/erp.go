@@ -121,57 +121,25 @@ func (m *ERPModule) Components() []sdk.ComponentDef {
 func (m *ERPModule) Views() []sdk.ViewDef {
 	return []sdk.ViewDef{
 		// Dashboard
-		{
-			Name:      "dashboard",
-			Label:     "工作台",
-			Type:      "custom",
-			Component: "ErpDashboard",
-			Icon:      "DashboardOutlined",
-		},
-		// Order Board
-		{
-			Name:         "order_board",
-			Label:        "订单看板",
-			Type:         "kanban",
-			Entity:       "sales_orders",
-			Icon:         "ShoppingCartOutlined",
-			KanbanField:  "status",
-			KanbanStages: []string{"draft", "confirmed", "producing", "ready", "shipped", "delivered"},
-		},
-		// Work Order Board
-		{
-			Name:         "wo_board",
-			Label:        "工单看板",
-			Type:         "kanban",
-			Entity:       "work_orders",
-			Icon:         "ToolOutlined",
-			KanbanField:  "status",
-			KanbanStages: []string{"draft", "released", "in_progress", "completed"},
-		},
-		// Inventory Dashboard
-		{
-			Name:      "inventory_dashboard",
-			Label:     "库存总览",
-			Type:      "custom",
-			Component: "ErpInventoryDashboard",
-			Icon:      "InboxOutlined",
-		},
-		// MRP Console
-		{
-			Name:      "mrp_console",
-			Label:     "MRP控制台",
-			Type:      "custom",
-			Component: "ErpMRPConsole",
-			Icon:      "CalculatorOutlined",
-		},
-		// Finance Dashboard
-		{
-			Name:      "finance_dashboard",
-			Label:     "财务仪表盘",
-			Type:      "custom",
-			Component: "ErpFinanceDashboard",
-			Icon:      "BankOutlined",
-		},
+		{Name: "dashboard", Label: "工作台", Type: "custom", Component: "ErpDashboard", Icon: "DashboardOutlined"},
+		// Sales
+		{Name: "sales_pipeline", Label: "销售管道", Type: "custom", Component: "ErpSalesPipeline", Icon: "FunnelPlotOutlined"},
+		{Name: "quote_board", Label: "报价跟进", Type: "custom", Component: "ErpQuoteBoard", Icon: "FileTextOutlined"},
+		{Name: "shipping_center", Label: "发货中心", Type: "custom", Component: "ErpShippingCenter", Icon: "SendOutlined"},
+		{Name: "ar_workspace", Label: "收款工作台", Type: "custom", Component: "ErpARWorkspace", Icon: "DollarOutlined"},
+		// Inventory
+		{Name: "stock_search", Label: "库存查询", Type: "custom", Component: "ErpStockSearch", Icon: "SearchOutlined"},
+		{Name: "stock_ops", Label: "出入库操作", Type: "custom", Component: "ErpStockOps", Icon: "SwapOutlined"},
+		{Name: "serial_trace", Label: "序列号追溯", Type: "custom", Component: "ErpSerialTrace", Icon: "BarcodeOutlined"},
+		// Production
+		{Name: "mrp_console", Label: "MRP控制台", Type: "custom", Component: "ErpMRPConsole", Icon: "CalculatorOutlined"},
+		{Name: "production_schedule", Label: "生产调度", Type: "custom", Component: "ErpProductionSchedule", Icon: "ScheduleOutlined"},
+		// Finance
+		{Name: "journal_entry", Label: "凭证录入", Type: "custom", Component: "ErpJournalEntry", Icon: "EditOutlined"},
+		{Name: "report_center", Label: "报表中心", Type: "custom", Component: "ErpReportCenter", Icon: "BarChartOutlined"},
+		// Quality
+		{Name: "quality_console", Label: "质量控制台", Type: "custom", Component: "ErpQualityConsole", Icon: "SafetyCertificateOutlined"},
+		{Name: "capa_board", Label: "CAPA跟踪", Type: "custom", Component: "ErpCAPABoard", Icon: "ToolOutlined"},
 	}
 }
 
@@ -181,40 +149,41 @@ func (m *ERPModule) Nav() []sdk.NavEntry {
 		{Key: "/m/erp/view/dashboard", Label: "工作台", Icon: "DashboardOutlined", View: "dashboard"},
 		// 销售
 		{Key: "erp-sales", Label: "销售", Icon: "ShoppingCartOutlined", Children: []sdk.NavEntry{
+			{Key: "/m/erp/view/sales_pipeline", Label: "销售管道", View: "sales_pipeline"},
 			{Key: "/m/erp/customers", Label: "客户", Entity: "customers"},
-			{Key: "/m/erp/quotations", Label: "报价", Entity: "quotations"},
-			{Key: "/m/erp/sales_orders", Label: "销售订单", Entity: "sales_orders"},
-			{Key: "/m/erp/shipments", Label: "发货", Entity: "shipments"},
+			{Key: "/m/erp/view/quote_board", Label: "报价跟进", View: "quote_board"},
+			{Key: "/m/erp/view/shipping_center", Label: "发货中心", View: "shipping_center"},
+			{Key: "/m/erp/view/ar_workspace", Label: "收款工作台", View: "ar_workspace"},
 			{Key: "/m/erp/returns", Label: "退货", Entity: "returns"},
 		}},
 		// 库存
 		{Key: "erp-inventory", Label: "库存", Icon: "DatabaseOutlined", Children: []sdk.NavEntry{
-			{Key: "/m/erp/view/inventory_dashboard", Label: "库存总览", View: "inventory_dashboard"},
-			{Key: "/m/erp/inventory_transactions", Label: "出入库", Entity: "inventory_transactions"},
-			{Key: "/m/erp/serial_numbers", Label: "序列号", Entity: "serial_numbers"},
+			{Key: "/m/erp/view/stock_search", Label: "库存查询", View: "stock_search"},
+			{Key: "/m/erp/view/stock_ops", Label: "出入库操作", View: "stock_ops"},
+			{Key: "/m/erp/view/serial_trace", Label: "序列号追溯", View: "serial_trace"},
 		}},
 		// 生产
 		{Key: "erp-production", Label: "生产", Icon: "ExperimentOutlined", Children: []sdk.NavEntry{
 			{Key: "/m/erp/view/mrp_console", Label: "MRP控制台", View: "mrp_console"},
-			{Key: "/m/erp/work_orders", Label: "生产工单", Entity: "work_orders"},
+			{Key: "/m/erp/view/production_schedule", Label: "生产调度", View: "production_schedule"},
+			{Key: "/m/erp/work_orders", Label: "工单详情", Entity: "work_orders"},
 		}},
 		// 财务
 		{Key: "erp-finance", Label: "财务", Icon: "AccountBookOutlined", Children: []sdk.NavEntry{
-			{Key: "/m/erp/view/finance_dashboard", Label: "财务仪表盘", View: "finance_dashboard"},
-			{Key: "/m/erp/accounts", Label: "科目", Entity: "accounts"},
-			{Key: "/m/erp/journal_entries", Label: "凭证", Entity: "journal_entries"},
+			{Key: "/m/erp/view/journal_entry", Label: "凭证录入", View: "journal_entry"},
+			{Key: "/m/erp/view/report_center", Label: "报表中心", View: "report_center"},
 			{Key: "/m/erp/sales_invoices", Label: "销售发票", Entity: "sales_invoices"},
-			{Key: "/m/erp/receipts", Label: "收款", Entity: "receipts"},
+			{Key: "/m/erp/receipts", Label: "收款记录", Entity: "receipts"},
 		}},
 		// 质量
 		{Key: "erp-quality", Label: "质量", Icon: "SafetyCertificateOutlined", Children: []sdk.NavEntry{
-			{Key: "/m/erp/oqc_inspections", Label: "OQC检验", Entity: "oqc_inspections"},
-			{Key: "/m/erp/ncr_reports", Label: "NCR", Entity: "ncr_reports"},
-			{Key: "/m/erp/capas", Label: "CAPA", Entity: "capas"},
+			{Key: "/m/erp/view/quality_console", Label: "质量控制台", View: "quality_console"},
+			{Key: "/m/erp/view/capa_board", Label: "CAPA跟踪", View: "capa_board"},
 		}},
 		// 设置
 		{Key: "erp-settings", Label: "设置", Icon: "SettingOutlined", Children: []sdk.NavEntry{
 			{Key: "/m/erp/warehouses", Label: "仓库", Entity: "warehouses"},
+			{Key: "/m/erp/accounts", Label: "科目表", Entity: "accounts"},
 		}},
 	}
 }
