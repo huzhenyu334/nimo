@@ -28,4 +28,12 @@ Thumbs.db
 node_modules/
 nimo-prd/
 .claude-code-reports/
-agent-control-panel/
+
+# ACP: ignore build artifacts, allow source
+agent-control-panel/web/
+agent-control-panel/bin/
+agent-control-panel/acp-server
+agent-control-panel/acp.log
+agent-control-panel/node_modules/
+agent-control-panel/acp-web/node_modules/
+agent-control-panel/acp-web/dist/
