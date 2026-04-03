@@ -51,6 +51,11 @@ func erpCommands() []sdk.CommandDef {
 		{Name: "disposition_ncr", Label: "NCR处置", Description: "对不合格品做出处置决定", InputType: DispositionNCRInput{}, OutputType: NCROutput{}},
 		{Name: "create_capa", Label: "创建CAPA", Description: "创建纠正/预防措施", InputType: CreateCAPAInput{}, OutputType: CAPAOutput{}},
 		{Name: "close_capa", Label: "关闭CAPA", Description: "验证并关闭CAPA", InputType: CloseCAPAInput{}, OutputType: CAPAOutput{}},
+
+		// ── 补充命令 (3) ─────────────────────────────────────────────
+		{Name: "update_shipment_status", Label: "更新发货状态", Description: "更新发货单状态（shipped/delivered等）", InputType: UpdateShipmentStatusInput{}, OutputType: UpdateShipmentStatusOutput{}},
+		{Name: "extend_quotation", Label: "延长报价有效期", Description: "延长报价单有效期指定天数", InputType: ExtendQuotationInput{}, OutputType: ExtendQuotationOutput{}},
+		{Name: "send_payment_reminder", Label: "发送催款通知", Description: "对逾期发票发送催款通知", InputType: SendPaymentReminderInput{}, OutputType: SendPaymentReminderOutput{}},
 	}
 }
 
@@ -597,4 +602,45 @@ type CAPAOutput struct {
 type CloseCAPAInput struct {
 	CAPAID       string `json:"capa_id" desc:"CAPA ID"`
 	Verification string `json:"verification" desc:"验证结果说明"`
+}
+
+// ---------------------------------------------------------------------------
+// 补充命令 — 发货状态更新
+// ---------------------------------------------------------------------------
+
+type UpdateShipmentStatusInput struct {
+	ShipmentID string `json:"shipment_id" desc:"发货单ID"`
+	Status     string `json:"status" desc:"新状态" enum:"shipped,delivered,cancelled"`
+}
+
+type UpdateShipmentStatusOutput struct {
+	ShipmentID string `json:"shipment_id" desc:"发货单ID"`
+	Status     string `json:"status" desc:"更新后状态"`
+}
+
+// ---------------------------------------------------------------------------
+// 补充命令 — 延长报价有效期
+// ---------------------------------------------------------------------------
+
+type ExtendQuotationInput struct {
+	QuotationID string `json:"quotation_id" desc:"报价单ID"`
+	Days        int    `json:"days,omitempty" desc:"延长天数（默认7天）"`
+}
+
+type ExtendQuotationOutput struct {
+	QuotationID string `json:"quotation_id" desc:"报价单ID"`
+	ValidUntil  string `json:"valid_until" desc:"新的有效截止日期 YYYY-MM-DD"`
+}
+
+// ---------------------------------------------------------------------------
+// 补充命令 — 发送催款通知
+// ---------------------------------------------------------------------------
+
+type SendPaymentReminderInput struct {
+	InvoiceID string `json:"invoice_id" desc:"发票ID"`
+}
+
+type SendPaymentReminderOutput struct {
+	InvoiceID    string `json:"invoice_id" desc:"发票ID"`
+	ReminderSent bool   `json:"reminder_sent" desc:"是否发送成功"`
 }

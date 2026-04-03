@@ -207,6 +207,8 @@ func (m *ERPModule) Migrate(db *gorm.DB) error {
 		&ErpSalesInvoice{}, &ErpReceipt{}, &ErpReceiptAllocation{},
 		// 质量管理
 		&ErpOQCInspection{}, &ErpNCRReport{}, &ErpCAPA{},
+		// 审计日志
+		&ErpAuditLog{},
 	)
 }
 

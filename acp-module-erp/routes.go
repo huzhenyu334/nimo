@@ -3,6 +3,8 @@ package erp
 import (
 	"fmt"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -400,6 +402,204 @@ func registerRoutes(m *ERPModule, rg *gin.RouterGroup) {
 			ORDER BY week
 		`).Scan(&results)
 		c.JSON(http.StatusOK, gin.H{"items": results})
+	})
+
+	// ─── Dashboard / Analytics ───
+
+	// GET /activity-log — 最近操作日志
+	rg.GET("/activity-log", func(c *gin.Context) {
+		limit := 10
+		if l := c.Query("limit"); l != "" {
+			if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 50 {
+				limit = n
+			}
+		}
+
+		type Activity struct {
+			Time    time.Time `json:"time"`
+			Type    string    `json:"type"`
+			Summary string    `json:"summary"`
+			RefID   string    `json:"ref_id"`
+		}
+
+		var activities []Activity
+
+		// Recent inventory transactions
+		var txns []ErpInventoryTransaction
+		db.Order("created_at DESC").Limit(limit).Find(&txns)
+		for _, t := range txns {
+			activities = append(activities, Activity{
+				Time: t.CreatedAt, Type: "inventory",
+				Summary: fmt.Sprintf("%s %s 数量%v", t.Type, t.MaterialID, t.Quantity),
+				RefID:   t.ID,
+			})
+		}
+
+		// Recent orders
+		var orders []ErpSalesOrder
+		db.Order("created_at DESC").Limit(5).Find(&orders)
+		for _, o := range orders {
+			activities = append(activities, Activity{
+				Time: o.CreatedAt, Type: "sales_order",
+				Summary: fmt.Sprintf("销售订单 %s %s", o.Code, o.Status),
+				RefID:   o.ID,
+			})
+		}
+
+		// Sort by time desc
+		sort.Slice(activities, func(i, j int) bool {
+			return activities[i].Time.After(activities[j].Time)
+		})
+		if len(activities) > limit {
+			activities = activities[:limit]
+		}
+
+		c.JSON(http.StatusOK, gin.H{"items": activities})
+	})
+
+	// GET /sales-trend — 月度销售趋势
+	rg.GET("/sales-trend", func(c *gin.Context) {
+		months := 6
+		if m := c.Query("months"); m != "" {
+			if n, err := strconv.Atoi(m); err == nil && n > 0 {
+				months = n
+			}
+		}
+		var results []struct {
+			Month string  `json:"month"`
+			Total float64 `json:"total"`
+			Count int     `json:"count"`
+		}
+		db.Raw(`
+			SELECT TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') as month,
+				COALESCE(SUM(total), 0) as total,
+				COUNT(*) as count
+			FROM erp_sales_orders
+			WHERE created_at >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month' * ?
+				AND status NOT IN ('cancelled', 'draft')
+			GROUP BY DATE_TRUNC('month', created_at)
+			ORDER BY month
+		`, months).Scan(&results)
+		c.JSON(http.StatusOK, gin.H{"items": results})
+	})
+
+	// POST /mrp-run — 执行MRP计算
+	rg.POST("/mrp-run", func(c *gin.Context) {
+		var req map[string]any
+		c.ShouldBindJSON(&req)
+		if req == nil {
+			req = map[string]any{}
+		}
+		if _, ok := req["demand_source"]; !ok {
+			req["demand_source"] = "so" // default
+		}
+
+		handler, ok := commandHandlers["run_mrp"]
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "run_mrp command not found"})
+			return
+		}
+		result, err := handler(db, nil, "", "", req)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, result)
+	})
+
+	// GET /pipeline-summary — 销售管道汇总（按状态聚合）
+	rg.GET("/pipeline-summary", func(c *gin.Context) {
+		var results []struct {
+			Status string  `json:"status"`
+			Count  int64   `json:"count"`
+			Total  float64 `json:"total"`
+		}
+		db.Table("erp_sales_orders").
+			Select("status, COUNT(*) as count, COALESCE(SUM(total), 0) as total").
+			Where("status NOT IN ?", []string{"cancelled"}).
+			Group("status").Scan(&results)
+		c.JSON(http.StatusOK, gin.H{"items": results})
+	})
+
+	// GET /stock-alerts — 库存预警（低于安全库存）
+	rg.GET("/stock-alerts", func(c *gin.Context) {
+		var results []struct {
+			MaterialID  string  `json:"material_id"`
+			Available   float64 `json:"available"`
+			SafetyStock float64 `json:"safety_stock"`
+			Shortfall   float64 `json:"shortfall"`
+		}
+		// Safety stock = 100 (hardcoded threshold since we don't have safety_stock field)
+		db.Raw(`
+			SELECT material_id,
+				COALESCE(SUM(quantity - reserved_qty), 0) as available,
+				100 as safety_stock,
+				GREATEST(100 - COALESCE(SUM(quantity - reserved_qty), 0), 0) as shortfall
+			FROM erp_inventory
+			GROUP BY material_id
+			HAVING COALESCE(SUM(quantity - reserved_qty), 0) < 100
+		`).Scan(&results)
+		c.JSON(http.StatusOK, gin.H{"items": results})
+	})
+
+	// ─── Cash Flow ───
+
+	// GET /cash-flow — 现金流量表
+	rg.GET("/cash-flow", func(c *gin.Context) {
+		period := c.Query("period")
+		if period == "" {
+			period = time.Now().Format("2006-01")
+		}
+
+		// Operating: sales receipts - purchase payments
+		var salesReceipts float64
+		db.Table("erp_receipts").
+			Where("status = 'confirmed'").
+			Where("TO_CHAR(received_date, 'YYYY-MM') = ?", period).
+			Select("COALESCE(SUM(amount), 0)").Row().Scan(&salesReceipts)
+
+		// For AP payments, estimate from journal entries
+		var apPayments float64
+		db.Raw(`
+			SELECT COALESCE(SUM(jl.debit), 0) FROM erp_journal_lines jl
+			JOIN erp_journal_entries je ON je.id = jl.entry_id
+			JOIN erp_accounts a ON a.id = jl.account_id
+			WHERE je.status = 'posted' AND je.period = ? AND a.code = '2202'
+		`, period).Scan(&apPayments)
+
+		operatingNet := salesReceipts - apPayments
+
+		// Cash balance from bank account (1002)
+		var cashBalance float64
+		db.Raw(`
+			SELECT COALESCE(SUM(jl.debit - jl.credit), 0) FROM erp_journal_lines jl
+			JOIN erp_journal_entries je ON je.id = jl.entry_id
+			JOIN erp_accounts a ON a.id = jl.account_id
+			WHERE je.status = 'posted' AND je.period <= ? AND a.code = '1002'
+		`, period).Scan(&cashBalance)
+
+		c.JSON(http.StatusOK, gin.H{
+			"period":         period,
+			"operating_in":   salesReceipts,
+			"operating_out":  apPayments,
+			"operating_net":  operatingNet,
+			"investing_net":  0, // placeholder
+			"financing_net":  0, // placeholder
+			"net_change":     operatingNet,
+			"ending_balance": cashBalance,
+		})
+	})
+
+	// ─── Audit Log ───
+
+	// GET /audit-log/:entity/:id — 实体变更记录
+	rg.GET("/audit-log/:entity/:id", func(c *gin.Context) {
+		entityType := c.Param("entity")
+		entityID := c.Param("id")
+		var logs []ErpAuditLog
+		db.Where("entity_type = ? AND entity_id = ?", entityType, entityID).
+			Order("created_at DESC").Limit(50).Find(&logs)
+		c.JSON(http.StatusOK, gin.H{"items": logs})
 	})
 
 	_ = strings.TrimSpace // suppress unused import

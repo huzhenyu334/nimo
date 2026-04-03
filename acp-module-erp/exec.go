@@ -59,6 +59,10 @@ var commandHandlers = map[string]commandHandler{
 	"disposition_ncr":  cmdDispositionNCR,
 	"create_capa":     cmdCreateCAPA,
 	"close_capa":      cmdCloseCAPA,
+	// Additional (3)
+	"update_shipment_status": cmdUpdateShipmentStatus,
+	"extend_quotation":       cmdExtendQuotation,
+	"send_payment_reminder":  cmdSendPaymentReminder,
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +218,15 @@ func getMapSlice(input map[string]any, key string) []map[string]any {
 		return out
 	}
 	return nil
+}
+
+// findAccountByCode looks up an account by its code and returns the ID.
+func findAccountByCode(db *gorm.DB, code string) string {
+	var account ErpAccount
+	if err := db.Where("code = ?", code).First(&account).Error; err != nil {
+		return ""
+	}
+	return account.ID
 }
 
 // ===========================================================================
@@ -414,11 +427,22 @@ func cmdConfirmOrder(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID strin
 	now := time.Now()
 	db.Model(&order).Updates(map[string]any{"status": "confirmed", "confirmed_at": &now})
 
-	emitEvent(adapter, runID, stepID, "erp.sales_order.confirmed",
-		fmt.Sprintf("销售订单确认: %s", order.Code),
-		map[string]any{"order_id": order.ID, "code": order.Code})
+	// Auto-run MRP for this order's items
+	mrpResult, _ := cmdRunMRP(db, adapter, runID, stepID, map[string]any{"demand_source": "so"})
+	mrpSuggestions := 0
+	if m, ok := mrpResult.(map[string]any); ok {
+		if sc, ok := m["suggestion_count"]; ok {
+			if n, ok := sc.(int); ok {
+				mrpSuggestions = n
+			}
+		}
+	}
 
-	return map[string]any{"order_id": order.ID, "code": order.Code}, nil
+	emitEvent(adapter, runID, stepID, "erp.sales_order.confirmed",
+		fmt.Sprintf("销售订单确认: %s, MRP生成%d条建议", order.Code, mrpSuggestions),
+		map[string]any{"order_id": order.ID, "code": order.Code, "mrp_suggestions": mrpSuggestions})
+
+	return map[string]any{"order_id": order.ID, "code": order.Code, "mrp_suggestions": mrpSuggestions}, nil
 }
 
 func cmdCreateShipment(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID string, input map[string]any) (any, error) {
@@ -501,6 +525,24 @@ func cmdConfirmShipment(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID st
 		}
 	}
 
+	// Auto-create inventory issue transaction for each shipment item
+	for _, item := range items {
+		autoCodeWithRetry(db, "erp_inventory_transactions", "IT", func(c string) error {
+			txn := ErpInventoryTransaction{
+				ID: uuid.New().String(), Code: c,
+				Type: "issue", MaterialID: item.ProductID,
+				FromWarehouseID: shipment.WarehouseID,
+				Quantity:        item.Quantity,
+				ReferenceType:   "so", ReferenceID: shipment.OrderID,
+				Notes: fmt.Sprintf("发货出库 %s", shipment.Code),
+			}
+			return db.Create(&txn).Error
+		})
+		// Update inventory
+		db.Exec("UPDATE erp_inventory SET quantity = quantity - ? WHERE material_id = ? AND warehouse_id = ?",
+			item.Quantity, item.ProductID, shipment.WarehouseID)
+	}
+
 	// Check if all order items are fully delivered → update order status
 	var order ErpSalesOrder
 	if db.First(&order, "id = ?", shipment.OrderID).Error == nil {
@@ -570,7 +612,54 @@ func cmdCreateSalesInvoice(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID
 		fmt.Sprintf("销售发票创建: %s", code),
 		map[string]any{"invoice_id": invoice.ID, "code": code})
 
-	return map[string]any{"invoice_id": invoice.ID, "code": code}, nil
+	// Auto-generate journal entry
+	entryDate := time.Now()
+	period := entryDate.Format("2006-01")
+
+	var entry ErpJournalEntry
+	autoCodeWithRetry(db, "erp_journal_entries", "JE", func(c string) error {
+		entry = ErpJournalEntry{
+			ID:          uuid.New().String(),
+			Code:        c,
+			Period:      period,
+			EntryDate:   &entryDate,
+			SourceType:  "sales_invoice",
+			SourceID:    invoice.ID,
+			Description: fmt.Sprintf("销售收入-%s", invoice.Code),
+			TotalDebit:  invoice.Total,
+			TotalCredit: invoice.Total,
+			Status:      "posted",
+		}
+		return db.Create(&entry).Error
+	})
+
+	// Create journal lines
+	// Debit: 应收账款 (1122)
+	db.Create(&ErpJournalLine{
+		ID: uuid.New().String(), EntryID: entry.ID,
+		AccountID:  findAccountByCode(db, "1122"),
+		Debit:      invoice.Total, Credit: 0,
+		Description: "应收账款",
+		CustomerID:  invoice.CustomerID,
+	})
+	// Credit: 主营业务收入 (6001)
+	db.Create(&ErpJournalLine{
+		ID: uuid.New().String(), EntryID: entry.ID,
+		AccountID:  findAccountByCode(db, "6001"),
+		Debit:      0, Credit: invoice.Subtotal,
+		Description: "主营业务收入",
+	})
+	// Credit: 应交税费 (2221)
+	if invoice.TaxAmount > 0 {
+		db.Create(&ErpJournalLine{
+			ID: uuid.New().String(), EntryID: entry.ID,
+			AccountID:  findAccountByCode(db, "2221"),
+			Debit:      0, Credit: invoice.TaxAmount,
+			Description: "销项税额",
+		})
+	}
+
+	return map[string]any{"invoice_id": invoice.ID, "code": code, "journal_entry_id": entry.ID}, nil
 }
 
 func cmdRecordReceipt(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID string, input map[string]any) (any, error) {
@@ -633,6 +722,52 @@ func cmdRecordReceipt(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID stri
 			if inv.PaidAmount >= inv.Total {
 				db.Model(&inv).Update("status", "paid")
 			}
+		}
+	}
+
+	// FIFO auto-allocate to unpaid invoices
+	if len(allocations) == 0 {
+		remaining := receipt.Amount
+
+		var invoices []ErpSalesInvoice
+		db.Where("customer_id = ? AND status IN ?", receipt.CustomerID, []string{"issued", "partially_paid"}).
+			Order("due_date ASC").Find(&invoices)
+
+		for _, inv := range invoices {
+			if remaining <= 0 {
+				break
+			}
+
+			balance := inv.Total - inv.PaidAmount
+			if balance <= 0 {
+				continue
+			}
+
+			allocAmount := balance
+			if allocAmount > remaining {
+				allocAmount = remaining
+			}
+
+			// Create allocation
+			db.Create(&ErpReceiptAllocation{
+				ID:        uuid.New().String(),
+				ReceiptID: receipt.ID,
+				InvoiceID: inv.ID,
+				Amount:    allocAmount,
+			})
+
+			// Update invoice paid amount
+			newPaid := inv.PaidAmount + allocAmount
+			newStatus := "partially_paid"
+			if newPaid >= inv.Total {
+				newStatus = "paid"
+			}
+			db.Model(&inv).Updates(map[string]any{
+				"paid_amount": newPaid,
+				"status":      newStatus,
+			})
+
+			remaining -= allocAmount
 		}
 	}
 
@@ -1721,8 +1856,8 @@ func cmdCompleteOQC(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID string
 	}
 
 	result := getStr(input, "result")
-	if result != "pass" && result != "fail" {
-		return nil, fmt.Errorf("result must be 'pass' or 'fail'")
+	if result != "pass" && result != "fail" && result != "conditional" {
+		return nil, fmt.Errorf("result must be 'pass', 'fail', or 'conditional'")
 	}
 
 	now := time.Now()
@@ -1740,7 +1875,37 @@ func cmdCompleteOQC(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID string
 		fmt.Sprintf("OQC检验完成: %s, 结果=%s", oqc.Code, result),
 		map[string]any{"oqc_id": oqc.ID, "code": oqc.Code, "result": result})
 
-	return map[string]any{"oqc_id": oqc.ID, "code": oqc.Code, "result": result}, nil
+	retVal := map[string]any{"oqc_id": oqc.ID, "code": oqc.Code, "result": result}
+
+	// Auto-create NCR on fail or conditional
+	if result == "fail" || result == "conditional" {
+		var ncr ErpNCRReport
+		autoCodeWithRetry(db, "erp_ncr_reports", "NCR", func(c string) error {
+			ncr = ErpNCRReport{
+				ID:          uuid.New().String(),
+				Code:        c,
+				Source:      "oqc",
+				SourceID:    oqcID,
+				ProductID:   oqc.ProductID,
+				LotNumber:   oqc.LotNumber,
+				DefectQty:   float64(oqc.FailCount),
+				DefectType:  "OQC检验不合格",
+				Description: fmt.Sprintf("OQC检验 %s 结果: %s, 不合格 %d/%d", oqc.Code, result, oqc.FailCount, oqc.TotalInspected),
+				Severity:    "major",
+				Status:      "open",
+			}
+			return db.Create(&ncr).Error
+		})
+
+		emitEvent(adapter, runID, stepID, "erp.ncr.auto_created",
+			fmt.Sprintf("自动创建NCR: %s (来源: OQC %s)", ncr.Code, oqc.Code),
+			map[string]any{"ncr_id": ncr.ID, "oqc_id": oqcID})
+
+		retVal["ncr_id"] = ncr.ID
+		retVal["ncr_code"] = ncr.Code
+	}
+
+	return retVal, nil
 }
 
 func cmdCreateNCR(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID string, input map[string]any) (any, error) {
@@ -1877,4 +2042,66 @@ func cmdCloseCAPA(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID string, 
 		map[string]any{"capa_id": capa.ID, "code": capa.Code})
 
 	return map[string]any{"capa_id": capa.ID, "code": capa.Code}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Additional Commands
+// ---------------------------------------------------------------------------
+
+// cmdUpdateShipmentStatus — 更新发货单状态
+func cmdUpdateShipmentStatus(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID string, input map[string]any) (any, error) {
+	shipmentID := getStr(input, "shipment_id")
+	newStatus := getStr(input, "status")
+	if shipmentID == "" || newStatus == "" {
+		return nil, fmt.Errorf("shipment_id and status are required")
+	}
+	var shipment ErpShipment
+	if err := db.First(&shipment, "id = ?", shipmentID).Error; err != nil {
+		return nil, fmt.Errorf("shipment not found")
+	}
+	updates := map[string]any{"status": newStatus}
+	now := time.Now()
+	if newStatus == "shipped" {
+		updates["shipped_at"] = &now
+	}
+	if newStatus == "delivered" {
+		updates["delivered_at"] = &now
+	}
+	db.Model(&shipment).Updates(updates)
+	emitEvent(adapter, runID, stepID, "erp.shipment.status_changed",
+		fmt.Sprintf("发货单状态变更: %s → %s", shipment.Code, newStatus),
+		map[string]any{"shipment_id": shipmentID, "status": newStatus})
+	return map[string]any{"shipment_id": shipmentID, "status": newStatus}, nil
+}
+
+// cmdExtendQuotation — 延长报价单有效期
+func cmdExtendQuotation(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID string, input map[string]any) (any, error) {
+	quotationID := getStr(input, "quotation_id")
+	days := getInt(input, "days", 7)
+	if quotationID == "" {
+		return nil, fmt.Errorf("quotation_id is required")
+	}
+	var q ErpQuotation
+	if err := db.First(&q, "id = ?", quotationID).Error; err != nil {
+		return nil, fmt.Errorf("quotation not found")
+	}
+	newDate := time.Now().AddDate(0, 0, days)
+	db.Model(&q).Update("valid_until", &newDate)
+	return map[string]any{"quotation_id": quotationID, "valid_until": newDate.Format("2006-01-02")}, nil
+}
+
+// cmdSendPaymentReminder — 发送催款通知
+func cmdSendPaymentReminder(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID string, input map[string]any) (any, error) {
+	invoiceID := getStr(input, "invoice_id")
+	if invoiceID == "" {
+		return nil, fmt.Errorf("invoice_id is required")
+	}
+	var inv ErpSalesInvoice
+	if err := db.First(&inv, "id = ?", invoiceID).Error; err != nil {
+		return nil, fmt.Errorf("invoice not found")
+	}
+	emitEvent(adapter, runID, stepID, "erp.payment.reminder_sent",
+		fmt.Sprintf("催款通知已发送: %s ¥%.0f", inv.Code, inv.Total),
+		map[string]any{"invoice_id": invoiceID, "amount": inv.Total, "customer_id": inv.CustomerID})
+	return map[string]any{"invoice_id": invoiceID, "reminder_sent": true}, nil
 }

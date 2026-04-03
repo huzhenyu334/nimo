@@ -534,3 +534,19 @@ type ErpCAPA struct {
 }
 
 func (ErpCAPA) TableName() string { return "erp_capa" }
+
+// ── Audit Log ──
+
+// ErpAuditLog tracks field-level changes on ERP entities
+type ErpAuditLog struct {
+	ID         string    `gorm:"primaryKey;size:100" json:"id"`
+	EntityType string    `gorm:"size:50;index" json:"entity_type"`
+	EntityID   string    `gorm:"size:100;index" json:"entity_id"`
+	Field      string    `gorm:"size:100" json:"field"`
+	OldValue   string    `gorm:"type:text" json:"old_value"`
+	NewValue   string    `gorm:"type:text" json:"new_value"`
+	UserID     string    `gorm:"size:100" json:"user_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func (ErpAuditLog) TableName() string { return "erp_audit_logs" }
