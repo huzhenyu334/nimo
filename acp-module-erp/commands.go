@@ -37,12 +37,13 @@ func erpCommands() []sdk.CommandDef {
 		{Name: "report_wo_progress", Label: "报工", Description: "报告工单工序生产进度", InputType: ReportWOProgressInput{}, OutputType: WOProgressOutput{}},
 		{Name: "complete_work_order", Label: "完工入库", Description: "工单完工并成品入库", InputType: CompleteWorkOrderInput{}, OutputType: WorkOrderOutput{}},
 
-		// ── 财务管理 (5) ─────────────────────────────────────────────
+		// ── 财务管理 (6) ─────────────────────────────────────────────
 		{Name: "create_journal_entry", Label: "创建凭证", Description: "创建会计记账凭证", InputType: CreateJournalEntryInput{}, OutputType: JournalEntryOutput{}},
 		{Name: "post_journal_entry", Label: "过账凭证", Description: "凭证过账（不可逆）", InputType: PostJournalEntryInput{}, OutputType: JournalEntryOutput{}},
 		{Name: "reverse_journal_entry", Label: "冲销凭证", Description: "生成红字冲销凭证", InputType: ReverseJournalEntryInput{}, OutputType: ReverseJournalEntryOutput{}},
 		{Name: "close_period", Label: "关闭会计期间", Description: "关闭指定会计期间", InputType: ClosePeriodInput{}, OutputType: ClosePeriodOutput{}},
 		{Name: "generate_report", Label: "生成财务报表", Description: "生成试算平衡表/利润表/资产负债表", InputType: GenerateReportInput{}, OutputType: GenerateReportOutput{}},
+		{Name: "post_ap_from_settlement", Label: "结算转AP凭证", Description: "从 SRM 结算单创建应付账款会计凭证(DR 应付账款 / CR 银行存款)", InputType: PostAPFromSettlementInput{}, OutputType: PostAPFromSettlementOutput{}},
 
 		// ── 质量管理 (6) ─────────────────────────────────────────────
 		{Name: "create_oqc", Label: "创建OQC检验", Description: "创建出货质量检验单", InputType: CreateOQCInput{}, OutputType: OQCOutput{}},
@@ -481,6 +482,18 @@ type ReverseJournalEntryOutput struct {
 	OriginalEntryID string `json:"original_entry_id" desc:"原凭证ID"`
 	NewEntryID      string `json:"new_entry_id" desc:"冲销凭证ID"`
 	NewEntryCode    string `json:"new_entry_code" desc:"冲销凭证编号"`
+}
+
+type PostAPFromSettlementInput struct {
+	SettlementID string `json:"settlement_id" desc:"SRM 结算单ID"`
+	PostedBy     string `json:"posted_by,omitempty" desc:"过账人"`
+}
+
+type PostAPFromSettlementOutput struct {
+	JournalEntryID string  `json:"journal_entry_id" desc:"生成的会计凭证ID"`
+	JournalCode    string  `json:"journal_code" desc:"凭证编号"`
+	SettlementID   string  `json:"settlement_id" desc:"源 SRM 结算单ID"`
+	Amount         float64 `json:"amount" desc:"过账金额"`
 }
 
 // ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@ func (m *ERPModule) Meta() sdk.ExecutorMeta {
 	return sdk.ExecutorMeta{
 		Type:        "erp",
 		Category:    "module",
-		Label:       "企业资源计划",
+		Label:       "ERP",
 		Icon:        "BankOutlined",
 		Color:       "#1677ff",
 		BgColor:     "#111a2e",
@@ -68,7 +68,7 @@ func (m *ERPModule) Meta() sdk.ExecutorMeta {
 func (m *ERPModule) ModuleMeta() sdk.ModuleMeta {
 	return sdk.ModuleMeta{
 		Type:        "erp",
-		Label:       "企业资源计划",
+		Label:       "ERP",
 		Icon:        "BankOutlined",
 		Color:       "#1677ff",
 		BgColor:     "#111a2e",

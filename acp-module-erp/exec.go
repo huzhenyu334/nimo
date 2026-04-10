@@ -46,12 +46,13 @@ var commandHandlers = map[string]commandHandler{
 	"issue_wo_materials":     cmdIssueWOMaterials,
 	"report_wo_progress":     cmdReportWOProgress,
 	"complete_work_order":    cmdCompleteWorkOrder,
-	// Finance (5)
-	"create_journal_entry":  cmdCreateJournalEntry,
-	"post_journal_entry":    cmdPostJournalEntry,
-	"reverse_journal_entry": cmdReverseJournalEntry,
-	"close_period":          cmdClosePeriod,
-	"generate_report":       cmdGenerateReport,
+	// Finance (6)
+	"create_journal_entry":    cmdCreateJournalEntry,
+	"post_journal_entry":      cmdPostJournalEntry,
+	"reverse_journal_entry":   cmdReverseJournalEntry,
+	"close_period":            cmdClosePeriod,
+	"generate_report":         cmdGenerateReport,
+	"post_ap_from_settlement": cmdPostAPFromSettlement,
 	// Quality (6)
 	"create_oqc":      cmdCreateOQC,
 	"complete_oqc":    cmdCompleteOQC,
@@ -2104,4 +2105,168 @@ func cmdSendPaymentReminder(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepI
 		fmt.Sprintf("催款通知已发送: %s ¥%.0f", inv.Code, inv.Total),
 		map[string]any{"invoice_id": invoiceID, "amount": inv.Total, "customer_id": inv.CustomerID})
 	return map[string]any{"invoice_id": invoiceID, "reminder_sent": true}, nil
+}
+
+// ---------------------------------------------------------------------------
+// SRM → ERP AP posting
+// ---------------------------------------------------------------------------
+//
+// cmdPostAPFromSettlement closes the industry-standard split:
+//   - SRM owns the supplier-facing "结算单" (collaboration document): amounts,
+//     invoice reference, buyer/supplier confirmation, disputes.
+//   - ERP owns the book of record: accounts payable journal entries.
+//
+// This command is called from the flow YAML after the SRM side confirms a
+// settlement (e.g. after srm:confirm_settlement_buyer). It:
+//   1. Reads the srm_settlements row for the given settlement_id (raw SQL
+//      since SRM types live in a separate Go module).
+//   2. Lazily bootstraps the minimal chart-of-accounts rows needed (2202
+//      应付账款, 1002 银行存款) when the accounts table is empty.
+//   3. Creates a posted ErpJournalEntry with source_type="srm_settlement"
+//      so finance can trace every AP entry back to its settlement.
+//   4. Writes two ErpJournalLine rows: DR 应付账款, CR 银行存款.
+//   5. Flips the SRM settlement status to "posted" via raw UPDATE (keeping
+//      the SRM row authoritative for the collaboration side).
+
+// srmSettlementLite is a minimal shape mirroring srm_settlements — enough
+// for AP posting. We intentionally do not import the SRM package so the
+// ERP module keeps a clean dependency boundary.
+type srmSettlementLite struct {
+	ID             string
+	SettlementCode string
+	SupplierID     string
+	FinalAmount    float64
+	InvoiceNo      string
+	Status         string
+	PeriodStart    *time.Time
+	PeriodEnd      *time.Time
+}
+
+func (srmSettlementLite) TableName() string { return "srm_settlements" }
+
+func cmdPostAPFromSettlement(db *gorm.DB, adapter sdk.EngineAdapter, runID, stepID string, input map[string]any) (any, error) {
+	settlementID := getStr(input, "settlement_id")
+	if settlementID == "" {
+		return nil, fmt.Errorf("settlement_id is required")
+	}
+
+	var stl srmSettlementLite
+	if err := db.Table("srm_settlements").
+		Select("id, settlement_code, supplier_id, final_amount, invoice_no, status, period_start, period_end").
+		Where("id = ?", settlementID).
+		Scan(&stl).Error; err != nil || stl.ID == "" {
+		return nil, fmt.Errorf("settlement not found: %s", settlementID)
+	}
+	if stl.FinalAmount <= 0 {
+		return nil, fmt.Errorf("settlement final_amount must be positive, got %.2f", stl.FinalAmount)
+	}
+
+	// Bootstrap AP + Cash accounts if they don't exist.
+	apAccount := ensureAccount(db, "2202", "应付账款", "liability")
+	cashAccount := ensureAccount(db, "1002", "银行存款", "asset")
+
+	now := time.Now()
+	period := ""
+	if stl.PeriodEnd != nil {
+		period = stl.PeriodEnd.Format("2006-01")
+	} else {
+		period = now.Format("2006-01")
+	}
+
+	var entry ErpJournalEntry
+	entryCode, err := autoCodeWithRetry(db, "erp_journal_entries", "JE", func(c string) error {
+		entry = ErpJournalEntry{
+			ID:          uuid.New().String(),
+			Code:        c,
+			Period:      period,
+			EntryDate:   &now,
+			SourceType:  "srm_settlement",
+			SourceID:    stl.ID,
+			Description: fmt.Sprintf("供应商结算 %s (发票 %s)", stl.SettlementCode, stl.InvoiceNo),
+			TotalDebit:  stl.FinalAmount,
+			TotalCredit: stl.FinalAmount,
+			Status:      "posted",
+			PostedBy:    getStr(input, "posted_by"),
+			PostedAt:    &now,
+		}
+		return db.Create(&entry).Error
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create AP journal entry failed: %w", err)
+	}
+
+	// DR 应付账款
+	if err := db.Create(&ErpJournalLine{
+		ID:             uuid.New().String(),
+		EntryID:        entry.ID,
+		AccountID:      apAccount.ID,
+		Debit:          stl.FinalAmount,
+		Credit:         0,
+		Currency:       "CNY",
+		OriginalAmount: stl.FinalAmount,
+		Description:    fmt.Sprintf("%s 应付账款冲销", stl.SettlementCode),
+		SupplierID:     stl.SupplierID,
+	}).Error; err != nil {
+		return nil, fmt.Errorf("create DR line failed: %w", err)
+	}
+	// CR 银行存款
+	if err := db.Create(&ErpJournalLine{
+		ID:             uuid.New().String(),
+		EntryID:        entry.ID,
+		AccountID:      cashAccount.ID,
+		Debit:          0,
+		Credit:         stl.FinalAmount,
+		Currency:       "CNY",
+		OriginalAmount: stl.FinalAmount,
+		Description:    fmt.Sprintf("%s 银行付款", stl.SettlementCode),
+		SupplierID:     stl.SupplierID,
+	}).Error; err != nil {
+		return nil, fmt.Errorf("create CR line failed: %w", err)
+	}
+
+	// Flip SRM settlement status to "posted" so the collaboration row
+	// reflects that finance has already booked it.
+	db.Table("srm_settlements").Where("id = ?", stl.ID).Updates(map[string]any{
+		"status":     "paid",
+		"updated_at": now,
+	})
+
+	emitEvent(adapter, runID, stepID, "erp.ap.settlement_posted",
+		fmt.Sprintf("AP 过账: %s → 凭证 %s, 金额 ¥%.2f", stl.SettlementCode, entryCode, stl.FinalAmount),
+		map[string]any{
+			"journal_entry_id": entry.ID,
+			"journal_code":     entryCode,
+			"settlement_id":    stl.ID,
+			"supplier_id":      stl.SupplierID,
+			"amount":           stl.FinalAmount,
+		})
+
+	return map[string]any{
+		"journal_entry_id": entry.ID,
+		"journal_code":     entryCode,
+		"settlement_id":    stl.ID,
+		"amount":           stl.FinalAmount,
+	}, nil
+}
+
+// ensureAccount fetches the account with the given code, creating it with
+// the supplied name/type if missing. Used for lazy bootstrapping of the
+// minimal chart of accounts needed by AP posting.
+func ensureAccount(db *gorm.DB, code, name, accountType string) ErpAccount {
+	var acc ErpAccount
+	if err := db.Where("code = ?", code).First(&acc).Error; err == nil {
+		return acc
+	}
+	acc = ErpAccount{
+		ID:       uuid.New().String(),
+		Code:     code,
+		Name:     name,
+		Type:     accountType,
+		Level:    1,
+		IsLeaf:   true,
+		Currency: "CNY",
+		Status:   "active",
+	}
+	db.Create(&acc)
+	return acc
 }
