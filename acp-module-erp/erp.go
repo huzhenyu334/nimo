@@ -130,6 +130,7 @@ func (m *ERPModule) Views() []sdk.ViewDef {
 		// Inventory
 		{Name: "stock_search", Label: "库存查询", Type: "custom", Component: "ErpStockSearch", Icon: "SearchOutlined"},
 		{Name: "stock_ops", Label: "出入库操作", Type: "custom", Component: "ErpStockOps", Icon: "SwapOutlined"},
+		{Name: "inventory_count", Label: "库存盘点", Type: "custom", Component: "ErpInventoryCount", Icon: "FileDoneOutlined"},
 		{Name: "serial_trace", Label: "序列号追溯", Type: "custom", Component: "ErpSerialTrace", Icon: "BarcodeOutlined"},
 		// Production
 		{Name: "mrp_console", Label: "MRP控制台", Type: "custom", Component: "ErpMRPConsole", Icon: "CalculatorOutlined"},
@@ -160,6 +161,7 @@ func (m *ERPModule) Nav() []sdk.NavEntry {
 		{Key: "erp-inventory", Label: "库存", Icon: "DatabaseOutlined", Children: []sdk.NavEntry{
 			{Key: "/m/erp/view/stock_search", Label: "库存查询", View: "stock_search"},
 			{Key: "/m/erp/view/stock_ops", Label: "出入库操作", View: "stock_ops"},
+			{Key: "/m/erp/view/inventory_count", Label: "库存盘点", View: "inventory_count"},
 			{Key: "/m/erp/view/serial_trace", Label: "序列号追溯", View: "serial_trace"},
 		}},
 		// 生产
@@ -199,11 +201,13 @@ func (m *ERPModule) Migrate(db *gorm.DB) error {
 		&ErpReturn{},
 		// 库存管理
 		&ErpInventory{}, &ErpInventoryTransaction{}, &ErpSerialNumber{},
+		&ErpMaterialInventoryAttrs{}, &ErpInventoryAuditLog{},
+		&ErpInventoryCount{}, &ErpInventoryCountLine{}, &ErpInventoryReservation{},
 		// 生产管理
 		&ErpMRPResult{}, &ErpWorkOrder{},
 		&ErpWOMaterialIssue{}, &ErpWOReport{},
 		// 财务管理
-		&ErpAccount{}, &ErpJournalEntry{}, &ErpJournalLine{},
+		&ErpAccount{}, &ErpJournalEntry{}, &ErpJournalLine{}, &ErpPeriodLock{},
 		&ErpSalesInvoice{}, &ErpReceipt{}, &ErpReceiptAllocation{},
 		// 质量管理
 		&ErpOQCInspection{}, &ErpNCRReport{}, &ErpCAPA{},

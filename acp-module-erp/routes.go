@@ -85,31 +85,120 @@ func registerRoutes(m *ERPModule, rg *gin.RouterGroup) {
 
 	// ─── Inventory ───
 
-	// GET /stock-summary — 库存汇总（按物料/仓库）
+	// GET /stock-summary — 库存汇总（按物料/仓库），含 PLM 物料名 + 仓库名 join
+	//
+	// PRD v1 Sprint 1 升级：
+	//   - 跨模块 LEFT JOIN plm_materials 出 material_code / material_name
+	//   - JOIN erp_warehouses 出 warehouse_code / warehouse_name
+	//   - 多维过滤：material_id / warehouse_id / status / abc_class / lot_number
+	//   - 计算总价值 = SUM(quantity × unit_cost)
+	//   - 兼容老调用方：query 参数全可选
 	rg.GET("/stock-summary", func(c *gin.Context) {
 		warehouseID := c.Query("warehouse_id")
 		materialID := c.Query("material_id")
+		status := c.Query("status")
+		lotNumber := c.Query("lot_number")
+		abcClass := c.Query("abc_class")
 
-		query := db.Table("erp_inventory").
-			Select("material_id, warehouse_id, SUM(quantity) as total_qty, SUM(reserved_qty) as total_reserved, SUM(quantity - reserved_qty) as available_qty").
-			Group("material_id, warehouse_id")
+		query := db.Table("erp_inventory AS inv").
+			Select(`
+				inv.material_id,
+				inv.warehouse_id,
+				COALESCE(plm_materials.code, '') AS material_code,
+				COALESCE(plm_materials.name, '') AS material_name,
+				COALESCE(plm_materials.specs, '') AS material_spec,
+				COALESCE(erp_warehouses.code, '') AS warehouse_code,
+				COALESCE(erp_warehouses.name, '') AS warehouse_name,
+				COALESCE(erp_material_inventory_attrs.abc_class, 'C') AS abc_class,
+				COALESCE(erp_material_inventory_attrs.safety_stock, 0) AS safety_stock,
+				COALESCE(erp_material_inventory_attrs.tracking_mode, 'lot') AS tracking_mode,
+				COALESCE(erp_material_inventory_attrs.default_unit, 'pcs') AS unit,
+				SUM(inv.quantity) AS total_qty,
+				SUM(inv.reserved_qty) AS reserved_qty,
+				SUM(inv.quantity - inv.reserved_qty) AS available_qty,
+				MAX(inv.unit_cost) AS unit_cost,
+				SUM(inv.quantity * inv.unit_cost) AS total_value,
+				COUNT(*) AS lot_count,
+				MIN(inv.received_at) AS oldest_received_at
+			`).
+			Joins("LEFT JOIN plm_materials ON plm_materials.id = inv.material_id").
+			Joins("LEFT JOIN erp_warehouses ON erp_warehouses.id = inv.warehouse_id").
+			Joins("LEFT JOIN erp_material_inventory_attrs ON erp_material_inventory_attrs.material_id = inv.material_id").
+			Group("inv.material_id, inv.warehouse_id, plm_materials.code, plm_materials.name, plm_materials.specs, erp_warehouses.code, erp_warehouses.name, erp_material_inventory_attrs.abc_class, erp_material_inventory_attrs.safety_stock, erp_material_inventory_attrs.tracking_mode, erp_material_inventory_attrs.default_unit").
+			Order("plm_materials.code ASC, erp_warehouses.code ASC")
 
 		if warehouseID != "" {
-			query = query.Where("warehouse_id = ?", warehouseID)
+			query = query.Where("inv.warehouse_id = ?", warehouseID)
 		}
 		if materialID != "" {
-			query = query.Where("material_id = ?", materialID)
+			query = query.Where("inv.material_id = ?", materialID)
+		}
+		if status != "" {
+			query = query.Where("inv.status = ?", status)
+		}
+		if lotNumber != "" {
+			query = query.Where("inv.lot_number = ?", lotNumber)
+		}
+		if abcClass != "" {
+			query = query.Where("erp_material_inventory_attrs.abc_class = ?", abcClass)
 		}
 
-		var results []struct {
-			MaterialID    string  `json:"material_id"`
-			WarehouseID   string  `json:"warehouse_id"`
-			TotalQty      float64 `json:"total_qty"`
-			TotalReserved float64 `json:"total_reserved"`
-			AvailableQty  float64 `json:"available_qty"`
-		}
+		var results []map[string]any
 		query.Find(&results)
-		c.JSON(http.StatusOK, gin.H{"items": results})
+
+		// Top-level totals across the filtered result set
+		var grandTotalQty, grandTotalValue float64
+		var grandReserved float64
+		for _, r := range results {
+			if v, ok := r["total_qty"].(float64); ok {
+				grandTotalQty += v
+			}
+			if v, ok := r["total_value"].(float64); ok {
+				grandTotalValue += v
+			}
+			if v, ok := r["reserved_qty"].(float64); ok {
+				grandReserved += v
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"items": results,
+			"summary": gin.H{
+				"row_count":     len(results),
+				"total_qty":     grandTotalQty,
+				"total_value":   grandTotalValue,
+				"reserved_qty":  grandReserved,
+				"available_qty": grandTotalQty - grandReserved,
+			},
+		})
+	})
+
+	// GET /stock-detail — 单物料 × 仓库的批次明细 (展开 stock-summary 的某一行)
+	rg.GET("/stock-detail", func(c *gin.Context) {
+		materialID := c.Query("material_id")
+		warehouseID := c.Query("warehouse_id")
+		if materialID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "material_id is required"})
+			return
+		}
+		query := db.Table("erp_inventory AS inv").
+			Select(`
+				inv.*,
+				COALESCE(plm_materials.code, '') AS material_code,
+				COALESCE(plm_materials.name, '') AS material_name,
+				COALESCE(erp_warehouses.code, '') AS warehouse_code,
+				COALESCE(erp_warehouses.name, '') AS warehouse_name
+			`).
+			Joins("LEFT JOIN plm_materials ON plm_materials.id = inv.material_id").
+			Joins("LEFT JOIN erp_warehouses ON erp_warehouses.id = inv.warehouse_id").
+			Where("inv.material_id = ?", materialID).
+			Order("inv.received_at ASC NULLS LAST")
+		if warehouseID != "" {
+			query = query.Where("inv.warehouse_id = ?", warehouseID)
+		}
+		var rows []map[string]any
+		query.Find(&rows)
+		c.JSON(http.StatusOK, gin.H{"items": rows})
 	})
 
 	// GET /stock-movements/:material_id — 物料出入库流水
@@ -120,24 +209,595 @@ func registerRoutes(m *ERPModule, rg *gin.RouterGroup) {
 		c.JSON(http.StatusOK, gin.H{"items": txns})
 	})
 
-	// GET /stock-aging — 库龄分析
-	rg.GET("/stock-aging", func(c *gin.Context) {
-		var results []struct {
-			MaterialID string  `json:"material_id"`
-			Quantity   float64 `json:"quantity"`
-			AgeDays    int     `json:"age_days"`
+	// GET /stock-movements — 全量流水（PRD v1 Sprint 1，含名称 join + 多维过滤）
+	rg.GET("/stock-movements", func(c *gin.Context) {
+		warehouseID := c.Query("warehouse_id")
+		materialID := c.Query("material_id")
+		txnType := c.Query("type")
+		refType := c.Query("reference_type")
+		from := c.Query("from")
+		to := c.Query("to")
+		limit := 200
+		if l := c.Query("limit"); l != "" {
+			fmt.Sscanf(l, "%d", &limit)
 		}
+
+		query := db.Table("erp_inventory_transactions AS t").
+			Select(`
+				t.*,
+				COALESCE(plm_materials.code, '') AS material_code,
+				COALESCE(plm_materials.name, '') AS material_name,
+				COALESCE(from_wh.code, '') AS from_warehouse_code,
+				COALESCE(from_wh.name, '') AS from_warehouse_name,
+				COALESCE(to_wh.code, '') AS to_warehouse_code,
+				COALESCE(to_wh.name, '') AS to_warehouse_name
+			`).
+			Joins("LEFT JOIN plm_materials ON plm_materials.id = t.material_id").
+			Joins("LEFT JOIN erp_warehouses AS from_wh ON from_wh.id = t.from_warehouse_id").
+			Joins("LEFT JOIN erp_warehouses AS to_wh ON to_wh.id = t.to_warehouse_id").
+			Order("t.created_at DESC").
+			Limit(limit)
+
+		if materialID != "" {
+			query = query.Where("t.material_id = ?", materialID)
+		}
+		if warehouseID != "" {
+			query = query.Where("(t.from_warehouse_id = ? OR t.to_warehouse_id = ?)", warehouseID, warehouseID)
+		}
+		if txnType != "" {
+			query = query.Where("t.type = ?", txnType)
+		}
+		if refType != "" {
+			query = query.Where("t.reference_type = ?", refType)
+		}
+		if from != "" {
+			query = query.Where("t.created_at >= ?", from)
+		}
+		if to != "" {
+			query = query.Where("t.created_at <= ?", to)
+		}
+
+		var rows []map[string]any
+		query.Find(&rows)
+		c.JSON(http.StatusOK, gin.H{"items": rows, "count": len(rows)})
+	})
+
+	// GET /stock-value — 库存价值汇总（PRD v1 Sprint 2）
+	//
+	// 按仓库汇总，支持 as_of 时间点（v1 默认当前时刻）。返回每个仓库的库存价值
+	// 和总价值，作为财务对账基础。
+	rg.GET("/stock-value", func(c *gin.Context) {
+		warehouseID := c.Query("warehouse_id")
+
+		query := db.Table("erp_inventory AS inv").
+			Select(`
+				inv.warehouse_id,
+				COALESCE(erp_warehouses.code, '') AS warehouse_code,
+				COALESCE(erp_warehouses.name, '') AS warehouse_name,
+				COALESCE(erp_warehouses.type, '') AS warehouse_type,
+				COUNT(DISTINCT inv.material_id) AS material_count,
+				SUM(inv.quantity) AS total_qty,
+				SUM(inv.quantity * inv.unit_cost) AS total_value
+			`).
+			Joins("LEFT JOIN erp_warehouses ON erp_warehouses.id = inv.warehouse_id").
+			Where("inv.status = ?", "available").
+			Group("inv.warehouse_id, erp_warehouses.code, erp_warehouses.name, erp_warehouses.type").
+			Order("erp_warehouses.code")
+
+		if warehouseID != "" {
+			query = query.Where("inv.warehouse_id = ?", warehouseID)
+		}
+
+		var rows []map[string]any
+		query.Find(&rows)
+
+		var grandTotal float64
+		for _, r := range rows {
+			if v, ok := r["total_value"].(float64); ok {
+				grandTotal += v
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"items":          rows,
+			"grand_total":    grandTotal,
+			"as_of":          time.Now(),
+			"warehouse_count": len(rows),
+		})
+	})
+
+	// GET /stock-aging — 库龄分析
+	// GET /stock-aging — 库龄报表（按 received_at 计算批次库龄）
+	rg.GET("/stock-aging", func(c *gin.Context) {
+		type agingRow struct {
+			MaterialID    string  `json:"material_id"`
+			MaterialName  string  `json:"material_name"`
+			MaterialCode  string  `json:"material_code"`
+			WarehouseID   string  `json:"warehouse_id"`
+			WarehouseCode string  `json:"warehouse_code"`
+			LotNumber     string  `json:"lot_number"`
+			Quantity      float64 `json:"quantity"`
+			UnitCost      float64 `json:"unit_cost"`
+			Value         float64 `json:"value"`
+			AgeDays       int     `json:"age_days"`
+			AgeBucket     string  `json:"age_bucket"`
+		}
+		results := []agingRow{}
 		db.Raw(`
-			SELECT material_id, quantity,
-				EXTRACT(DAY FROM NOW() - updated_at)::int AS age_days
-			FROM erp_inventory
-			WHERE quantity > 0
-			ORDER BY age_days DESC
+			SELECT
+				i.material_id,
+				COALESCE(m.name, '') AS material_name,
+				COALESCE(m.code, '') AS material_code,
+				i.warehouse_id,
+				COALESCE(w.code, '') AS warehouse_code,
+				i.lot_number,
+				i.quantity,
+				i.unit_cost,
+				i.quantity * i.unit_cost AS value,
+				COALESCE(EXTRACT(DAY FROM NOW() - COALESCE(i.received_at, i.created_at))::int, 0) AS age_days,
+				CASE
+					WHEN COALESCE(EXTRACT(DAY FROM NOW() - COALESCE(i.received_at, i.created_at))::int, 0) <= 30 THEN '0-30'
+					WHEN COALESCE(EXTRACT(DAY FROM NOW() - COALESCE(i.received_at, i.created_at))::int, 0) <= 90 THEN '31-90'
+					WHEN COALESCE(EXTRACT(DAY FROM NOW() - COALESCE(i.received_at, i.created_at))::int, 0) <= 180 THEN '91-180'
+					WHEN COALESCE(EXTRACT(DAY FROM NOW() - COALESCE(i.received_at, i.created_at))::int, 0) <= 365 THEN '181-365'
+					ELSE '365+'
+				END AS age_bucket
+			FROM erp_inventory i
+			LEFT JOIN plm_materials m ON m.id = i.material_id
+			LEFT JOIN erp_warehouses w ON w.id = i.warehouse_id
+			WHERE i.quantity > 0
+			ORDER BY age_days DESC, value DESC
 		`).Scan(&results)
-		c.JSON(http.StatusOK, gin.H{"items": results})
+
+		// Group stats
+		buckets := map[string]struct {
+			Qty   float64
+			Value float64
+			Count int
+		}{}
+		for _, r := range results {
+			b := buckets[r.AgeBucket]
+			b.Qty += r.Quantity
+			b.Value += r.Value
+			b.Count++
+			buckets[r.AgeBucket] = b
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"items":   results,
+			"buckets": buckets,
+			"total":   len(results),
+		})
+	})
+
+	// GET /stock-dead — 呆滞库存（X 天未出库）
+	rg.GET("/stock-dead", func(c *gin.Context) {
+		days := 90
+		if d := c.Query("days"); d != "" {
+			if parsed, err := strconv.Atoi(d); err == nil {
+				days = parsed
+			}
+		}
+		type deadRow struct {
+			MaterialID   string  `json:"material_id"`
+			MaterialName string  `json:"material_name"`
+			MaterialCode string  `json:"material_code"`
+			Quantity     float64 `json:"quantity"`
+			Value        float64 `json:"value"`
+			LastIssuedAt string  `json:"last_issued_at"`
+			DaysSince    int     `json:"days_since"`
+		}
+		results := []deadRow{}
+		db.Raw(`
+			SELECT
+				i.material_id,
+				COALESCE(m.name, '') AS material_name,
+				COALESCE(m.code, '') AS material_code,
+				SUM(i.quantity) AS quantity,
+				SUM(i.quantity * i.unit_cost) AS value,
+				COALESCE(MAX(a.last_issued_at)::text, '') AS last_issued_at,
+				COALESCE(EXTRACT(DAY FROM NOW() - MAX(a.last_issued_at))::int, 9999) AS days_since
+			FROM erp_inventory i
+			LEFT JOIN plm_materials m ON m.id = i.material_id
+			LEFT JOIN erp_material_inventory_attrs a ON a.material_id = i.material_id
+			WHERE i.quantity > 0
+			GROUP BY i.material_id, m.name, m.code
+			HAVING COALESCE(EXTRACT(DAY FROM NOW() - MAX(a.last_issued_at))::int, 9999) >= ?
+			ORDER BY days_since DESC
+		`, days).Scan(&results)
+
+		var totalValue float64
+		for _, r := range results {
+			totalValue += r.Value
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"items":       results,
+			"total":       len(results),
+			"threshold":   days,
+			"total_value": totalValue,
+		})
+	})
+
+	// GET /stock-turnover — 库存周转率（按 30 天计算）
+	rg.GET("/stock-turnover", func(c *gin.Context) {
+		days := 30
+		if d := c.Query("days"); d != "" {
+			if parsed, err := strconv.Atoi(d); err == nil {
+				days = parsed
+			}
+		}
+		type turnoverRow struct {
+			MaterialID   string  `json:"material_id"`
+			MaterialName string  `json:"material_name"`
+			MaterialCode string  `json:"material_code"`
+			OnHand       float64 `json:"on_hand"`
+			OnHandValue  float64 `json:"on_hand_value"`
+			IssuedQty    float64 `json:"issued_qty"`
+			IssuedValue  float64 `json:"issued_value"`
+			TurnoverRate float64 `json:"turnover_rate"`
+		}
+		results := []turnoverRow{}
+		sql := fmt.Sprintf(`
+			SELECT
+				i.material_id,
+				COALESCE(m.name, '') AS material_name,
+				COALESCE(m.code, '') AS material_code,
+				SUM(i.quantity) AS on_hand,
+				SUM(i.quantity * i.unit_cost) AS on_hand_value,
+				COALESCE((
+					SELECT SUM(t.quantity)
+					FROM erp_inventory_transactions t
+					WHERE t.material_id = i.material_id
+					  AND t.type IN ('production_issue','sales_issue')
+					  AND t.created_at >= NOW() - INTERVAL '%d days'
+				), 0) AS issued_qty,
+				COALESCE((
+					SELECT SUM(t.quantity * t.unit_cost)
+					FROM erp_inventory_transactions t
+					WHERE t.material_id = i.material_id
+					  AND t.type IN ('production_issue','sales_issue')
+					  AND t.created_at >= NOW() - INTERVAL '%d days'
+				), 0) AS issued_value,
+				CASE
+					WHEN SUM(i.quantity * i.unit_cost) > 0
+					THEN COALESCE((
+						SELECT SUM(t.quantity * t.unit_cost)
+						FROM erp_inventory_transactions t
+						WHERE t.material_id = i.material_id
+						  AND t.type IN ('production_issue','sales_issue')
+						  AND t.created_at >= NOW() - INTERVAL '%d days'
+					), 0) / SUM(i.quantity * i.unit_cost)
+					ELSE 0
+				END AS turnover_rate
+			FROM erp_inventory i
+			LEFT JOIN plm_materials m ON m.id = i.material_id
+			WHERE i.quantity > 0
+			GROUP BY i.material_id, m.name, m.code
+			ORDER BY turnover_rate DESC
+		`, days, days, days)
+		db.Raw(sql).Scan(&results)
+		c.JSON(http.StatusOK, gin.H{"items": results, "days": days})
+	})
+
+	// GET /safety-stock-alerts — 安全库存预警
+	rg.GET("/safety-stock-alerts", func(c *gin.Context) {
+		type alertRow struct {
+			MaterialID   string  `json:"material_id"`
+			MaterialName string  `json:"material_name"`
+			MaterialCode string  `json:"material_code"`
+			OnHand       float64 `json:"on_hand"`
+			Reserved     float64 `json:"reserved"`
+			Available    float64 `json:"available"`
+			SafetyStock  float64 `json:"safety_stock"`
+			ReorderPoint float64 `json:"reorder_point"`
+			Shortfall    float64 `json:"shortfall"`
+			ABCClass     string  `json:"abc_class"`
+			Severity     string  `json:"severity"`
+		}
+		results := []alertRow{}
+		db.Raw(`
+			SELECT
+				i.material_id,
+				COALESCE(m.name, '') AS material_name,
+				COALESCE(m.code, '') AS material_code,
+				SUM(i.quantity) AS on_hand,
+				SUM(i.reserved_qty) AS reserved,
+				SUM(i.quantity - i.reserved_qty) AS available,
+				COALESCE(MAX(a.safety_stock), 0) AS safety_stock,
+				COALESCE(MAX(a.reorder_point), 0) AS reorder_point,
+				GREATEST(COALESCE(MAX(a.safety_stock), 0) - SUM(i.quantity - i.reserved_qty), 0) AS shortfall,
+				COALESCE(MAX(a.abc_class), 'C') AS abc_class,
+				CASE
+					WHEN SUM(i.quantity - i.reserved_qty) <= 0 THEN 'stockout'
+					WHEN SUM(i.quantity - i.reserved_qty) < COALESCE(MAX(a.safety_stock), 0) THEN 'below_safety'
+					WHEN SUM(i.quantity - i.reserved_qty) < COALESCE(MAX(a.reorder_point), 0) THEN 'below_reorder'
+					ELSE 'ok'
+				END AS severity
+			FROM erp_inventory i
+			LEFT JOIN plm_materials m ON m.id = i.material_id
+			LEFT JOIN erp_material_inventory_attrs a ON a.material_id = i.material_id
+			WHERE i.status = 'available'
+			GROUP BY i.material_id, m.name, m.code
+			HAVING SUM(i.quantity - i.reserved_qty) < COALESCE(MAX(a.reorder_point), 0)
+			   OR SUM(i.quantity - i.reserved_qty) <= 0
+			ORDER BY severity, shortfall DESC
+		`).Scan(&results)
+		c.JSON(http.StatusOK, gin.H{"items": results, "total": len(results)})
 	})
 
 	// GET /serial-trace/:serial — 序列号追溯
+	// GET /count-detail/:count_id — 盘点单明细 + 统计
+	rg.GET("/count-detail/:count_id", func(c *gin.Context) {
+		countID := c.Param("count_id")
+		var count ErpInventoryCount
+		if err := db.First(&count, "id = ?", countID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "count not found"})
+			return
+		}
+		var lines []ErpInventoryCountLine
+		db.Where("count_id = ?", countID).Order("material_id, lot_number").Find(&lines)
+
+		// Enrich with material name + warehouse name
+		type enrichedLine struct {
+			ErpInventoryCountLine
+			MaterialName  string `json:"material_name"`
+			MaterialCode  string `json:"material_code"`
+			WarehouseName string `json:"warehouse_name"`
+			WarehouseCode string `json:"warehouse_code"`
+		}
+		enriched := make([]enrichedLine, 0, len(lines))
+		for _, l := range lines {
+			el := enrichedLine{ErpInventoryCountLine: l}
+			var mat struct {
+				Name string
+				Code string
+			}
+			db.Table("plm_materials").Select("name, code").Where("id = ?", l.MaterialID).Scan(&mat)
+			el.MaterialName = mat.Name
+			el.MaterialCode = mat.Code
+			var wh struct {
+				Name string
+				Code string
+			}
+			db.Table("erp_warehouses").Select("name, code").Where("id = ?", l.WarehouseID).Scan(&wh)
+			el.WarehouseName = wh.Name
+			el.WarehouseCode = wh.Code
+			enriched = append(enriched, el)
+		}
+
+		// Stats
+		var countedLines, variantLines int
+		var totalVariance float64
+		for _, l := range lines {
+			if l.CountedQty >= 0 {
+				countedLines++
+			}
+			if l.Variance != 0 {
+				variantLines++
+				totalVariance += l.VarianceAmt
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"count": count,
+			"lines": enriched,
+			"stats": gin.H{
+				"total_lines":    len(lines),
+				"counted_lines":  countedLines,
+				"variance_lines": variantLines,
+				"total_variance": totalVariance,
+			},
+		})
+	})
+
+	// GET /counts — 盘点单列表
+	rg.GET("/counts", func(c *gin.Context) {
+		var counts []ErpInventoryCount
+		q := db.Order("created_at DESC")
+		if status := c.Query("status"); status != "" {
+			q = q.Where("status = ?", status)
+		}
+		if t := c.Query("type"); t != "" {
+			q = q.Where("type = ?", t)
+		}
+		if wh := c.Query("warehouse_id"); wh != "" {
+			q = q.Where("warehouse_id = ?", wh)
+		}
+		q.Limit(200).Find(&counts)
+		c.JSON(http.StatusOK, gin.H{"counts": counts, "total": len(counts)})
+	})
+
+	// GET /pda/scan/:barcode — PDA 扫码查询（统一入口）
+	// 输入可以是序列号、批次号或物料编码，自动识别
+	rg.GET("/pda/scan/:barcode", func(c *gin.Context) {
+		barcode := c.Param("barcode")
+		result := gin.H{"barcode": barcode}
+
+		// 1) Try as serial number
+		var sn ErpSerialNumber
+		if err := db.First(&sn, "serial_number = ?", barcode).Error; err == nil {
+			var mat struct {
+				Name string
+				Code string
+			}
+			db.Table("plm_materials").Select("name, code").Where("id = ?", sn.MaterialID).Scan(&mat)
+			var wh ErpWarehouse
+			db.First(&wh, "id = ?", sn.WarehouseID)
+			result["type"] = "serial"
+			result["serial"] = sn
+			result["material_name"] = mat.Name
+			result["material_code"] = mat.Code
+			result["warehouse_code"] = wh.Code
+			c.JSON(http.StatusOK, result)
+			return
+		}
+
+		// 2) Try as lot number
+		var lotRows []ErpInventory
+		if err := db.Where("lot_number = ?", barcode).Find(&lotRows).Error; err == nil && len(lotRows) > 0 {
+			result["type"] = "lot"
+			result["lot_number"] = barcode
+			result["inventory_rows"] = lotRows
+			result["row_count"] = len(lotRows)
+			c.JSON(http.StatusOK, result)
+			return
+		}
+
+		// 3) Try as material code (from plm_materials)
+		var matID string
+		db.Table("plm_materials").Select("id").Where("code = ?", barcode).Scan(&matID)
+		if matID != "" {
+			var invs []ErpInventory
+			db.Where("material_id = ? AND quantity > 0", matID).Find(&invs)
+			var totalQty float64
+			for _, inv := range invs {
+				totalQty += inv.Quantity
+			}
+			result["type"] = "material"
+			result["material_id"] = matID
+			result["material_code"] = barcode
+			result["total_qty"] = totalQty
+			result["location_count"] = len(invs)
+			c.JSON(http.StatusOK, result)
+			return
+		}
+
+		// 4) Not found
+		c.JSON(http.StatusNotFound, gin.H{"error": "barcode not found", "barcode": barcode})
+	})
+
+	// POST /pda/quick-issue — PDA 快速出库（扫码后直接扣减）
+	rg.POST("/pda/quick-issue", func(c *gin.Context) {
+		var req struct {
+			SerialNumber string  `json:"serial_number"`
+			LotNumber    string  `json:"lot_number"`
+			Quantity     float64 `json:"quantity"`
+			Reason       string  `json:"reason"`
+			OperatorID   string  `json:"operator_id"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid json"})
+			return
+		}
+		if req.SerialNumber != "" {
+			// Locate inventory via serial number → material+warehouse
+			var sn ErpSerialNumber
+			if err := db.First(&sn, "serial_number = ?", req.SerialNumber).Error; err != nil {
+				c.JSON(404, gin.H{"error": "serial not found"})
+				return
+			}
+			// Update serial to scrapped/issued
+			db.Model(&sn).Update("status", "shipped")
+			c.JSON(200, gin.H{"ok": true, "serial": req.SerialNumber, "status": "shipped"})
+			return
+		}
+		c.JSON(400, gin.H{"error": "serial_number or lot_number required"})
+	})
+
+	// GET /wo-kitting/:wo_id — 工单齐套检查
+	rg.GET("/wo-kitting/:wo_id", func(c *gin.Context) {
+		woID := c.Param("wo_id")
+		var wo ErpWorkOrder
+		if err := db.First(&wo, "id = ?", woID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "work order not found"})
+			return
+		}
+
+		// Get BOM items
+		type bomItem struct {
+			MaterialID   string
+			MaterialName string
+			MaterialCode string
+			RequiredQty  float64
+			OnHand       float64
+			Reserved     float64
+			Available    float64
+			Shortage     float64
+			KittingOK    bool
+		}
+		items := []bomItem{}
+		if wo.BomID != "" {
+			type bomRow struct {
+				MaterialID string
+				Quantity   float64
+				Name       string
+				Code       string
+			}
+			var bomRows []bomRow
+			db.Raw(`
+				SELECT bi.material_id, bi.quantity, m.name, m.code
+				FROM plm_bom_items bi
+				LEFT JOIN plm_materials m ON m.id = bi.material_id
+				WHERE bi.bom_id = ?
+			`, wo.BomID).Scan(&bomRows)
+
+			for _, row := range bomRows {
+				required := row.Quantity * wo.PlannedQty
+				var onHand, reserved float64
+				db.Raw(`
+					SELECT COALESCE(SUM(quantity), 0) AS total_qty,
+					       COALESCE(SUM(reserved_qty), 0) AS reserved_qty
+					FROM erp_inventory
+					WHERE material_id = ? AND status = 'available'
+				`, row.MaterialID).Row().Scan(&onHand, &reserved)
+				available := onHand - reserved
+				shortage := required - available
+				if shortage < 0 {
+					shortage = 0
+				}
+				items = append(items, bomItem{
+					MaterialID:   row.MaterialID,
+					MaterialName: row.Name,
+					MaterialCode: row.Code,
+					RequiredQty:  required,
+					OnHand:       onHand,
+					Reserved:     reserved,
+					Available:    available,
+					Shortage:     shortage,
+					KittingOK:    shortage == 0,
+				})
+			}
+		}
+
+		// Overall kitting status
+		allOK := true
+		shortCount := 0
+		for _, it := range items {
+			if !it.KittingOK {
+				allOK = false
+				shortCount++
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"work_order":  wo,
+			"items":       items,
+			"kitting_ok":  allOK,
+			"total_items": len(items),
+			"short_items": shortCount,
+		})
+	})
+
+	// GET /reservations — 库存预留列表
+	rg.GET("/reservations", func(c *gin.Context) {
+		var reservations []ErpInventoryReservation
+		q := db.Order("created_at DESC")
+		if status := c.Query("status"); status != "" {
+			q = q.Where("status = ?", status)
+		} else {
+			q = q.Where("status = ?", "active")
+		}
+		if mid := c.Query("material_id"); mid != "" {
+			q = q.Where("material_id = ?", mid)
+		}
+		if src := c.Query("source_id"); src != "" {
+			q = q.Where("source_id = ?", src)
+		}
+		q.Limit(200).Find(&reservations)
+		c.JSON(http.StatusOK, gin.H{"reservations": reservations, "total": len(reservations)})
+	})
+
+	// GET /serial-trace/:serial — 序列号完整追溯链
+	// 返回: serial + material + work_order + shipment + return + timeline
 	rg.GET("/serial-trace/:serial", func(c *gin.Context) {
 		serial := c.Param("serial")
 		var sn ErpSerialNumber
@@ -145,11 +805,98 @@ func registerRoutes(m *ERPModule, rg *gin.RouterGroup) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "serial number not found"})
 			return
 		}
-		// Get related transactions
+
+		// Material
+		var material struct {
+			Name string `json:"name"`
+			Code string `json:"code"`
+			Unit string `json:"unit"`
+		}
+		if sn.MaterialID != "" {
+			db.Table("plm_materials").Select("name, code, unit").Where("id = ?", sn.MaterialID).Scan(&material)
+		}
+
+		// Warehouse
+		var warehouse ErpWarehouse
+		if sn.WarehouseID != "" {
+			db.First(&warehouse, "id = ?", sn.WarehouseID)
+		}
+
+		// Work order
+		var workOrder ErpWorkOrder
+		if sn.WorkOrderID != "" {
+			db.First(&workOrder, "id = ?", sn.WorkOrderID)
+		}
+
+		// Shipment
+		var shipment ErpShipment
+		if sn.ShipmentID != "" {
+			db.First(&shipment, "id = ?", sn.ShipmentID)
+		}
+
+		// Customer
+		var customer ErpCustomer
+		if sn.CustomerID != "" {
+			db.First(&customer, "id = ?", sn.CustomerID)
+		}
+
+		// Return
+		var ret ErpReturn
+		if sn.ReturnID != "" {
+			db.First(&ret, "id = ?", sn.ReturnID)
+		}
+
+		// Related transactions (same lot, same material)
 		var txns []ErpInventoryTransaction
-		db.Where("lot_number = ? AND material_id = ?", sn.LotNumber, sn.MaterialID).
-			Order("created_at").Find(&txns)
-		c.JSON(http.StatusOK, gin.H{"serial": sn, "transactions": txns})
+		if sn.LotNumber != "" {
+			db.Where("lot_number = ? AND material_id = ?", sn.LotNumber, sn.MaterialID).
+				Order("created_at").Find(&txns)
+		}
+
+		// Build timeline
+		type timelineItem struct {
+			Time  string `json:"time"`
+			Event string `json:"event"`
+			Ref   string `json:"ref"`
+			Label string `json:"label"`
+		}
+		timeline := []timelineItem{}
+		if sn.ManufacturedAt != nil {
+			timeline = append(timeline, timelineItem{
+				Time: sn.ManufacturedAt.Format("2006-01-02 15:04"),
+				Event: "生产",
+				Ref: workOrder.Code,
+				Label: fmt.Sprintf("工单 %s 入库", workOrder.Code),
+			})
+		}
+		if sn.SoldAt != nil {
+			timeline = append(timeline, timelineItem{
+				Time: sn.SoldAt.Format("2006-01-02 15:04"),
+				Event: "销售",
+				Ref: shipment.Code,
+				Label: fmt.Sprintf("发货 %s 客户 %s", shipment.Code, customer.Name),
+			})
+		}
+		if ret.ID != "" {
+			timeline = append(timeline, timelineItem{
+				Time: ret.CreatedAt.Format("2006-01-02 15:04"),
+				Event: "退货",
+				Ref: ret.Code,
+				Label: fmt.Sprintf("退货单 %s (%s)", ret.Code, ret.Reason),
+			})
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"serial":       sn,
+			"material":     material,
+			"warehouse":    warehouse,
+			"work_order":   workOrder,
+			"shipment":     shipment,
+			"customer":     customer,
+			"return":       ret,
+			"transactions": txns,
+			"timeline":     timeline,
+		})
 	})
 
 	// ─── Production ───

@@ -27,6 +27,21 @@ func erpCommands() []sdk.CommandDef {
 		{Name: "scrap_inventory", Label: "报废", Description: "物料报废出库", InputType: ScrapInventoryInput{}, OutputType: InventoryTransactionOutput{}},
 		{Name: "reserve_inventory", Label: "库存预留", Description: "为订单行预留库存", InputType: ReserveInventoryInput{}, OutputType: ReservationOutput{}},
 		{Name: "unreserve_inventory", Label: "取消预留", Description: "取消订单行的库存预留", InputType: UnreserveInventoryInput{}, OutputType: ReservationOutput{}},
+		{Name: "bootstrap_default_warehouses", Label: "初始化默认仓库", Description: "一次性创建 6 个标准仓库 (原料/在制品/成品/备件/质量冻结/报废)，幂等", InputType: BootstrapWarehousesInput{}, OutputType: BootstrapWarehousesOutput{}},
+		{Name: "bootstrap_chart_of_accounts", Label: "初始化默认科目表", Description: "一次性创建 9 个标准会计科目 (1002/1403/1411/1405/2202/5301/5302/6401/6603)，幂等", InputType: BootstrapWarehousesInput{}, OutputType: BootstrapWarehousesOutput{}},
+
+		// ── 盘点 (4, Sprint 3) ───────────────────────────────────────
+		{Name: "create_inventory_count", Label: "创建盘点单", Description: "创建盘点单并冻结快照（full/cycle/spot）", InputType: CreateInventoryCountInput{}, OutputType: CreateInventoryCountOutput{}},
+		{Name: "submit_count_result", Label: "提交盘点结果", Description: "录入实盘数量，自动计算差异", InputType: SubmitCountResultInput{}, OutputType: SubmitCountResultOutput{}},
+		{Name: "post_inventory_count", Label: "过账盘点单", Description: "盘点差异自动生成调整事务和会计凭证", InputType: PostInventoryCountInput{}, OutputType: PostInventoryCountOutput{}},
+
+		// ── 不合格品状态机 (2, Sprint 3) ──────────────────────────────
+		{Name: "quality_hold", Label: "质量冻结", Description: "把指定批次从 available 移到 quality_hold", InputType: QualityHoldInput{}, OutputType: InventoryTransactionOutput{}},
+		{Name: "quality_release", Label: "质量放行", Description: "把 quality_hold 批次放行到 available/scrap", InputType: QualityReleaseInput{}, OutputType: InventoryTransactionOutput{}},
+
+		// ── 序列号管理 (2, Sprint 4) ──────────────────────────────
+		{Name: "generate_serial_numbers", Label: "生成序列号", Description: "为工单/入库批量生成序列号，自动关联工单/批次/仓库", InputType: GenerateSerialNumbersInput{}, OutputType: GenerateSerialNumbersOutput{}},
+		{Name: "update_serial_status", Label: "更新序列号状态", Description: "发货/退货/报废时更新序列号状态", InputType: UpdateSerialStatusInput{}, OutputType: UpdateSerialStatusOutput{}},
 
 		// ── 生产管理 (7) ─────────────────────────────────────────────
 		{Name: "run_mrp", Label: "运行MRP", Description: "运行物料需求计划计算", InputType: RunMRPInput{}, OutputType: RunMRPOutput{}},
@@ -339,6 +354,128 @@ type ReservationOutput struct {
 
 type UnreserveInventoryInput struct {
 	OrderItemID string `json:"order_item_id" desc:"订单行ID"`
+}
+
+// ---------------------------------------------------------------------------
+// PRD v1 Sprint 1 - 仓库初始化
+// ---------------------------------------------------------------------------
+
+type BootstrapWarehousesInput struct{}
+
+type BootstrapWarehousesOutput struct {
+	Created    int               `json:"created" desc:"新建仓库数"`
+	Existing   int               `json:"existing" desc:"已存在的仓库数"`
+	CodeToID   map[string]string `json:"code_to_id" desc:"仓库 code → id 映射"`
+}
+
+// ---------------------------------------------------------------------------
+// PRD v1 Sprint 3 - 盘点
+// ---------------------------------------------------------------------------
+
+type CreateInventoryCountInput struct {
+	Name        string `json:"name" desc:"盘点单名称"`
+	Type        string `json:"type" desc:"盘点类型" enum:"full,cycle,spot"`
+	WarehouseID string `json:"warehouse_id,omitempty" desc:"仓库ID或代码(可选，不填全仓库)"`
+	ABCFilter   string `json:"abc_filter,omitempty" desc:"ABC筛选(cycle用)" enum:"A,B,C,ABC"`
+	MaterialIDs []string `json:"material_ids,omitempty" desc:"指定物料ID列表(spot用)"`
+	ScheduledAt string `json:"scheduled_at,omitempty" desc:"计划盘点日期 YYYY-MM-DD"`
+	Notes       string `json:"notes,omitempty" desc:"备注"`
+}
+
+type CreateInventoryCountOutput struct {
+	CountID    string `json:"count_id" desc:"盘点单ID"`
+	Code       string `json:"code" desc:"盘点单编号"`
+	Status     string `json:"status" desc:"状态: snapshot_taken"`
+	TotalLines int    `json:"total_lines" desc:"生成的盘点明细行数"`
+}
+
+type CountLineInput struct {
+	LineID     string  `json:"line_id" desc:"盘点明细ID"`
+	CountedQty float64 `json:"counted_qty" desc:"实盘数量"`
+	Notes      string  `json:"notes,omitempty" desc:"备注"`
+}
+
+type SubmitCountResultInput struct {
+	CountID string           `json:"count_id" desc:"盘点单ID"`
+	Lines   []CountLineInput `json:"lines" desc:"盘点结果明细"`
+}
+
+type SubmitCountResultOutput struct {
+	CountID      string  `json:"count_id"`
+	CountedLines int     `json:"counted_lines" desc:"已盘点明细数"`
+	TotalLines   int     `json:"total_lines"`
+	Variance     float64 `json:"variance" desc:"差异金额总和"`
+	Status       string  `json:"status"`
+}
+
+type PostInventoryCountInput struct {
+	CountID string `json:"count_id" desc:"盘点单ID"`
+}
+
+type PostInventoryCountOutput struct {
+	CountID        string  `json:"count_id"`
+	TxnCount       int     `json:"txn_count" desc:"生成的调整事务数量"`
+	JournalEntryID string  `json:"journal_entry_id" desc:"生成的汇总凭证ID"`
+	TotalVariance  float64 `json:"total_variance" desc:"盘盈/盘亏金额"`
+	Status         string  `json:"status" desc:"posted"`
+}
+
+// ---------------------------------------------------------------------------
+// PRD v1 Sprint 3 - 不合格品状态机
+// ---------------------------------------------------------------------------
+
+type QualityHoldInput struct {
+	MaterialID  string  `json:"material_id" desc:"物料ID"`
+	WarehouseID string  `json:"warehouse_id" desc:"仓库ID或代码"`
+	LotNumber   string  `json:"lot_number,omitempty" desc:"批次号(可选,指定批次)"`
+	Quantity    float64 `json:"quantity" desc:"冻结数量"`
+	Reason      string  `json:"reason" desc:"冻结原因"`
+	NcrID       string  `json:"ncr_id,omitempty" desc:"关联的NCR报告ID"`
+}
+
+type QualityReleaseInput struct {
+	MaterialID  string  `json:"material_id" desc:"物料ID"`
+	WarehouseID string  `json:"warehouse_id" desc:"冻结仓库"`
+	LotNumber   string  `json:"lot_number,omitempty" desc:"批次号"`
+	Quantity    float64 `json:"quantity" desc:"放行数量"`
+	ReleaseTo   string  `json:"release_to" desc:"放行去向" enum:"available,scrap"`
+	Reason      string  `json:"reason" desc:"放行原因"`
+}
+
+// ---------------------------------------------------------------------------
+// PRD v1 Sprint 4 - 序列号管理
+// ---------------------------------------------------------------------------
+
+type GenerateSerialNumbersInput struct {
+	WorkOrderID string `json:"work_order_id,omitempty" desc:"关联工单ID"`
+	ProductID   string `json:"product_id,omitempty" desc:"产品ID"`
+	MaterialID  string `json:"material_id,omitempty" desc:"物料ID"`
+	WarehouseID string `json:"warehouse_id" desc:"仓库ID或代码"`
+	LotNumber   string `json:"lot_number,omitempty" desc:"批次号"`
+	Quantity    int    `json:"quantity" desc:"生成数量"`
+	Prefix      string `json:"prefix,omitempty" desc:"前缀(默认SN)"`
+}
+
+type GenerateSerialNumbersOutput struct {
+	Count         int      `json:"count" desc:"生成数量"`
+	SerialNumbers []string `json:"serial_numbers" desc:"生成的序列号列表"`
+	FirstSerial   string   `json:"first_serial"`
+	LastSerial    string   `json:"last_serial"`
+}
+
+type UpdateSerialStatusInput struct {
+	SerialNumbers []string `json:"serial_numbers" desc:"序列号列表"`
+	Status        string   `json:"status" desc:"新状态" enum:"in_stock,shipped,delivered,returned,scrapped"`
+	ShipmentID    string   `json:"shipment_id,omitempty"`
+	ReturnID      string   `json:"return_id,omitempty"`
+	CustomerID    string   `json:"customer_id,omitempty"`
+	SoldTo        string   `json:"sold_to,omitempty"`
+	Reason        string   `json:"reason,omitempty"`
+}
+
+type UpdateSerialStatusOutput struct {
+	Updated int    `json:"updated"`
+	Status  string `json:"status"`
 }
 
 // ---------------------------------------------------------------------------
